@@ -27,7 +27,8 @@ export interface Connection {
   url: string;
   token: string;
 }
-export type SourceKind = 'postgres' | 'sqlite' | 'csv' | 'stripe' | 'external' | 'parquet' | 'noop';
+export type SourceKind =
+  'postgres' | 'sqlite' | 'csv' | 'stripe' | 'salesforce' | 'external' | 'parquet' | 'noop';
 export interface Source {
   id: string;
   name: string;

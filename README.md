@@ -262,7 +262,7 @@ Create a Stripe source with `kind="stripe"` and a **restricted key** (`rk_…`) 
   "secret": "<refresh token>" }
 ```
 
-- **Auth:** OAuth 2.0 refresh token from your own connected app. Use a PKCE public client; no consumer secret is needed. The refresh token lives in the engine keychain, and access tokens are refreshed automatically. A revoked or expired grant fails with "re-authenticate this source". The desktop sign-in flow is coming next; until then, supply a refresh token you obtained yourself.
+- **Auth:** OAuth 2.0 refresh token from your own connected app. Use a PKCE public client; no consumer secret is needed. The refresh token lives in the engine keychain, and access tokens are refreshed automatically. A revoked or expired grant fails with "re-authenticate this source". In the desktop app, choose **Sign in with Salesforce**: it runs the PKCE flow in your browser with the callback `http://localhost:1717/OauthRedirect`, which you add to the connected app, and stores the grant on save.
 - **Discovery:** one dataset per configured object. Address, location and base64 fields are skipped, because Bulk queries can't return them. A single-target reference field becomes a declared relationship to `Id`.
 - **Full refresh:** a Bulk `query` job, paged through `Sforce-Locator`.
 - **Incremental** (`mode="incremental"`, with no `watermark_column`):

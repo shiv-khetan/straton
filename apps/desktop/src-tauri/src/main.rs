@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod salesforce;
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 
@@ -65,7 +66,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             save_connection,
             load_connection,
-            forget_connection
+            forget_connection,
+            salesforce::salesforce_authorize
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Straton desktop");

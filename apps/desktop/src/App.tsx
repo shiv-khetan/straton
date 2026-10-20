@@ -621,6 +621,7 @@ const fields: Record<string, string[]> = {
   sqlite: ['path', 'batch_size'],
   csv: ['path', 'batch_size', 'sample_size'],
   stripe: ['account_label', 'rate_limit_rps'],
+  salesforce: ['login_url', 'client_id', 'rate_limit_rps'],
   external: [],
 };
 const numericFields = ['port', 'batch_size', 'sample_size', 'rate_limit_rps'];
@@ -722,7 +723,9 @@ function Sources({
                 </td>
                 <td>
                   <div className="actions">
-                    {['postgres', 'sqlite', 'csv', 'stripe', 'external'].includes(source.kind) && (
+                    {['postgres', 'sqlite', 'csv', 'stripe', 'salesforce', 'external'].includes(
+                      source.kind,
+                    ) && (
                       <>
                         <button
                           disabled={busy}
@@ -811,7 +814,7 @@ function Sources({
                   setSecret('');
                 }}
               >
-                {['postgres', 'sqlite', 'csv', 'stripe', 'external'].map((k) => (
+                {['postgres', 'sqlite', 'csv', 'stripe', 'salesforce', 'external'].map((k) => (
                   <option key={k}>{k}</option>
                 ))}
               </select>
@@ -826,7 +829,13 @@ function Sources({
                   type={numericFields.includes(key) ? 'number' : 'text'}
                   min="1"
                   max={key === 'rate_limit_rps' ? '1000' : '2147483647'}
-                  placeholder={key === 'rate_limit_rps' ? '25 (default)' : undefined}
+                  placeholder={
+                    key === 'rate_limit_rps'
+                      ? (kind === 'salesforce' ? '10' : '25') + ' (default)'
+                      : key === 'login_url'
+                        ? 'https://login.salesforce.com (or test.salesforce.com)'
+                        : undefined
+                  }
                   value={(config[key] as string | number | undefined) ?? ''}
                   onChange={(e) => setConfig({ ...config, [key]: e.target.value })}
                 />
@@ -877,9 +886,61 @@ function Sources({
                 objects and to Events.
               </p>
             )}
+            {kind === 'salesforce' && (
+              <>
+                <Field label="Objects (API names, comma-separated)">
+                  <input
+                    required
+                    placeholder="Account, Contact, Opportunity"
+                    value={((config.objects as string[] | undefined) ?? []).join(', ')}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        objects: e.target.value
+                          .split(',')
+                          .map((s) => s.trim())
+                          .filter(Boolean),
+                      })
+                    }
+                  />
+                </Field>
+                <div className="actions">
+                  <button
+                    type="button"
+                    disabled={busy || !config.client_id}
+                    onClick={() =>
+                      void action(async () => {
+                        // PKCE sign-in runs in the desktop shell; only the grant comes back here.
+                        const grant = await invoke<{ refresh_token: string; instance_url: string }>(
+                          'salesforce_authorize',
+                          {
+                            loginUrl:
+                              (config.login_url as string) || 'https://login.salesforce.com',
+                            clientId: config.client_id,
+                          },
+                        );
+                        setSecret(grant.refresh_token);
+                        setConfig({ ...config, instance_url: grant.instance_url });
+                      }, 'Signed in to Salesforce — save the source to keep it')
+                    }
+                  >
+                    {config.instance_url ? 'Sign in again' : 'Sign in with Salesforce'}
+                  </button>
+                  {config.instance_url && <code>{config.instance_url as string}</code>}
+                </div>
+                <p className="hint">
+                  Uses your connected app's consumer key with PKCE and the callback{' '}
+                  <code>http://localhost:1717/OauthRedirect</code>. The refresh token is stored only
+                  in the engine's OS keychain.
+                </p>
+              </>
+            )}
           </div>
           <div className="actions">
-            <button className="primary" disabled={busy}>
+            <button
+              className="primary"
+              disabled={busy || (kind === 'salesforce' && !config.instance_url)}
+            >
               Save source
             </button>
             {editing && (
@@ -1037,7 +1098,7 @@ function Jobs({
   const sourceKind = sources.find((s) => s.id === source)?.kind;
   const csv = sourceKind === 'csv';
   // Stripe tracks changes through its events feed: no watermark, key or delete settings.
-  const eventsSource = sourceKind === 'stripe';
+  const eventsSource = sourceKind === 'stripe' || sourceKind === 'salesforce';
   useEffect(() => {
     setWatermark('');
     setKeys(selectedDataset?.columns.filter((c) => c.pk).map((c) => c.name) ?? []);
@@ -1182,7 +1243,9 @@ function Jobs({
               >
                 <option value="">Select source</option>
                 {sources
-                  .filter((s) => ['postgres', 'sqlite', 'csv', 'stripe', 'noop'].includes(s.kind))
+                  .filter((s) =>
+                    ['postgres', 'sqlite', 'csv', 'stripe', 'salesforce', 'noop'].includes(s.kind),
+                  )
                   .map((s) => (
                     <option value={s.id} key={s.id}>
                       {s.name}
@@ -1221,9 +1284,19 @@ function Jobs({
             )}
             {mode === 'incremental' && eventsSource && (
               <p className="hint">
-                Uses Stripe events: updates and deletes since the last sync are merged by{' '}
-                <code>id</code>. If the last sync is older than Stripe's 30-day event window, the
-                run falls back to a full refresh.
+                {sourceKind === 'stripe' ? (
+                  <>
+                    Uses Stripe events: updates and deletes since the last sync are merged by{' '}
+                    <code>id</code>. If the last sync is older than Stripe's 30-day event window,
+                    the run falls back to a full refresh.
+                  </>
+                ) : (
+                  <>
+                    Uses <code>queryAll</code> on <code>SystemModstamp</code>: changed and deleted
+                    records since the last sync are merged by <code>Id</code>. If the last sync is
+                    older than 14 days, the run falls back to a full refresh.
+                  </>
+                )}
               </p>
             )}
             {mode === 'incremental' && !eventsSource && (
