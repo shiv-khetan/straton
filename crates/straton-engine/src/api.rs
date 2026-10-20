@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::{Row, SqlitePool};
 use std::time::Instant;
-use straton_core::{Job, SourceKind};
+use straton_core::{IncrementalStyle, Job, SourceKind};
 mod access_api;
 
 #[derive(Clone)]
@@ -213,6 +213,7 @@ async fn save_source(
         SourceKind::Csv => "csv",
         SourceKind::External => "external",
         SourceKind::Noop => "noop",
+        SourceKind::Stripe => "stripe",
         SourceKind::Parquet => return Err(bad("parquet sources are managed by sync")),
     };
     if s.id == "straton-local-lake" {
@@ -343,8 +344,25 @@ async fn validate_incremental_job(pool: &SqlitePool, j: &Job) -> ApiResult<()> {
     if kind.as_deref() == Some("csv") {
         return Err(bad("CSV sources support full refresh only"));
     }
-    if !matches!(kind.as_deref(), Some("sqlite" | "postgres")) {
-        return Err(bad("incremental sync requires a SQLite or Postgres source"));
+    match straton_connectors::incremental_style(kind.as_deref().unwrap_or_default()) {
+        IncrementalStyle::Column => {}
+        IncrementalStyle::Events { .. } => {
+            // Events sources track their own watermark and deliver deletes themselves.
+            if j.watermark_column.as_deref().is_some_and(|s| !s.is_empty()) {
+                return Err(bad(
+                    "this source tracks changes itself; omit watermark_column",
+                ));
+            }
+            if j.delete_detection != "none" || j.key_columns.is_some() {
+                return Err(bad(
+                    "this source delivers deletes itself; use delete_detection none and its primary key",
+                ));
+            }
+            return Ok(());
+        }
+        IncrementalStyle::None => {
+            return Err(bad("this source supports full refresh only"));
+        }
     }
     let watermark = j
         .watermark_column
@@ -623,6 +641,7 @@ fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
         "postgres" => &["host", "port", "database", "username", "batch_size"],
         "sqlite" => &["path", "batch_size"],
         "csv" => &["path", "batch_size", "sample_size"],
+        "stripe" => &["account_label", "objects", "rate_limit_rps", "api_base"],
         _ => &[],
     };
     if obj.keys().any(|k| !allowed.contains(&k.as_str())) {
@@ -631,7 +650,15 @@ fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
         ));
     }
     for (k, v) in obj {
-        if ["port", "batch_size", "sample_size"].contains(&k.as_str()) {
+        if k == "objects" {
+            if !v.as_array().is_some_and(|a| a.iter().all(Value::is_string)) {
+                return Err(bad("objects must be a list of names"));
+            }
+        } else if k == "rate_limit_rps" {
+            if v.as_f64().is_none_or(|r| r <= 0.0 || r > 1000.0) {
+                return Err(bad("rate_limit_rps must be between 0 and 1000"));
+            }
+        } else if ["port", "batch_size", "sample_size"].contains(&k.as_str()) {
             if v.as_u64().is_none_or(|v| v == 0 || v > i32::MAX as u64) {
                 return Err(bad("invalid numeric config field"));
             }

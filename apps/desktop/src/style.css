@@ -1420,3 +1420,23 @@ dd {
 .access-policy:last-child {
   border-bottom: 0;
 }
+
+.checklist {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.checklist legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+.checklist label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

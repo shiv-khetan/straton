@@ -620,8 +620,21 @@ const fields: Record<string, string[]> = {
   postgres: ['host', 'port', 'database', 'username', 'batch_size'],
   sqlite: ['path', 'batch_size'],
   csv: ['path', 'batch_size', 'sample_size'],
+  stripe: ['account_label', 'rate_limit_rps'],
   external: [],
 };
+const numericFields = ['port', 'batch_size', 'sample_size', 'rate_limit_rps'];
+const stripeObjects = [
+  'customers',
+  'charges',
+  'payment_intents',
+  'invoices',
+  'subscriptions',
+  'products',
+  'prices',
+  'refunds',
+  'balance_transactions',
+];
 function Sources({
   sources,
   client,
@@ -640,7 +653,7 @@ function Sources({
   const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [kind, setKind] = useState<SourceKind>('postgres');
-  const [config, setConfig] = useState<Record<string, string | number>>({});
+  const [config, setConfig] = useState<Record<string, string | number | string[]>>({});
   const [secret, setSecret] = useState('');
   const [manual, setManual] = useState('');
   const [datasetName, setDatasetName] = useState('');
@@ -662,10 +675,7 @@ function Sources({
       config: Object.fromEntries(
         Object.entries(config)
           .filter(([, value]) => value !== '')
-          .map(([key, value]) => [
-            key,
-            ['port', 'batch_size', 'sample_size'].includes(key) ? Number(value) : value,
-          ]),
+          .map(([key, value]) => [key, numericFields.includes(key) ? Number(value) : value]),
       ),
       ...(secret ? { secret } : {}),
     };
@@ -712,7 +722,7 @@ function Sources({
                 </td>
                 <td>
                   <div className="actions">
-                    {['postgres', 'sqlite', 'csv', 'external'].includes(source.kind) && (
+                    {['postgres', 'sqlite', 'csv', 'stripe', 'external'].includes(source.kind) && (
                       <>
                         <button
                           disabled={busy}
@@ -801,7 +811,7 @@ function Sources({
                   setSecret('');
                 }}
               >
-                {['postgres', 'sqlite', 'csv', 'external'].map((k) => (
+                {['postgres', 'sqlite', 'csv', 'stripe', 'external'].map((k) => (
                   <option key={k}>{k}</option>
                 ))}
               </select>
@@ -813,26 +823,59 @@ function Sources({
               >
                 <input
                   required={['host', 'database', 'username', 'path'].includes(key)}
-                  type={['port', 'batch_size', 'sample_size'].includes(key) ? 'number' : 'text'}
+                  type={numericFields.includes(key) ? 'number' : 'text'}
                   min="1"
-                  max="2147483647"
-                  value={config[key] ?? ''}
+                  max={key === 'rate_limit_rps' ? '1000' : '2147483647'}
+                  placeholder={key === 'rate_limit_rps' ? '25 (default)' : undefined}
+                  value={(config[key] as string | number | undefined) ?? ''}
                   onChange={(e) => setConfig({ ...config, [key]: e.target.value })}
                 />
               </Field>
             ))}
-            {kind === 'postgres' && (
-              <Field label="Password (write-only)">
+            {kind === 'stripe' && (
+              <fieldset className="checklist">
+                <legend>Objects to sync</legend>
+                {stripeObjects.map((o) => {
+                  const chosen = (config.objects as string[] | undefined) ?? stripeObjects;
+                  return (
+                    <label key={o}>
+                      <input
+                        type="checkbox"
+                        checked={chosen.includes(o)}
+                        onChange={(e) =>
+                          setConfig({
+                            ...config,
+                            objects: e.target.checked
+                              ? stripeObjects.filter((x) => x === o || chosen.includes(x))
+                              : chosen.filter((x) => x !== o),
+                          })
+                        }
+                      />
+                      <code>{o}</code>
+                    </label>
+                  );
+                })}
+              </fieldset>
+            )}
+            {(kind === 'postgres' || kind === 'stripe') && (
+              <Field label={kind === 'stripe' ? 'API key (write-only)' : 'Password (write-only)'}>
                 <input
                   type="password"
                   autoComplete="new-password"
                   value={secret}
                   onChange={(e) => setSecret(e.target.value)}
+                  aria-describedby={kind === 'stripe' ? 'stripe-key-help' : undefined}
                   placeholder={
                     editing ? 'Leave blank to keep current secret' : 'Stored in engine OS keychain'
                   }
                 />
               </Field>
+            )}
+            {kind === 'stripe' && (
+              <p id="stripe-key-help" className="hint">
+                Use a restricted key (<code>rk_…</code>) with read-only access to the selected
+                objects and to Events.
+              </p>
             )}
           </div>
           <div className="actions">
@@ -991,7 +1034,10 @@ function Jobs({
   const [deletes, setDeletes] = useState<'none' | 'key_diff'>('none');
   const [every, setEvery] = useState(10);
   const selectedDataset = datasets.find((d) => d.source_id === source && d.name === dataset);
-  const csv = sources.find((s) => s.id === source)?.kind === 'csv';
+  const sourceKind = sources.find((s) => s.id === source)?.kind;
+  const csv = sourceKind === 'csv';
+  // Stripe tracks changes through its events feed: no watermark, key or delete settings.
+  const eventsSource = sourceKind === 'stripe';
   useEffect(() => {
     setWatermark('');
     setKeys(selectedDataset?.columns.filter((c) => c.pk).map((c) => c.name) ?? []);
@@ -1109,10 +1155,11 @@ function Jobs({
                 cron: cron.trim() || null,
                 enabled: true,
                 mode,
-                watermark_column: mode === 'incremental' ? watermark : null,
-                key_columns: mode === 'incremental' ? keys : null,
-                delete_detection: mode === 'incremental' ? deletes : 'none',
-                key_diff_every_runs: mode === 'incremental' && deletes === 'key_diff' ? every : 0,
+                watermark_column: mode === 'incremental' && !eventsSource ? watermark : null,
+                key_columns: mode === 'incremental' && !eventsSource ? keys : null,
+                delete_detection: mode === 'incremental' && !eventsSource ? deletes : 'none',
+                key_diff_every_runs:
+                  mode === 'incremental' && !eventsSource && deletes === 'key_diff' ? every : 0,
               });
               setName('');
               onClose();
@@ -1135,7 +1182,7 @@ function Jobs({
               >
                 <option value="">Select source</option>
                 {sources
-                  .filter((s) => ['postgres', 'sqlite', 'csv', 'noop'].includes(s.kind))
+                  .filter((s) => ['postgres', 'sqlite', 'csv', 'stripe', 'noop'].includes(s.kind))
                   .map((s) => (
                     <option value={s.id} key={s.id}>
                       {s.name}
@@ -1172,7 +1219,14 @@ function Jobs({
                 CSV supports full refresh only.
               </p>
             )}
-            {mode === 'incremental' && (
+            {mode === 'incremental' && eventsSource && (
+              <p className="hint">
+                Uses Stripe events: updates and deletes since the last sync are merged by{' '}
+                <code>id</code>. If the last sync is older than Stripe's 30-day event window, the
+                run falls back to a full refresh.
+              </p>
+            )}
+            {mode === 'incremental' && !eventsSource && (
               <>
                 <Field label="Watermark column">
                   <select required value={watermark} onChange={(e) => setWatermark(e.target.value)}>

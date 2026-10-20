@@ -140,7 +140,27 @@ struct Connected {
     batch_size: usize,
     sample_size: usize,
 }
+mod http;
+mod stripe;
+#[cfg(test)]
+mod stripe_tests;
+
+/// How a source kind finds changes between runs (decided per kind, without connecting).
+pub fn incremental_style(kind: &str) -> straton_core::IncrementalStyle {
+    use straton_core::IncrementalStyle::*;
+    match kind {
+        "sqlite" | "postgres" => Column,
+        "stripe" => Events {
+            horizon_secs: Some(stripe::EVENT_HORIZON_SECS),
+        },
+        _ => None,
+    }
+}
+
 pub fn build(kind: &str, config: &Value, secret: Option<&str>) -> Result<Box<dyn Connector>> {
+    if kind == "stripe" {
+        return stripe::build(config, secret);
+    }
     let batch_size = config
         .get("batch_size")
         .and_then(Value::as_u64)

@@ -3,7 +3,7 @@ use crate::{catalog, sql, store};
 use anyhow::{Result, ensure};
 use datafusion::{
     arrow::{
-        datatypes::{Field, Schema},
+        datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     },
     datasource::{
@@ -21,7 +21,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use straton_core::{Column, IncrementalRead, ReadOptions};
+use straton_core::{Column, IncrementalRead, IncrementalStyle, OP_COLUMN, ReadOptions, SEQ_COLUMN};
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Plan {
@@ -35,6 +35,9 @@ pub(crate) struct Plan {
     mode: String,
     fallback_reason: Option<String>,
     key_diff: bool,
+    /// Events-style source: delta carries `_straton_op`/`_straton_seq` and its own watermark.
+    #[serde(default)]
+    events: bool,
 }
 #[derive(Serialize, Deserialize)]
 struct Stats {
@@ -67,6 +70,17 @@ fn schema(columns: &[Column]) -> Result<Arc<Schema>> {
             .map(|c| Ok(Field::new(&c.name, c.data_type.parse()?, c.nullable)))
             .collect::<Result<Vec<_>>>()?,
     )))
+}
+/// Staged delta schema: events sources append the reserved op/seq columns.
+fn delta_schema(plan: &Plan) -> Result<Arc<Schema>> {
+    let base = schema(&plan.columns)?;
+    if !plan.events {
+        return Ok(base);
+    }
+    let mut fields: Vec<Field> = base.fields().iter().map(|f| f.as_ref().clone()).collect();
+    fields.push(Field::new(OP_COLUMN, DataType::Utf8, false));
+    fields.push(Field::new(SEQ_COLUMN, DataType::Int64, false));
+    Ok(Arc::new(Schema::new(fields)))
 }
 fn parts(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
@@ -171,16 +185,26 @@ pub(crate) async fn prepare(pool: &SqlitePool, output: &Path, id: &str) -> Resul
                     .collect()
             });
         ensure!(!keys.is_empty(), "incremental sync requires a merge key");
-        let watermark_column: String = row
-            .get::<Option<String>, _>("watermark_column")
-            .ok_or_else(|| anyhow::anyhow!("watermark column is required"))?;
-        ensure!(
-            ds.columns
-                .iter()
-                .any(|c| c.name == watermark_column
-                    && straton_core::eligible_watermark(&c.data_type)),
-            "watermark column is missing or no longer has an eligible type"
-        );
+        let kind: String = sqlx::query_scalar("SELECT kind FROM sources WHERE id=?")
+            .bind(&source)
+            .fetch_one(pool)
+            .await?;
+        let style = straton_connectors::incremental_style(&kind);
+        let events = matches!(style, IncrementalStyle::Events { .. });
+        let watermark_column = if events {
+            String::new()
+        } else {
+            let column: String = row
+                .get::<Option<String>, _>("watermark_column")
+                .ok_or_else(|| anyhow::anyhow!("watermark column is required"))?;
+            ensure!(
+                ds.columns
+                    .iter()
+                    .any(|c| c.name == column && straton_core::eligible_watermark(&c.data_type)),
+                "watermark column is missing or no longer has an eligible type"
+            );
+            column
+        };
         ensure!(
             keys.iter().all(|k| ds.columns.iter().any(|c| &c.name == k)),
             "merge key column is missing"
@@ -194,7 +218,7 @@ pub(crate) async fn prepare(pool: &SqlitePool, output: &Path, id: &str) -> Resul
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e.into()),
         };
-        let previous_watermark = row
+        let previous_watermark: Option<Value> = row
             .get::<Option<String>, _>("watermark")
             .map(|s| serde_json::from_str(&s))
             .transpose()?;
@@ -220,6 +244,19 @@ pub(crate) async fn prepare(pool: &SqlitePool, output: &Path, id: &str) -> Resul
             }
         }
         drop(snapshot_guard);
+        if let (
+            IncrementalStyle::Events {
+                horizon_secs: Some(h),
+            },
+            Some(w),
+            None,
+        ) = (style, previous_watermark.as_ref(), &fallback_reason)
+            && w.as_i64()
+                .is_none_or(|w| w < chrono::Utc::now().timestamp() - h)
+        {
+            fallback_reason =
+                Some("last sync is older than the source's change-event retention".to_owned());
+        }
         let mode = if base.is_some() && previous_watermark.is_some() && fallback_reason.is_none() {
             "incremental"
         } else {
@@ -233,6 +270,7 @@ pub(crate) async fn prepare(pool: &SqlitePool, output: &Path, id: &str) -> Resul
                 .await?;
         let every: i64 = row.get("key_diff_every_runs");
         let key_diff = mode == "incremental"
+            && !events
             && row.get::<&str, _>("delete_detection") == "key_diff"
             && every > 0
             && (successful + 1) % every == 0;
@@ -250,6 +288,7 @@ pub(crate) async fn prepare(pool: &SqlitePool, output: &Path, id: &str) -> Resul
             mode,
             fallback_reason,
             key_diff,
+            events,
         };
         durable_json(&plan_path, &plan)?;
         plan
@@ -331,7 +370,7 @@ pub(crate) async fn prepare(pool: &SqlitePool, output: &Path, id: &str) -> Resul
                 .fields()
                 .iter()
                 .map(|f| (f.name(), f.data_type()))
-                .eq(schema(&plan.columns)?
+                .eq(delta_schema(&plan)?
                     .fields()
                     .iter()
                     .map(|f| (f.name(), f.data_type()))),
@@ -373,10 +412,41 @@ pub(super) async fn execute(
     let staging = output.join(format!(".staging-{id}"));
     let expected = schema(&plan.columns)?;
     let ctx = SessionContext::new();
-    register(&ctx, "delta", &staging.join("delta"), expected.clone()).await?;
-    validate_keys(&ctx, "delta", &plan.keys).await?;
+    register(&ctx, "delta", &staging.join("delta"), delta_schema(&plan)?).await?;
     let rows_read = count(&ctx, "SELECT COUNT(*) FROM delta").await?;
+    // `keyed`: one row per key (anti-joined against the snapshot); `upserts`: rows to add.
+    let (keyed, upserts) = if plan.events {
+        let cols = plan
+            .columns
+            .iter()
+            .map(|c| quote(&c.name))
+            .collect::<Vec<_>>()
+            .join(",");
+        let keys = plan
+            .keys
+            .iter()
+            .map(|k| quote(k))
+            .collect::<Vec<_>>()
+            .join(",");
+        // The newest event per key wins; a delete hides older upserts of the same key.
+        let latest = format!(
+            "SELECT {cols},{op} FROM (SELECT *,row_number() OVER (PARTITION BY {keys} ORDER BY {seq} DESC) AS _straton_rn FROM delta) WHERE _straton_rn=1",
+            op = quote(OP_COLUMN),
+            seq = quote(SEQ_COLUMN)
+        );
+        ctx.register_table("latest", ctx.sql(&latest).await?.into_view())?;
+        let upserts = format!(
+            "SELECT {cols} FROM latest WHERE {}='upsert'",
+            quote(OP_COLUMN)
+        );
+        ctx.register_table("upserts", ctx.sql(&upserts).await?.into_view())?;
+        ("latest", "upserts")
+    } else {
+        ("delta", "delta")
+    };
+    validate_keys(&ctx, keyed, &plan.keys).await?;
     let mut updated = 0;
+    let mut deleted = 0;
     let merge = if plan.mode == "incremental" {
         let base = plan.base.as_ref().unwrap();
         let current = std::fs::read_to_string(output.join("_current"))?;
@@ -394,18 +464,20 @@ pub(super) async fn execute(
         let on = join(&plan.keys, "c", "d");
         updated = count(
             &ctx,
-            &format!("SELECT COUNT(*) FROM delta d LEFT SEMI JOIN current_snapshot c ON {on}"),
+            &format!("SELECT COUNT(*) FROM {upserts} d LEFT SEMI JOIN current_snapshot c ON {on}"),
         )
         .await?;
+        if plan.events {
+            deleted = count(&ctx, &format!("SELECT COUNT(*) FROM latest d LEFT SEMI JOIN current_snapshot c ON {on} WHERE d.{}='delete'", quote(OP_COLUMN))).await?;
+        }
         format!(
-            "SELECT c.* FROM current_snapshot c LEFT ANTI JOIN delta d ON {on} UNION ALL SELECT * FROM delta"
+            "SELECT c.* FROM current_snapshot c LEFT ANTI JOIN {keyed} d ON {on} UNION ALL SELECT * FROM {upserts}"
         )
     } else {
-        "SELECT * FROM delta".to_owned()
+        format!("SELECT * FROM {upserts}")
     };
     let merged = ctx.sql(&merge).await?;
     ctx.register_table("merged", merged.into_view())?;
-    let mut deleted = 0;
     let mut rows_read = rows_read;
     let query = if plan.key_diff {
         let keys_dir = staging.join("keys");
@@ -471,7 +543,12 @@ pub(super) async fn execute(
         .fetch_one(pool)
         .await?;
     let saved: Value = serde_json::from_str(&saved)?;
-    let watermark = if count(&ctx, "SELECT COUNT(*) FROM delta").await? == 0 {
+    let watermark = if plan.events {
+        // Events sources report their own watermark (newest change seen, or a full load's start).
+        Some(saved["source_cursor"]["watermark"].clone())
+            .filter(|w| !w.is_null())
+            .or(plan.previous_watermark.clone())
+    } else if count(&ctx, "SELECT COUNT(*) FROM delta").await? == 0 {
         if plan.mode == "incremental" {
             plan.previous_watermark.clone()
         } else {
@@ -502,7 +579,7 @@ pub(super) async fn execute(
     let stats = Stats {
         mode_used: plan.mode,
         rows_read,
-        rows_inserted: count(&ctx, "SELECT COUNT(*) FROM delta").await? - updated,
+        rows_inserted: count(&ctx, &format!("SELECT COUNT(*) FROM {upserts}")).await? - updated,
         rows_updated: updated,
         rows_deleted: deleted,
         watermark,

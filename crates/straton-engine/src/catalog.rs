@@ -30,6 +30,10 @@ pub async fn upsert(
     source: &str,
     ds: &DatasetSchema,
 ) -> Result<String> {
+    anyhow::ensure!(
+        !ds.columns.iter().any(|c| c.name.starts_with("_straton_")),
+        "column names starting with _straton_ are reserved"
+    );
     let id:String=sqlx::query_scalar("INSERT INTO datasets(id,source_id,name) VALUES(?,?,?) ON CONFLICT(source_id,name) DO UPDATE SET name=excluded.name,stale=0 RETURNING id").bind(store::id()).bind(source).bind(&ds.dataset.name).fetch_one(&mut **tx).await?;
     for c in &ds.columns {
         sqlx::query("INSERT INTO columns(id,dataset_id,name,data_type,nullable,primary_key) VALUES(?,?,?,?,?,?) ON CONFLICT(dataset_id,name) DO UPDATE SET data_type=excluded.data_type,nullable=excluded.nullable,primary_key=excluded.primary_key").bind(store::id()).bind(&id).bind(&c.name).bind(&c.data_type).bind(c.nullable).bind(c.primary_key).execute(&mut **tx).await?;

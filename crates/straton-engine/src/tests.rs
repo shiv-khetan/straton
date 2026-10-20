@@ -3097,3 +3097,182 @@ async fn incremental_settings_reset_state_and_serialize_same_target() {
     input.close().await;
     f.close().await;
 }
+
+/// Fake Stripe API: one page of customers plus a mutable event log.
+#[derive(Clone, Default)]
+struct FakeStripe {
+    customers: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    events: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+}
+async fn fake_stripe(state: FakeStripe) -> String {
+    use axum::{Json, extract::Query, routing::get};
+    use std::collections::HashMap;
+    let customers = state.customers.clone();
+    let events = state.events.clone();
+    let app = axum::Router::new()
+        .route(
+            "/v1/customers",
+            get(move || {
+                let c = customers.lock().unwrap().clone();
+                async move { Json(json!({"data": c, "has_more": false})) }
+            }),
+        )
+        .route(
+            "/v1/events",
+            get(move |Query(q): Query<HashMap<String, String>>| {
+                let gte: i64 = q["created[gte]"].parse().unwrap();
+                let mut e: Vec<_> = events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|e| e["created"].as_i64().unwrap() >= gte)
+                    .cloned()
+                    .collect();
+                e.reverse(); // newest first, as Stripe returns them
+                async move { Json(json!({"data": e, "has_more": false})) }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/")
+}
+fn stripe_customer(id: &str, email: &str) -> serde_json::Value {
+    json!({"id": id, "object": "customer", "created": 1_700_000_000, "email": email, "livemode": false})
+}
+fn stripe_event(n: i64, kind: &str, object: serde_json::Value) -> serde_json::Value {
+    json!({"id": format!("evt_{n}"), "type": kind, "created": chrono::Utc::now().timestamp() + n, "data": {"object": object}})
+}
+#[tokio::test]
+async fn stripe_events_merge_deletes_fallback_and_validation() {
+    let fake = FakeStripe::default();
+    *fake.customers.lock().unwrap() = vec![
+        stripe_customer("cus_1", "a@x.io"),
+        stripe_customer("cus_2", "b@x.io"),
+    ];
+    let base = fake_stripe(fake.clone()).await;
+    let f = Fixture::new().await;
+    crate::credentials::set("source", &"rk_test".to_owned().into()).unwrap();
+    sqlx::query("UPDATE sources SET name='Pay',kind='stripe',credential_id='source',config=? WHERE id='source'")
+        .bind(json!({"api_base": base, "objects": ["customers"], "rate_limit_rps": 1000}).to_string())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    crate::catalog::discover(&f.pool, "source").await.unwrap();
+    let a = app(&f);
+    let job = |extra: serde_json::Value| {
+        let mut j = json!({"id":"job","name":"Stripe customers","source_id":"source","dataset":"customers","cron":null,"enabled":true,"mode":"incremental","watermark_column":null,"key_columns":null,"delete_detection":"none","key_diff_every_runs":0});
+        j.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        j
+    };
+    let (s, v) = request(
+        &a,
+        "PUT",
+        "/v1/jobs/job",
+        job(json!({"watermark_column":"created"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, v) = request(
+        &a,
+        "PUT",
+        "/v1/jobs/job",
+        job(json!({"delete_detection":"key_diff","key_diff_every_runs":2})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, v) = request(&a, "PUT", "/v1/jobs/job", job(json!({}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+
+    // Run 1: full load seeds a start-time watermark.
+    let first = sql_sync(&f).await;
+    let seeded = job_watermark(&f).await.as_i64().unwrap();
+    assert!(seeded > chrono::Utc::now().timestamp() - 300);
+    let rows = |a: axum::Router| async move {
+        let (s, v) = request(
+            &a,
+            "POST",
+            "/v1/sql",
+            json!({"query":"SELECT * FROM pay.customers ORDER BY id"}),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        v
+    };
+    let v = rows(a.clone()).await;
+    assert_eq!(v["row_count"], 2);
+    assert!(
+        v["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| !c["name"].as_str().unwrap().starts_with("_straton_"))
+    );
+    let mode: String = sqlx::query_scalar("SELECT mode_used FROM runs WHERE id=?")
+        .bind(&first)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(mode, "full");
+
+    // Run 2: update cus_1, delete cus_2, create then update cus_3 (newest event wins).
+    *fake.events.lock().unwrap() = vec![
+        stripe_event(1, "customer.updated", stripe_customer("cus_1", "a2@x.io")),
+        stripe_event(
+            2,
+            "customer.deleted",
+            json!({"id":"cus_2","object":"customer","deleted":true}),
+        ),
+        stripe_event(3, "customer.created", stripe_customer("cus_3", "c@x.io")),
+        stripe_event(4, "customer.updated", stripe_customer("cus_3", "c2@x.io")),
+    ];
+    let second = sql_sync(&f).await;
+    let r = sqlx::query(
+        "SELECT mode_used,rows_inserted,rows_updated,rows_deleted FROM runs WHERE id=?",
+    )
+    .bind(&second)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (
+            r.get::<String, _>("mode_used"),
+            r.get::<i64, _>("rows_inserted"),
+            r.get::<i64, _>("rows_updated"),
+            r.get::<i64, _>("rows_deleted")
+        ),
+        ("incremental".into(), 1, 1, 1)
+    );
+    let (s, v) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT id,email FROM pay.customers ORDER BY id"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        v["rows"],
+        json!([["cus_1", "a2@x.io"], ["cus_3", "c2@x.io"]])
+    );
+    let advanced = job_watermark(&f).await.as_i64().unwrap();
+    assert!(advanced > seeded, "watermark moves to the newest event");
+
+    // Run 3: a watermark past Stripe's 30-day event retention forces a full refresh.
+    sqlx::query("UPDATE job_state SET watermark=?")
+        .bind((chrono::Utc::now().timestamp() - 40 * 86_400).to_string())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let third = sql_sync(&f).await;
+    let r = sqlx::query("SELECT mode_used,fallback_reason FROM runs WHERE id=?")
+        .bind(&third)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(r.get::<String, _>("mode_used"), "full");
+    assert!(r.get::<String, _>("fallback_reason").contains("retention"));
+    f.close().await;
+}

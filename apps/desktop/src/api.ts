@@ -27,13 +27,13 @@ export interface Connection {
   url: string;
   token: string;
 }
-export type SourceKind = 'postgres' | 'sqlite' | 'csv' | 'external' | 'parquet' | 'noop';
+export type SourceKind = 'postgres' | 'sqlite' | 'csv' | 'stripe' | 'external' | 'parquet' | 'noop';
 export interface Source {
   id: string;
   name: string;
   kind: SourceKind;
   credential_id: string | null;
-  config: Record<string, string | number>;
+  config: Record<string, string | number | string[]>;
 }
 export type SourceInput = Omit<Source, 'id' | 'credential_id'> & { secret?: string };
 export type Privilege = 'read' | 'sync_admin' | 'admin';

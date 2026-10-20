@@ -22,6 +22,7 @@ pub enum SourceKind {
     External,
     Parquet,
     Noop,
+    Stripe,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -129,8 +130,25 @@ pub struct ReadOptions {
     /// Project only these keys, for a full-source delete check.
     pub keys_only: Option<Vec<String>>,
 }
+/// How a connector finds changes between runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncrementalStyle {
+    /// Delta = rows whose watermark column is >= the last watermark.
+    Column,
+    /// The connector reports its own watermark and emits upserts and deletes.
+    /// A watermark older than `horizon_secs` forces a full refresh.
+    Events {
+        horizon_secs: Option<i64>,
+    },
+    None,
+}
+/// Reserved delta columns for `Events` connectors; never stored in snapshots.
+pub const OP_COLUMN: &str = "_straton_op";
+pub const SEQ_COLUMN: &str = "_straton_seq";
+
 #[derive(Debug, Clone)]
 pub struct IncrementalRead {
+    /// Ignored by `Events` connectors.
     pub watermark_column: String,
     pub lower_bound: Option<serde_json::Value>,
     pub key_columns: Vec<String>,

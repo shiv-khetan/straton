@@ -232,3 +232,21 @@ Delta Parquet parts are staged under `.staging-<run>/delta/`, flushed and rename
 Deletes remain in the snapshot by default (`delete_detection: "none"`). With `key_diff`, every Nth successful run scans only all source keys and removes snapshot rows whose keys are absent. The initial full run counts toward this interval; failed/cancelled runs do not. `key_diff_every_runs: 0` disables the scan. `rows_read` includes rows in this key scan. Sources should remain stable during a run for a consistent result.
 
 Changed source column names or types trigger a full refresh for that run, re-seed the watermark, record `fallback_reason` and emit `sync.fallback` in the audit log. Runs expose `mode_used`, `rows_read`, `rows_inserted`, `rows_updated` and `rows_deleted`. Updates count delta keys already in the previous snapshot, including unchanged boundary rows. GET jobs exposes the read-only `watermark`. Jobs/runs require `sync_admin` on their target. Changing sync settings resets job state and requires all active runs to finish; enabling/disabling a job preserves it. Runs for the same target are serialized.
+
+## Stripe
+
+Create a Stripe source with `kind="stripe"` and a **restricted key** (`rk_…`) that has read-only access to the objects you sync and to Events. The key is sent as the write-only `secret` and kept in the engine's OS keychain.
+
+```json
+{ "name": "Payments", "kind": "stripe",
+  "config": { "account_label": "acme-live", "objects": ["customers", "charges", "invoices"], "rate_limit_rps": 25 },
+  "secret": "rk_live_..." }
+```
+
+- **Objects:** customers, charges, payment_intents, invoices, subscriptions, products, prices, refunds, balance_transactions (all nine by default). Each has fixed columns: `id` as the primary key, `created` as a UTC timestamp, amounts as integers in minor units, nested objects as JSON text, and references such as `customer` as ID strings. Declared relationships link them on the Data Map.
+- **Full refresh:** reads every page of each list endpoint.
+- **Incremental** (`mode="incremental"`, with no `watermark_column` and `delete_detection="none"`):
+  - Reads `/v1/events` since the last watermark. Updates are merged by `id`, `*.deleted` events remove rows, and the newest event per object wins.
+  - `balance_transactions` are append-only, so they're read by `created`.
+  - The first run is a full load. If the last sync is more than 29 days old (Stripe keeps events for 30), the run falls back to a full refresh and records the reason.
+- **Requests:** at most `rate_limit_rps` per source (25 by default). HTTP 429 and 5xx responses are retried with backoff, honouring `Retry-After`, up to 5 attempts. API keys appear only in the `Authorization` header, never in errors or logs.
