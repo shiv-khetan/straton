@@ -641,7 +641,7 @@ fn cell(array: &dyn Array, row: usize) -> std::result::Result<Value, Error> {
     })
 }
 
-fn listing_url(path: &std::path::Path) -> datafusion::error::Result<ListingTableUrl> {
+pub(crate) fn listing_url(path: &std::path::Path) -> datafusion::error::Result<ListingTableUrl> {
     use std::fmt::Write;
     let path = path.to_string_lossy();
     // Canonical Windows paths have a verbatim prefix whose '?' looks like a glob.

@@ -652,7 +652,7 @@ async fn sqlite_sync_and_crash_resume() {
     let backups = backup::Backups::new(f.config.clone());
     // Commit the first batch; leave the second file durable but uncheckpointed, as after a crash.
     let c = crate::catalog::connector(&f.pool, "source").await.unwrap();
-    let mut stream = c.read("users", None).await.unwrap();
+    let mut stream = c.read("users", Default::default()).await.unwrap();
     use futures::StreamExt;
     let (batch, cursor) = stream.next().await.unwrap().unwrap();
     let output = f.dir.join("data/source/users");
@@ -2607,5 +2607,493 @@ async fn access_admin_role_policies_are_enforced_and_fail_closed() {
         .0,
         StatusCode::OK
     );
+    f.close().await;
+}
+
+async fn incremental_fixture() -> (Fixture, SqlitePool) {
+    let f = sql_fixture().await;
+    let input = sqlx::sqlite::SqlitePoolOptions::new()
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new().filename(f.dir.join("sql-input.db")),
+        )
+        .await
+        .unwrap();
+    sqlx::raw_sql("ALTER TABLE users ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0; UPDATE users SET updated_at=id;").execute(&input).await.unwrap();
+    crate::catalog::discover(&f.pool, "source").await.unwrap();
+    sqlx::query("UPDATE jobs SET mode='incremental',watermark_column='updated_at'")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    (f, input)
+}
+async fn job_watermark(f: &Fixture) -> serde_json::Value {
+    let raw: Option<String> =
+        sqlx::query_scalar("SELECT watermark FROM job_state WHERE job_id='job'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    raw.map(|s| serde_json::from_str(&s).unwrap())
+        .unwrap_or(json!(null))
+}
+async fn synced_rows(f: &Fixture) -> serde_json::Value {
+    let (status, v) = request(
+        &app(f),
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT id,name,updated_at FROM app_db.users ORDER BY id"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    v["rows"].clone()
+}
+#[tokio::test]
+async fn incremental_seed_merge_boundary_resume_and_failed_publish() {
+    let (mut f, input) = incremental_fixture().await;
+    let first = sql_sync(&f).await;
+    assert_eq!(job_watermark(&f).await, json!("2"));
+    let row = sqlx::query("SELECT * FROM runs WHERE id=?")
+        .bind(&first)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(row.get::<String, _>("mode_used"), "full");
+    assert_eq!(row.get::<i64, _>("rows_read"), 2);
+    sqlx::raw_sql("UPDATE users SET name='Bobby',updated_at=4 WHERE id=2; INSERT INTO users VALUES(3,'Carol',3),(4,'Dora',5);").execute(&input).await.unwrap();
+    let second = sql_sync(&f).await;
+    let row = sqlx::query("SELECT * FROM runs WHERE id=?")
+        .bind(&second)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(row.get::<String, _>("mode_used"), "incremental");
+    assert_eq!(
+        (
+            row.get::<i64, _>("rows_inserted"),
+            row.get::<i64, _>("rows_updated"),
+            row.get::<i64, _>("rows_read")
+        ),
+        (2, 1, 3)
+    );
+    let expected = json!([
+        [1, "Alice", 1],
+        [2, "Bobby", 4],
+        [3, "Carol", 3],
+        [4, "Dora", 5]
+    ]);
+    assert_eq!(synced_rows(&f).await, expected);
+    assert_eq!(job_watermark(&f).await, json!("5"));
+    sqlx::query("INSERT INTO users VALUES(5,'Eve',5)")
+        .execute(&input)
+        .await
+        .unwrap();
+    sql_sync(&f).await;
+    let tied = synced_rows(&f).await;
+    assert_eq!(tied.as_array().unwrap().len(), 5);
+    sql_sync(&f).await;
+    assert_eq!(synced_rows(&f).await, tied);
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    let role = access_role(&a, "incremental reader").await;
+    access_grant(&a, &role, "dataset", &did, "read").await;
+    let (_, token) = access_user(&a, "incremental analyst", &[&role]).await;
+    let (status, v) = request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/row-filters/{role}"),
+        json!({"predicate":"id >= 3"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let (status, v) = request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT id,name FROM app_db.users ORDER BY id"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], json!([[3, "Carol"], [4, "Dora"], [5, "Eve"]]));
+    drop(a);
+    sqlx::query("INSERT INTO users VALUES(6,'Frank',6)")
+        .execute(&input)
+        .await
+        .unwrap();
+    let resumed = f.enqueue().await;
+    runner::state(&f.pool, &f.events, &resumed, "running", None)
+        .await
+        .unwrap();
+    let output = f.dir.join("data/source/users");
+    runner::incremental::prepare(&f.pool, &output, &resumed)
+        .await
+        .unwrap();
+    assert!(
+        output
+            .join(format!(".staging-{resumed}/delta/part-000000.parquet"))
+            .is_file()
+    );
+    assert_eq!(job_watermark(&f).await, json!("5"));
+    // Arrives after delta completion: recovery must use staged rows, not reread the source.
+    sqlx::query("INSERT INTO users VALUES(7,'Grace',7)")
+        .execute(&input)
+        .await
+        .unwrap();
+    f.pool.close().await;
+    f.pool = store::open(&f.dir).await.unwrap();
+    runner::recover(&f.pool, &f.events, 3).await.unwrap();
+    runner::state(&f.pool, &f.events, &resumed, "running", None)
+        .await
+        .unwrap();
+    let backups = backup::Backups::new(f.config.clone());
+    runner::execute(&f.pool, &backups, &resumed, &f.events)
+        .await
+        .unwrap();
+    assert_eq!(job_watermark(&f).await, json!("6"));
+    assert_eq!(synced_rows(&f).await.as_array().unwrap().len(), 6);
+    runner::execute(&f.pool, &backups, &resumed, &f.events)
+        .await
+        .unwrap();
+    assert_eq!(job_watermark(&f).await, json!("6"));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM audit_log WHERE action='run.succeeded' AND entity_id=?"
+        )
+        .bind(&resumed)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap(),
+        1
+    );
+    sql_sync(&f).await;
+    assert_eq!(job_watermark(&f).await, json!("7"));
+    let (_, job) = request(&app(&f), "GET", "/v1/jobs/job", json!(null)).await;
+    assert_eq!(job["watermark"], json!("7"));
+    sqlx::query("INSERT INTO users VALUES(8,'Hank',8)")
+        .execute(&input)
+        .await
+        .unwrap();
+    let failed = f.enqueue().await;
+    runner::state(&f.pool, &f.events, &failed, "running", None)
+        .await
+        .unwrap();
+    let before = std::fs::read_to_string(output.join("_current")).unwrap();
+    std::fs::create_dir(output.join("_current.partial")).unwrap();
+    assert!(
+        runner::execute(&f.pool, &backups, &failed, &f.events)
+            .await
+            .is_err()
+    );
+    runner::state(
+        &f.pool,
+        &f.events,
+        &failed,
+        "failed",
+        Some("publish blocked"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(job_watermark(&f).await, json!("7"));
+    assert_eq!(
+        std::fs::read_to_string(output.join("_current")).unwrap(),
+        before
+    );
+    assert_eq!(synced_rows(&f).await.as_array().unwrap().len(), 7);
+    input.close().await;
+    f.close().await;
+}
+#[tokio::test]
+async fn incremental_key_diff_empty_delta_and_drift_fallback() {
+    let (f, input) = incremental_fixture().await;
+    sqlx::query("UPDATE jobs SET delete_detection='key_diff',key_diff_every_runs=2")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sql_sync(&f).await;
+    sqlx::query("DELETE FROM users WHERE id=1")
+        .execute(&input)
+        .await
+        .unwrap();
+    let run = sql_sync(&f).await;
+    assert_eq!(synced_rows(&f).await, json!([[2, "Bob", 2]]));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT rows_deleted FROM runs WHERE id=?")
+            .bind(run)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap(),
+        1
+    );
+    sqlx::query("DELETE FROM users")
+        .execute(&input)
+        .await
+        .unwrap();
+    sql_sync(&f).await;
+    assert_eq!(synced_rows(&f).await, json!([[2, "Bob", 2]])); // third run: no key diff
+    let empty = sql_sync(&f).await;
+    assert_eq!(synced_rows(&f).await, json!([]));
+    assert_eq!(job_watermark(&f).await, json!("2"));
+    let row = sqlx::query("SELECT rows_deleted,rows_read FROM runs WHERE id=?")
+        .bind(empty)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            row.get::<i64, _>("rows_deleted"),
+            row.get::<i64, _>("rows_read")
+        ),
+        (1, 0)
+    );
+    sqlx::raw_sql("ALTER TABLE users ADD COLUMN extra TEXT; INSERT INTO users VALUES(1,'New Alice',1,'new schema');").execute(&input).await.unwrap();
+    let drift = sql_sync(&f).await;
+    assert_eq!(job_watermark(&f).await, json!("1")); // full fallback re-seeds even to a lower value
+    let row = sqlx::query("SELECT mode_used,fallback_reason FROM runs WHERE id=?")
+        .bind(&drift)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(row.get::<String, _>("mode_used"), "full");
+    assert!(
+        row.get::<String, _>("fallback_reason")
+            .contains("column names or types")
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM audit_log WHERE action='sync.fallback' AND entity_id=?"
+        )
+        .bind(&drift)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap(),
+        1
+    );
+    let (s, v) = request(
+        &app(&f),
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT extra FROM app_db.users"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], json!([["new schema"]]));
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM columns c JOIN datasets d ON d.id=c.dataset_id WHERE d.source_id='straton-local-lake' AND c.name='extra'").fetch_one(&f.pool).await.unwrap(),1);
+    input.close().await;
+    f.close().await;
+}
+#[tokio::test]
+async fn incremental_api_validation_and_target_privileges() {
+    let (f, input) = incremental_fixture().await;
+    let a = app(&f);
+    let valid = json!({"name":"Incremental","source_id":"source","dataset":"users","cron":null,"enabled":true,"mode":"incremental","watermark_column":"updated_at"});
+    for (field, value, message) in [
+        ("watermark_column", json!(null), "required"),
+        ("watermark_column", json!("missing"), "exist"),
+        (
+            "watermark_column",
+            json!("name"),
+            "integer, date or timestamp",
+        ),
+        ("key_columns", json!([]), "requires"),
+        ("key_columns", json!(["missing"]), "exist"),
+        ("key_columns", json!(["id", "id"]), "duplicates"),
+        ("mode", json!("other"), "mode"),
+        ("delete_detection", json!("other"), "delete_detection"),
+    ] {
+        let mut body = valid.clone();
+        body[field] = value;
+        let (s, v) = request(&a, "POST", "/v1/jobs", body).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        assert!(v["error"].as_str().unwrap().contains(message), "{v}");
+    }
+    let (s, v) = request(&a, "POST", "/v1/jobs", valid.clone()).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["watermark"], json!(null));
+    let (_, map) = request(&a, "GET", "/v1/datamap", json!(null)).await;
+    let did = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["type"] == "dataset" && d["name"] == "users")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    sqlx::query("UPDATE columns SET primary_key=0 WHERE dataset_id=?")
+        .bind(did)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        request(&a, "POST", "/v1/jobs", valid.clone()).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let mut override_key = valid.clone();
+    override_key["key_columns"] = json!(["id"]);
+    assert_eq!(
+        request(&a, "POST", "/v1/jobs", override_key.clone())
+            .await
+            .0,
+        StatusCode::CREATED
+    );
+    let role = access_role(&a, "sync limited").await;
+    access_grant(&a, &role, "dataset", did, "sync_admin").await;
+    let (_, token) = access_user(&a, "sync operator", &[&role]).await;
+    assert_eq!(
+        request_as(&a, &token, "POST", "/v1/jobs", override_key.clone())
+            .await
+            .0,
+        StatusCode::CREATED
+    );
+    let mut other = override_key.clone();
+    other["dataset"] = json!("unpublished");
+    assert_eq!(
+        request_as(&a, &token, "POST", "/v1/jobs", other).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let mut readonly = override_key;
+    readonly["watermark"] = json!(100);
+    assert!(
+        request(&a, "POST", "/v1/jobs", readonly)
+            .await
+            .0
+            .is_client_error()
+    );
+    sqlx::query("UPDATE sources SET kind='csv' WHERE id='source'")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let (s, v) = request(&a, "POST", "/v1/jobs", valid).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("CSV"));
+    input.close().await;
+    f.close().await;
+}
+
+#[tokio::test]
+async fn incremental_timestamp_round_trip_and_partial_delta_resume() {
+    let (f, input) = incremental_fixture().await;
+    sqlx::raw_sql("ALTER TABLE users ADD COLUMN changed_at TIMESTAMP; UPDATE users SET changed_at='2026-10-20 12:00:00.123456';").execute(&input).await.unwrap();
+    crate::catalog::discover(&f.pool, "source").await.unwrap();
+    sqlx::query("UPDATE jobs SET watermark_column='changed_at'")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sql_sync(&f).await;
+    assert_eq!(job_watermark(&f).await, json!("2026-10-20 12:00:00.123456"));
+    sqlx::query("INSERT INTO users VALUES(3,'Carol',3,'2026-10-20 12:00:00.123456')")
+        .execute(&input)
+        .await
+        .unwrap();
+    let run = f.enqueue().await;
+    runner::state(&f.pool, &f.events, &run, "running", None)
+        .await
+        .unwrap();
+    let output = f.dir.join("data/source/users");
+    runner::incremental::prepare(&f.pool, &output, &run)
+        .await
+        .unwrap();
+    let staging = output.join(format!(".staging-{run}"));
+    // Model a crash after only the first delta part's checkpoint; later parts are orphans.
+    let raw: String = sqlx::query_scalar("SELECT cursor FROM run_checkpoints WHERE run_id=?")
+        .bind(&run)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    let _: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    sqlx::query("UPDATE runs SET committed_batches=1 WHERE id=?")
+        .bind(&run)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE run_checkpoints SET batch_number=1,cursor=? WHERE run_id=?")
+        .bind(
+            json!({"source_cursor":["2026-10-20 12:00:00.123456","1"],"delta_complete":false})
+                .to_string(),
+        )
+        .bind(&run)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert!(staging.join("delta/part-000002.parquet").exists());
+    runner::execute(
+        &f.pool,
+        &backup::Backups::new(f.config.clone()),
+        &run,
+        &f.events,
+    )
+    .await
+    .unwrap();
+    assert_eq!(synced_rows(&f).await.as_array().unwrap().len(), 3);
+    assert_eq!(job_watermark(&f).await, json!("2026-10-20 12:00:00.123456"));
+    let row = sqlx::query("SELECT rows_inserted,rows_updated,rows_read FROM runs WHERE id=?")
+        .bind(&run)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            row.get::<i64, _>("rows_inserted"),
+            row.get::<i64, _>("rows_updated"),
+            row.get::<i64, _>("rows_read")
+        ),
+        (1, 2, 3)
+    );
+    input.close().await;
+    f.close().await;
+}
+#[tokio::test]
+async fn incremental_settings_reset_state_and_serialize_same_target() {
+    let (f, input) = incremental_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let body = json!({"name":"Test","source_id":"source","dataset":"users","cron":null,"enabled":false,"mode":"incremental","watermark_column":"updated_at","key_columns":null,"delete_detection":"none","key_diff_every_runs":0});
+    assert_eq!(
+        request(&a, "PUT", "/v1/jobs/job", body.clone()).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(job_watermark(&f).await, json!("2"));
+    let active = f.enqueue().await;
+    runner::state(&f.pool, &f.events, &active, "running", None)
+        .await
+        .unwrap();
+    let mut changed = body.clone();
+    changed["key_columns"] = json!(["id"]);
+    assert_eq!(
+        request(&a, "PUT", "/v1/jobs/job", changed.clone()).await.0,
+        StatusCode::CONFLICT
+    );
+    let (s, other) = request(&a, "POST", "/v1/jobs", body).await;
+    assert_eq!(s, StatusCode::CREATED, "{other}");
+    let mut tx = f.pool.begin().await.unwrap();
+    let queued = store::enqueue(&mut tx, other["id"].as_str().unwrap(), store::now())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut worker = runner::Runner::new(
+        f.pool.clone(),
+        f.events.clone(),
+        backup::Backups::new(f.config.clone()),
+        2,
+    );
+    worker.dispatch().await.unwrap();
+    worker.drain().await;
+    assert_eq!(f.state(&queued).await, "queued"); // another job on the same target cannot merge concurrently
+    runner::state(&f.pool, &f.events, &active, "cancelled", None)
+        .await
+        .unwrap();
+    runner::state(&f.pool, &f.events, &queued, "cancelled", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        request(&a, "PUT", "/v1/jobs/job", changed).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM job_state WHERE job_id='job'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    input.close().await;
     f.close().await;
 }

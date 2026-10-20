@@ -298,11 +298,11 @@ async fn delete_source(
     Ok(StatusCode::NO_CONTENT)
 }
 fn job_json(row: sqlx::sqlite::SqliteRow) -> Value {
-    json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"source_id":row.get::<Option<String>,_>("source_id"),"dataset":row.get::<String,_>("dataset"),"cron":row.get::<Option<String>,_>("cron"),"enabled":row.get::<bool,_>("enabled"),"builtin":row.get::<bool,_>("builtin")})
+    json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"source_id":row.get::<Option<String>,_>("source_id"),"dataset":row.get::<String,_>("dataset"),"cron":row.get::<Option<String>,_>("cron"),"enabled":row.get::<bool,_>("enabled"),"builtin":row.get::<bool,_>("builtin"),"mode":row.get::<String,_>("mode"),"watermark_column":row.get::<Option<String>,_>("watermark_column"),"key_columns":row.get::<Option<String>,_>("key_columns").and_then(|s|serde_json::from_str::<Value>(&s).ok()),"delete_detection":row.get::<String,_>("delete_detection"),"key_diff_every_runs":row.get::<i64,_>("key_diff_every_runs"),"watermark":row.get::<Option<String>,_>("watermark").and_then(|s|serde_json::from_str::<Value>(&s).ok())})
 }
 async fn jobs(State(a): State<App>, Extension(p): Extension<Principal>) -> ApiResult<Json<Value>> {
     Ok(Json(Value::Array(
-        sqlx::query("SELECT jobs.*,datasets.id AS target_dataset_id FROM jobs LEFT JOIN datasets ON datasets.source_id=jobs.source_id AND datasets.name=jobs.dataset ORDER BY jobs.id")
+        sqlx::query("SELECT jobs.*,(SELECT watermark FROM job_state WHERE job_id=jobs.id) AS watermark,datasets.id AS target_dataset_id FROM jobs LEFT JOIN datasets ON datasets.source_id=jobs.source_id AND datasets.name=jobs.dataset ORDER BY jobs.id")
             .fetch_all(&a.pool)
             .await?
             .into_iter()
@@ -316,7 +316,7 @@ async fn job(
     Extension(p): Extension<Principal>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let row = sqlx::query("SELECT jobs.*,datasets.id AS target_dataset_id FROM jobs LEFT JOIN datasets ON datasets.source_id=jobs.source_id AND datasets.name=jobs.dataset WHERE jobs.id=?")
+    let row = sqlx::query("SELECT jobs.*,(SELECT watermark FROM job_state WHERE job_id=jobs.id) AS watermark,datasets.id AS target_dataset_id FROM jobs LEFT JOIN datasets ON datasets.source_id=jobs.source_id AND datasets.name=jobs.dataset WHERE jobs.id=?")
         .bind(id)
         .fetch_optional(&a.pool)
         .await?;
@@ -325,6 +325,66 @@ async fn job(
         return Err(forbidden());
     }
     Ok(Json(job_json(row)))
+}
+async fn validate_incremental_job(pool: &SqlitePool, j: &Job) -> ApiResult<()> {
+    if !["full", "incremental"].contains(&j.mode.as_str()) {
+        return Err(bad("mode must be full or incremental"));
+    }
+    if !["none", "key_diff"].contains(&j.delete_detection.as_str()) {
+        return Err(bad("delete_detection must be none or key_diff"));
+    }
+    if j.mode != "incremental" {
+        return Ok(());
+    }
+    let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM sources WHERE id=?")
+        .bind(&j.source_id)
+        .fetch_optional(pool)
+        .await?;
+    if kind.as_deref() == Some("csv") {
+        return Err(bad("CSV sources support full refresh only"));
+    }
+    if !matches!(kind.as_deref(), Some("sqlite" | "postgres")) {
+        return Err(bad("incremental sync requires a SQLite or Postgres source"));
+    }
+    let watermark = j
+        .watermark_column
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| bad("watermark_column is required for incremental sync"))?;
+    let columns = sqlx::query("SELECT c.* FROM columns c JOIN datasets d ON d.id=c.dataset_id WHERE d.source_id=? AND d.name=? ORDER BY c.rowid").bind(&j.source_id).bind(&j.dataset).fetch_all(pool).await?;
+    let column = columns
+        .iter()
+        .find(|c| c.get::<&str, _>("name") == watermark)
+        .ok_or_else(|| {
+            bad("watermark_column must exist in the catalog; discover the dataset first")
+        })?;
+    if !straton_core::eligible_watermark(column.get("data_type")) {
+        return Err(bad(
+            "watermark_column must have an integer, date or timestamp type",
+        ));
+    }
+    let keys = j.key_columns.clone().unwrap_or_else(|| {
+        columns
+            .iter()
+            .filter(|c| c.get::<bool, _>("primary_key"))
+            .map(|c| c.get::<String, _>("name"))
+            .collect()
+    });
+    if keys.is_empty() {
+        return Err(bad(
+            "incremental sync requires a catalog primary key or key_columns",
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for key in &keys {
+        if !columns.iter().any(|c| c.get::<&str, _>("name") == key) {
+            return Err(bad("every key_columns entry must exist in the catalog"));
+        }
+        if !seen.insert(key) {
+            return Err(bad("key_columns must not contain duplicates"));
+        }
+    }
+    Ok(())
 }
 async fn save_job(a: App, p: Principal, mut j: Job, update: bool) -> ApiResult<Json<Value>> {
     require_job_target(&a.pool, &p, Some(j.source_id.as_str()), &j.dataset).await?;
@@ -344,7 +404,25 @@ async fn save_job(a: App, p: Principal, mut j: Job, update: bool) -> ApiResult<J
     if j.id == "builtin-backup" {
         return Err(bad("configure the built-in backup through backup.cron"));
     }
+    validate_incremental_job(&a.pool, &j).await?;
     let mut tx = a.pool.begin().await?;
+    if update {
+        let changed: bool = sqlx::query_scalar("SELECT source_id IS NOT ?2 OR dataset IS NOT ?3 OR mode IS NOT ?4 OR watermark_column IS NOT ?5 OR key_columns IS NOT ?6 OR delete_detection IS NOT ?7 OR key_diff_every_runs IS NOT ?8 FROM jobs WHERE id=?1")
+            .bind(&j.id).bind(&j.source_id).bind(&j.dataset).bind(&j.mode).bind(&j.watermark_column).bind(j.key_columns.as_ref().map(|v|json!(v).to_string())).bind(&j.delete_detection).bind(i64::from(j.key_diff_every_runs)).fetch_optional(&mut *tx).await?.unwrap_or(false);
+        if changed {
+            let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs WHERE job_id=? AND state IN ('queued','running','interrupted'))").bind(&j.id).fetch_one(&mut *tx).await?;
+            if active {
+                return Err(ApiError(
+                    StatusCode::CONFLICT,
+                    "wait for active runs before changing sync settings".into(),
+                ));
+            }
+            sqlx::query("DELETE FROM job_state WHERE job_id=?")
+                .bind(&j.id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
     let query = if update {
         "UPDATE jobs SET name=?2,source_id=?3,dataset=?4,cron=?5,enabled=?6,last_scheduled=CASE WHEN cron IS NOT ?5 THEN ?7 ELSE last_scheduled END WHERE id=?1 AND builtin=0"
     } else {
@@ -363,6 +441,8 @@ async fn save_job(a: App, p: Principal, mut j: Job, update: bool) -> ApiResult<J
             .await?
             .rows_affected(),
     )?;
+    sqlx::query("UPDATE jobs SET mode=?,watermark_column=?,key_columns=?,delete_detection=?,key_diff_every_runs=? WHERE id=?")
+        .bind(&j.mode).bind(&j.watermark_column).bind(j.key_columns.as_ref().map(|v|json!(v).to_string())).bind(&j.delete_detection).bind(i64::from(j.key_diff_every_runs)).bind(&j.id).execute(&mut *tx).await?;
     store::audit(
         &mut tx,
         if update { "job.updated" } else { "job.created" },
@@ -371,7 +451,7 @@ async fn save_job(a: App, p: Principal, mut j: Job, update: bool) -> ApiResult<J
     )
     .await?;
     tx.commit().await?;
-    Ok(Json(json!(j)))
+    job(State(a), Extension(p), Path(j.id)).await
 }
 async fn create_job(
     State(a): State<App>,
@@ -445,7 +525,7 @@ async fn runs(
     }
     let rows=sqlx::query("SELECT runs.*,jobs.source_id,jobs.dataset,datasets.id AS target_dataset_id FROM runs JOIN jobs ON jobs.id=runs.job_id LEFT JOIN datasets ON datasets.source_id=jobs.source_id AND datasets.name=jobs.dataset WHERE (?1 IS NULL OR job_id=?1) AND (?2 IS NULL OR state=?2) ORDER BY runs.created_at DESC,runs.id")
         .bind(q.job).bind(q.state).fetch_all(&a.pool).await?;
-    Ok(Json(json!(rows.into_iter().filter(|r|job_allowed(&p,r)).map(|r| json!({"id":r.get::<String,_>("id"),"job_id":r.get::<String,_>("job_id"),"state":r.get::<String,_>("state"),"attempt":r.get::<i64,_>("attempt"),"available_at":r.get::<i64,_>("available_at"),"error":r.get::<Option<String>,_>("error"),"committed_batches":r.get::<i64,_>("committed_batches")})).collect::<Vec<_>>())))
+    Ok(Json(json!(rows.into_iter().filter(|r|job_allowed(&p,r)).map(|r| json!({"id":r.get::<String,_>("id"),"job_id":r.get::<String,_>("job_id"),"state":r.get::<String,_>("state"),"attempt":r.get::<i64,_>("attempt"),"available_at":r.get::<i64,_>("available_at"),"error":r.get::<Option<String>,_>("error"),"committed_batches":r.get::<i64,_>("committed_batches"),"mode_used":r.get::<String,_>("mode_used"),"rows_read":r.get::<i64,_>("rows_read"),"rows_inserted":r.get::<i64,_>("rows_inserted"),"rows_updated":r.get::<i64,_>("rows_updated"),"rows_deleted":r.get::<i64,_>("rows_deleted"),"fallback_reason":r.get::<Option<String>,_>("fallback_reason")})).collect::<Vec<_>>())))
 }
 async fn cancel(
     State(a): State<App>,

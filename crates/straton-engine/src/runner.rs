@@ -10,6 +10,8 @@ use tokio::{
     task::JoinSet,
 };
 
+pub(crate) mod incremental;
+
 pub type Events = broadcast::Sender<Value>;
 pub fn event(events: &Events, id: &str, state: &str) {
     let _ = events.send(json!({"type":"run.state", "id":id, "state":state}));
@@ -113,7 +115,7 @@ pub(crate) async fn execute(
     if cancelled(pool, id).await? {
         return Ok(());
     }
-    let row = sqlx::query("SELECT j.builtin,j.dataset,j.source_id,s.kind FROM runs r JOIN jobs j ON j.id=r.job_id LEFT JOIN sources s ON s.id=j.source_id WHERE r.id=?")
+    let row = sqlx::query("SELECT j.builtin,j.dataset,j.source_id,j.mode,s.kind FROM runs r JOIN jobs j ON j.id=r.job_id LEFT JOIN sources s ON s.id=j.source_id WHERE r.id=?")
         .bind(id).fetch_one(pool).await?;
     if row.get::<bool, _>("builtin") {
         backups.create(pool).await?;
@@ -126,6 +128,10 @@ pub(crate) async fn execute(
         crate::catalog::path_component(id)?;
         let output = backups.data_dir().join("data").join(&source).join(&dataset);
         let staging = output.join(format!(".staging-{id}"));
+        if row.get::<String, _>("mode") == "incremental" {
+            incremental::execute(pool, events, &output, id).await?;
+            return Ok(());
+        }
         // A crash after the directory rename must resume publication, not reread checkpointed data.
         if !noop && output.join(id).is_dir() {
             publish_snapshot(pool, events, &output, id).await?;
@@ -165,7 +171,15 @@ pub(crate) async fn execute(
             );
             std::fs::create_dir_all(&staging)?;
         }
-        let mut batches = connector.read(&dataset, cursor).await?;
+        let mut batches = connector
+            .read(
+                &dataset,
+                straton_core::ReadOptions {
+                    cursor,
+                    ..Default::default()
+                },
+            )
+            .await?;
         let mut linked = false;
         while let Some(batch) = batches.next().await {
             if cancelled(pool, id).await? {
@@ -257,7 +271,7 @@ impl Runner {
                 break;
             };
             let mut tx = self.pool.begin().await?;
-            let id: Option<String> = sqlx::query_scalar("UPDATE runs SET state='running',updated_at=? WHERE id=(SELECT id FROM runs WHERE state='queued' AND available_at<=? ORDER BY created_at,id LIMIT 1) RETURNING id")
+            let id: Option<String> = sqlx::query_scalar("UPDATE runs SET state='running',updated_at=? WHERE id=(SELECT id FROM runs WHERE state='queued' AND available_at<=? AND NOT EXISTS(SELECT 1 FROM runs active JOIN jobs aj ON aj.id=active.job_id JOIN jobs candidate ON candidate.id=runs.job_id WHERE active.state='running' AND (active.job_id=runs.job_id OR (aj.source_id=candidate.source_id AND aj.dataset=candidate.dataset))) ORDER BY created_at,id LIMIT 1) RETURNING id")
                 .bind(store::now()).bind(store::now()).fetch_optional(&mut *tx).await?;
             let Some(id) = id else {
                 break;
@@ -378,6 +392,7 @@ async fn publish_snapshot(
     sqlx::query("UPDATE datasets SET row_count=?1,last_synced_at=?2 WHERE (source_id,name) IN (SELECT j.source_id,j.dataset FROM jobs j JOIN runs r ON r.job_id=j.id WHERE r.id=?3) OR (source_id='straton-local-lake' AND name IN (SELECT j.source_id || '/' || j.dataset FROM jobs j JOIN runs r ON r.job_id=j.id WHERE r.id=?3))")
         .bind(row_count).bind(chrono::Utc::now().to_rfc3339()).bind(id)
         .execute(&mut *tx).await?;
+    incremental::publish_state(&mut tx, &snapshot, id, row_count).await?;
     let temporary = output.join("_current.partial");
     let mut file = std::fs::File::create(&temporary)?;
     file.write_all(id.as_bytes())?;
@@ -398,10 +413,10 @@ async fn publish_snapshot(
     #[cfg(not(unix))]
     let durable = true;
     // Publication is complete; garbage collection must not turn it into a failed run.
+    tx.commit().await?;
     if durable && let Err(error) = clean_snapshots(output, id, &active) {
         tracing::warn!(%error, "snapshot cleanup deferred");
     }
-    tx.commit().await?;
     event(events, id, "succeeded");
     let _ = events.send(json!({"type":"catalog.changed"}));
     Ok(())

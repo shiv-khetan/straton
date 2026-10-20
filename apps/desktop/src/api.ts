@@ -117,7 +117,14 @@ export interface DataMap {
   nodes: (MapSource | Dataset)[];
   edges: Relationship[];
 }
-export interface Job {
+export interface SyncSettings {
+  mode: 'full' | 'incremental';
+  watermark_column: string | null;
+  key_columns: string[] | null;
+  delete_detection: 'none' | 'key_diff';
+  key_diff_every_runs: number;
+}
+export interface Job extends SyncSettings {
   id: string;
   name: string;
   source_id: string | null;
@@ -125,8 +132,9 @@ export interface Job {
   cron: string | null;
   enabled: boolean;
   builtin: boolean;
+  watermark: string | number | null;
 }
-export interface JobInput {
+export interface JobInput extends SyncSettings {
   name: string;
   source_id: string;
   dataset: string;
@@ -142,6 +150,12 @@ export interface Run {
   available_at: number;
   error: string | null;
   committed_batches: number;
+  mode_used: 'full' | 'incremental';
+  rows_read: number;
+  rows_inserted: number;
+  rows_updated: number;
+  rows_deleted: number;
+  fallback_reason: string | null;
 }
 export interface Status {
   version: string;

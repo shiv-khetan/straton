@@ -86,6 +86,20 @@ pub struct Job {
     pub dataset: String,
     pub cron: Option<String>,
     pub enabled: bool,
+    #[serde(default = "full_mode")]
+    pub mode: String,
+    pub watermark_column: Option<String>,
+    pub key_columns: Option<Vec<String>>,
+    #[serde(default = "no_deletes")]
+    pub delete_detection: String,
+    #[serde(default)]
+    pub key_diff_every_runs: u32,
+}
+fn full_mode() -> String {
+    "full".into()
+}
+fn no_deletes() -> String {
+    "none".into()
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -108,6 +122,35 @@ pub struct Run {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ReadOptions {
+    pub cursor: Option<Cursor>,
+    pub incremental: Option<IncrementalRead>,
+    /// Project only these keys, for a full-source delete check.
+    pub keys_only: Option<Vec<String>>,
+}
+#[derive(Debug, Clone)]
+pub struct IncrementalRead {
+    pub watermark_column: String,
+    pub lower_bound: Option<serde_json::Value>,
+    pub key_columns: Vec<String>,
+}
+pub fn eligible_watermark(data_type: &str) -> bool {
+    matches!(
+        data_type,
+        "Int8"
+            | "Int16"
+            | "Int32"
+            | "Int64"
+            | "UInt8"
+            | "UInt16"
+            | "UInt32"
+            | "UInt64"
+            | "Date32"
+            | "Date64"
+    ) || data_type.starts_with("Timestamp(")
+}
+
 pub type Batches<'a> = BoxStream<'a, Result<(RecordBatch, Cursor)>>;
 
 /// Connector errors must never embed credentials.
@@ -117,6 +160,6 @@ pub trait Connector: Send + Sync {
     fn read<'a>(
         &'a self,
         dataset: &'a str,
-        cursor: Option<Cursor>,
+        options: ReadOptions,
     ) -> futures::future::BoxFuture<'a, Result<Batches<'a>>>;
 }

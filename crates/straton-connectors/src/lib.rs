@@ -17,7 +17,7 @@ use std::{
     sync::Arc,
 };
 use straton_core::{
-    Column, Connector, Cursor, Dataset, DatasetSchema, Error, Relationship, RelationshipKind,
+    Column, Connector, Dataset, DatasetSchema, Error, ReadOptions, Relationship, RelationshipKind,
     Result,
 };
 fn error(_: impl std::fmt::Display) -> Error {
@@ -25,6 +25,13 @@ fn error(_: impl std::fmt::Display) -> Error {
 }
 fn invalid(message: &str) -> Error {
     Error::Invalid(message.into())
+}
+fn bound_text(value: &Value) -> Result<String> {
+    match value {
+        Value::String(s) => Ok(s.clone()),
+        Value::Number(n) => Ok(n.to_string()),
+        _ => Err(invalid("invalid watermark or key value")),
+    }
 }
 fn quote(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
@@ -103,10 +110,10 @@ impl Connector for Noop {
     fn read<'a>(
         &'a self,
         _: &'a str,
-        cursor: Option<Cursor>,
+        options: ReadOptions,
     ) -> BoxFuture<'a, Result<straton_core::Batches<'a>>> {
         Box::pin(async move {
-            let start = cursor.and_then(|c| c.as_u64()).unwrap_or(0);
+            let start = options.cursor.and_then(|c| c.as_u64()).unwrap_or(0);
             Ok(stream::iter((start..3).map(|n| {
                 let b = RecordBatch::try_new(
                     Arc::new(Schema::new(vec![Field::new(
@@ -209,6 +216,219 @@ pub fn build(kind: &str, config: &Value, secret: Option<&str>) -> Result<Box<dyn
     }))
 }
 impl Connected {
+    async fn read_keyset<'a>(
+        &'a self,
+        dataset: &'a str,
+        options: ReadOptions,
+    ) -> Result<straton_core::Batches<'a>> {
+        if options.incremental.is_some() && options.keys_only.is_some() {
+            return Err(invalid(
+                "incremental and key-only read options are mutually exclusive",
+            ));
+        }
+        let ds = self
+            .discover_all()
+            .await?
+            .into_iter()
+            .find(|d| d.dataset.name == dataset)
+            .ok_or_else(|| invalid("dataset not found"))?;
+        let mut order = options
+            .incremental
+            .as_ref()
+            .map(|i| vec![i.watermark_column.clone()])
+            .unwrap_or_default();
+        let keys = options
+            .incremental
+            .as_ref()
+            .map(|i| &i.key_columns)
+            .or(options.keys_only.as_ref())
+            .filter(|k| !k.is_empty())
+            .ok_or_else(|| invalid("a nonempty merge key is required"))?;
+        for key in keys {
+            if !order.contains(key) {
+                order.push(key.clone());
+            }
+        }
+        for name in &order {
+            if !ds.columns.iter().any(|c| &c.name == name) {
+                return Err(invalid("watermark or key column does not exist"));
+            }
+        }
+        let columns: Vec<_> = if let Some(keys) = &options.keys_only {
+            keys.iter()
+                .map(|k| {
+                    ds.columns
+                        .iter()
+                        .find(|c| &c.name == k)
+                        .cloned()
+                        .ok_or_else(|| invalid("key column does not exist"))
+                })
+                .collect::<Result<_>>()?
+        } else {
+            ds.columns
+        };
+        let postgres = matches!(self.backend, Backend::Postgres(_));
+        let pg_types = if let Backend::Postgres(pool) = &self.backend {
+            sqlx::query("SELECT a.attname,format_type(a.atttypid,a.atttypmod) AS typ FROM pg_attribute a WHERE a.attrelid=to_regclass($1) AND a.attnum>0 AND NOT a.attisdropped")
+                .bind(table(dataset)).fetch_all(pool).await.map_err(error)?
+        } else {
+            vec![]
+        };
+        let types: Vec<String> = order
+            .iter()
+            .map(|name| {
+                if postgres {
+                    pg_types
+                        .iter()
+                        .find(|r| r.get::<&str, _>("attname") == name)
+                        .map(|r| r.get("typ"))
+                        .ok_or_else(|| invalid("missing key type"))
+                } else {
+                    let c = columns
+                        .iter()
+                        .find(|c| &c.name == name)
+                        .ok_or_else(|| invalid("missing key type"))?;
+                    Ok(
+                        if c.data_type.starts_with("Int") || c.data_type.starts_with("UInt") {
+                            "INTEGER"
+                        } else if c.data_type.starts_with("Float") {
+                            "REAL"
+                        } else {
+                            "TEXT"
+                        }
+                        .to_owned(),
+                    )
+                }
+            })
+            .collect::<Result<_>>()?;
+        let lower = options.incremental.and_then(|i| i.lower_bound);
+        Ok(stream::try_unfold(options.cursor, move |cursor| {
+            let columns = columns.clone();
+            let order = order.clone();
+            let types = types.clone();
+            let lower = lower.clone();
+            async move {
+                let mut values = Vec::new();
+                let mut predicates = Vec::new();
+                let parameter = |n: usize, typ: &str| {
+                    if postgres {
+                        format!("CAST(CAST(${n} AS TEXT) AS {typ})")
+                    } else {
+                        format!("CAST(${n} AS {typ})")
+                    }
+                };
+                if let Some(lower) = lower {
+                    values.push(bound_text(&lower)?);
+                    predicates.push(format!(
+                        "{} >= {}",
+                        quote(&order[0]),
+                        parameter(values.len(), &types[0])
+                    ));
+                }
+                let ordered = order.iter().map(|k| quote(k)).collect::<Vec<_>>().join(",");
+                // Detect invalid null keys/watermarks before a keyset cursor can skip them.
+                let sorting = order
+                    .iter()
+                    .map(|k| format!("{} NULLS FIRST", quote(k)))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if let Some(cursor) = cursor {
+                    let cursor = cursor
+                        .as_array()
+                        .filter(|v| v.len() == order.len())
+                        .ok_or_else(|| invalid("invalid keyset cursor"))?;
+                    let mut params = Vec::new();
+                    for (value, typ) in cursor.iter().zip(&types) {
+                        values.push(bound_text(value)?);
+                        params.push(parameter(values.len(), typ));
+                    }
+                    // A one-column key is a scalar comparison, not a row constructor.
+                    predicates.push(format!("({ordered}) > ({})", params.join(",")));
+                }
+                let wh = if predicates.is_empty() {
+                    String::new()
+                } else {
+                    format!("WHERE {}", predicates.join(" AND "))
+                };
+                let select = columns
+                    .iter()
+                    .map(|c| format!("CAST({} AS TEXT)", quote(&c.name)))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let relation = if postgres {
+                    table(dataset)
+                } else {
+                    quote(dataset)
+                };
+                let limit = values.len() + 1;
+                let sql = format!(
+                    "SELECT {select} FROM {relation} {wh} ORDER BY {sorting} LIMIT ${limit}"
+                );
+                let rows: Vec<Vec<Option<String>>> = match &self.backend {
+                    Backend::Sqlite(pool) => {
+                        let mut q = sqlx::query(&sql);
+                        for v in values {
+                            q = q.bind(v);
+                        }
+                        q.bind(self.batch_size as i64)
+                            .fetch_all(pool)
+                            .await
+                            .map_err(error)?
+                            .iter()
+                            .map(|r| {
+                                (0..columns.len())
+                                    .map(|i| r.try_get(i).map_err(error))
+                                    .collect()
+                            })
+                            .collect::<Result<_>>()?
+                    }
+                    Backend::Postgres(pool) => {
+                        let mut q = sqlx::query(&sql);
+                        for v in values {
+                            q = q.bind(v);
+                        }
+                        q.bind(self.batch_size as i64)
+                            .fetch_all(pool)
+                            .await
+                            .map_err(error)?
+                            .iter()
+                            .map(|r| {
+                                (0..columns.len())
+                                    .map(|i| r.try_get(i).map_err(error))
+                                    .collect()
+                            })
+                            .collect::<Result<_>>()?
+                    }
+                    Backend::Csv(_) => return Err(invalid("CSV keyset reads are unsupported")),
+                };
+                if rows.is_empty() {
+                    return Ok(None);
+                }
+                let positions: Vec<_> = order
+                    .iter()
+                    .map(|k| columns.iter().position(|c| &c.name == k).unwrap())
+                    .collect();
+                if rows
+                    .iter()
+                    .any(|r| positions.iter().any(|i| r[*i].is_none()))
+                {
+                    return Err(invalid("watermark and merge keys must be non-null"));
+                }
+                let next = Value::Array(
+                    positions
+                        .iter()
+                        .map(|i| json!(rows.last().unwrap()[*i]))
+                        .collect(),
+                );
+                let values = (0..columns.len())
+                    .map(|i| rows.iter().map(|r| r[i].clone()).collect())
+                    .collect();
+                Ok(Some(((batch(&columns, values)?, next.clone()), Some(next))))
+            }
+        })
+        .boxed())
+    }
+
     fn csv_schema(&self, path: &Path) -> Result<Arc<Schema>> {
         let mut file = File::open(path).map_err(error)?;
         let (schema, _) = arrow::csv::reader::Format::default()
@@ -268,6 +488,10 @@ impl Connected {
                             let t = t.to_uppercase();
                             let dt = if t.contains("INT") {
                                 DataType::Int64
+                            } else if t == "DATE" {
+                                DataType::Date32
+                            } else if t.contains("TIMESTAMP") || t == "DATETIME" {
+                                DataType::Timestamp(TimeUnit::Microsecond, None)
                             } else if t.contains("REAL") || t.contains("FLOA") || t.contains("DOUB")
                             {
                                 DataType::Float64
@@ -417,9 +641,20 @@ impl Connector for Connected {
     fn read<'a>(
         &'a self,
         dataset: &'a str,
-        cursor: Option<Cursor>,
+        options: ReadOptions,
     ) -> BoxFuture<'a, Result<straton_core::Batches<'a>>> {
         Box::pin(async move {
+            if matches!(self.backend, Backend::Csv(_))
+                && (options.incremental.is_some() || options.keys_only.is_some())
+            {
+                return Err(invalid(
+                    "CSV supports full reads only; incremental and key-only reads are unsupported",
+                ));
+            }
+            if options.incremental.is_some() || options.keys_only.is_some() {
+                return self.read_keyset(dataset, options).await;
+            }
+            let cursor = options.cursor;
             let ds = self
                 .discover_all()
                 .await?

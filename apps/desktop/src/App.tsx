@@ -33,6 +33,7 @@ import {
 } from './ui';
 import type { IconName } from './ui';
 import { backupTime, datasetLabel, isLoopback, relativeTime } from './view-model';
+import { eligibleWatermarkColumns, runStats } from './job-model';
 import { tableReference } from './sql-model';
 const DataMapView = lazy(() => import('./DataMap'));
 const emptyMap: DataMap = { nodes: [], edges: [] };
@@ -485,7 +486,14 @@ function AppContent() {
           )}
           {client && can(me, 'sync_admin') && page === 'Jobs' && (
             <Jobs
-              sources={sources}
+              sources={
+                [
+                  ...sources,
+                  ...map.nodes.filter(
+                    (n) => n.type === 'source' && !sources.some((s) => s.id === n.id),
+                  ),
+                ] as Pick<Source, 'id' | 'name' | 'kind'>[]
+              }
               datasets={datasets}
               jobs={jobs}
               runs={runs}
@@ -955,7 +963,7 @@ function Jobs({
   onClose,
   seed,
 }: {
-  sources: Source[];
+  sources: Pick<Source, 'id' | 'name' | 'kind'>[];
   datasets: Dataset[];
   jobs: Job[];
   runs: Run[];
@@ -977,6 +985,24 @@ function Jobs({
       setDataset(seed?.name ?? '');
     }
   }, [seed, open]);
+  const [mode, setMode] = useState<'full' | 'incremental'>('full');
+  const [watermark, setWatermark] = useState('');
+  const [keys, setKeys] = useState<string[]>([]);
+  const [deletes, setDeletes] = useState<'none' | 'key_diff'>('none');
+  const [every, setEvery] = useState(10);
+  const selectedDataset = datasets.find((d) => d.source_id === source && d.name === dataset);
+  const csv = sources.find((s) => s.id === source)?.kind === 'csv';
+  useEffect(() => {
+    setWatermark('');
+    setKeys(selectedDataset?.columns.filter((c) => c.pk).map((c) => c.name) ?? []);
+  }, [source, dataset, open]);
+  useEffect(() => {
+    if (open) {
+      setMode('full');
+      setDeletes('none');
+      setEvery(10);
+    }
+  }, [open]);
   const [cron, setCron] = useState('0 */5 * * * *');
   const [jobFilter, setJobFilter] = useState('');
   const [stateFilter, setStateFilter] = useState('');
@@ -995,6 +1021,7 @@ function Jobs({
             <tr>
               <th scope="col">Name</th>
               <th scope="col">Dataset</th>
+              <th scope="col">Mode / watermark</th>
               <th scope="col">Schedule (UTC)</th>
               <th scope="col">Actions</th>
             </tr>
@@ -1016,6 +1043,14 @@ function Jobs({
                       (d) => d.source_id === job.source_id && d.name === job.dataset,
                     ) ?? { name: job.dataset },
                   )}
+                </td>
+                <td>
+                  <Pill tone={job.mode === 'incremental' ? 'info' : 'neutral'}>
+                    {job.mode === 'incremental' ? 'Incremental' : 'Full refresh'}
+                  </Pill>
+                  <small>
+                    <code>{job.watermark ?? '—'}</code>
+                  </small>
                 </td>
                 <td>
                   <code>{job.cron || 'Manual'}</code>
@@ -1040,6 +1075,11 @@ function Jobs({
                                 dataset: job.dataset,
                                 cron: job.cron,
                                 enabled: !job.enabled,
+                                mode: job.mode,
+                                watermark_column: job.watermark_column,
+                                key_columns: job.key_columns,
+                                delete_detection: job.delete_detection,
+                                key_diff_every_runs: job.key_diff_every_runs,
                               }),
                             'Job updated',
                           )
@@ -1068,6 +1108,11 @@ function Jobs({
                 dataset,
                 cron: cron.trim() || null,
                 enabled: true,
+                mode,
+                watermark_column: mode === 'incremental' ? watermark : null,
+                key_columns: mode === 'incremental' ? keys : null,
+                delete_detection: mode === 'incremental' ? deletes : 'none',
+                key_diff_every_runs: mode === 'incremental' && deletes === 'key_diff' ? every : 0,
               });
               setName('');
               onClose();
@@ -1085,6 +1130,7 @@ function Jobs({
                 onChange={(e) => {
                   setSource(e.target.value);
                   setDataset('');
+                  setMode('full');
                 }}
               >
                 <option value="">Select source</option>
@@ -1109,6 +1155,85 @@ function Jobs({
                   ))}
               </select>
             </Field>
+            <Field label="Mode">
+              <select
+                value={mode}
+                onChange={(e) => setMode(e.target.value as 'full' | 'incremental')}
+                aria-describedby={csv ? 'csv-incremental-help' : undefined}
+              >
+                <option value="full">Full refresh</option>
+                <option value="incremental" disabled={csv}>
+                  Incremental
+                </option>
+              </select>
+            </Field>
+            {csv && (
+              <p id="csv-incremental-help" className="hint">
+                CSV supports full refresh only.
+              </p>
+            )}
+            {mode === 'incremental' && (
+              <>
+                <Field label="Watermark column">
+                  <select required value={watermark} onChange={(e) => setWatermark(e.target.value)}>
+                    <option value="">Select an integer, date or timestamp column</option>
+                    {eligibleWatermarkColumns(selectedDataset?.columns ?? []).map((c) => (
+                      <option key={c.name} value={c.name}>
+                        {c.name} · {c.type}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Key columns">
+                  <select
+                    multiple
+                    required
+                    size={Math.min(6, Math.max(2, selectedDataset?.columns.length ?? 2))}
+                    value={keys}
+                    onChange={(e) => setKeys(Array.from(e.target.selectedOptions, (o) => o.value))}
+                    aria-describedby="key-columns-help"
+                  >
+                    {selectedDataset?.columns.map((c) => (
+                      <option key={c.name} value={c.name}>
+                        {c.name}
+                        {c.pk ? ' (PK)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <p id="key-columns-help" className="hint">
+                  Defaults to the primary key. Use Ctrl or Command to select several columns. Keys
+                  must be unique and non-null.
+                </p>
+                <Field label="Delete detection">
+                  <select
+                    value={deletes}
+                    onChange={(e) => setDeletes(e.target.value as 'none' | 'key_diff')}
+                  >
+                    <option value="none">None</option>
+                    <option value="key_diff">Key diff every N runs</option>
+                  </select>
+                </Field>
+                {deletes === 'key_diff' && (
+                  <Field label="Key diff interval (successful runs)">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      required
+                      value={every}
+                      onChange={(e) => setEvery(Number(e.target.value))}
+                      aria-describedby="key-diff-help"
+                    />
+                  </Field>
+                )}
+                {deletes === 'key_diff' && (
+                  <p id="key-diff-help" className="hint">
+                    Scans all source keys at this interval. 0 disables delete detection.
+                  </p>
+                )}
+              </>
+            )}
             <Field label="Cron (UTC, seconds first)">
               <input
                 value={cron}
@@ -1121,7 +1246,10 @@ function Jobs({
             Six fields: second minute hour day month weekday. “0 */5 * * * *” runs every five
             minutes. Leave blank for manual runs.
           </p>
-          <button className="primary" disabled={busy || !dataset}>
+          <button
+            className="primary"
+            disabled={busy || !dataset || (mode === 'incremental' && (!watermark || !keys.length))}
+          >
             Create job
           </button>
         </form>
@@ -1197,6 +1325,7 @@ function RunTable({
           <th scope="col">State</th>
           <th scope="col">Attempt</th>
           <th scope="col">Batches</th>
+          <th scope="col">Changes (+ / ~ / −) / read</th>
           <th scope="col">Details</th>
         </tr>
       </thead>
@@ -1214,6 +1343,15 @@ function RunTable({
             </td>
             <td>{run.attempt}</td>
             <td>{run.committed_batches}</td>
+            <td>
+              <code>{runStats(run)}</code>
+              {run.fallback_reason && (
+                <small title={run.fallback_reason} tabIndex={0}>
+                  <Pill tone="warning">Full refresh fallback</Pill>
+                  <span className="visually-hidden">{run.fallback_reason}</span>
+                </small>
+              )}
+            </td>
             <td>
               {run.error || new Date(run.available_at * 1000).toLocaleString()}
               {cancel && ['queued', 'running'].includes(run.state) && (
