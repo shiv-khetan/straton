@@ -7,7 +7,7 @@ use datafusion::{
         record_batch::RecordBatch,
         util::display::array_value_to_string,
     },
-    catalog::{MemorySchemaProvider, SchemaProvider, TableProvider},
+    catalog::{MemorySchemaProvider, SchemaProvider},
     common::{ScalarValue, tree_node::TreeNodeRecursion},
     dataframe::DataFrame,
     datasource::{
@@ -47,7 +47,8 @@ pub static SNAPSHOTS: RwLock<()> = RwLock::const_new(());
 
 #[derive(Clone)]
 pub struct Sql {
-    pool: SqlitePool,
+    pub(crate) pool: SqlitePool,
+    principal: Option<crate::access::Principal>,
     data_dir: PathBuf,
     pub config: config::Sql,
     runtime: Arc<RuntimeEnv>,
@@ -244,16 +245,27 @@ impl Sql {
             .build_arc()?;
         Ok(Self {
             pool,
+            principal: None,
             data_dir: config.data_dir.clone(),
             config: config.sql.clone(),
             runtime,
         })
     }
+    pub fn for_principal(&self, p: crate::access::Principal) -> Self {
+        let mut sql = self.clone();
+        sql.principal = Some(p);
+        sql
+    }
     async fn context(&self) -> Result<(SessionContext, Vec<Table>)> {
         let ctx = SessionContext::new_with_config_rt(
-            SessionConfig::new().with_information_schema(true),
+            SessionConfig::new().with_information_schema(false),
             self.runtime.clone(),
         );
+        let principal = self
+            .principal
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("SQL principal required"))?;
+        crate::policies::hash_udf(&ctx);
         let sources = sqlx::query("SELECT id,name FROM sources ORDER BY id")
             .fetch_all(&self.pool)
             .await?;
@@ -274,6 +286,15 @@ impl Sql {
         let mut tables = Vec::new();
         // Resolve each physical dataset only once, including its Local lake alias.
         let mut snapshots = BTreeMap::new();
+        let datasets: Vec<_> = datasets
+            .into_iter()
+            .filter(|d| {
+                principal.admin()
+                    || !principal
+                        .read_roles(d.get("source_id"), d.get("id"))
+                        .is_empty()
+            })
+            .collect();
         for d in &datasets {
             let source: &str = d.get("source_id");
             let name: &str = d.get("name");
@@ -368,12 +389,20 @@ impl Sql {
             let table = ListingTable::try_new(cfg)?;
             let (schema, provider) = &schemas[source];
             let alias = &table_names[d.get::<&str, _>("id")];
+            let frame = ctx.read_table(Arc::new(table))?;
+            let Some(policy) =
+                crate::policies::effective(&self.pool, principal, source, d.get("id"), &frame)
+                    .await?
+            else {
+                continue;
+            };
+            let view = crate::policies::project(frame, policy)?.into_view();
             tables.push(Table {
                 schema: schema.clone(),
                 name: alias.clone(),
-                columns: columns(&table.schema()),
+                columns: columns(&view.schema()),
             });
-            provider.register_table(alias.clone(), Arc::new(table))?;
+            provider.register_table(alias.clone(), view)?;
         }
         Ok((ctx, tables))
     }
@@ -440,8 +469,14 @@ impl Sql {
         let (ctx, _) = self.context().await?;
         let mut frame = self.plan(&ctx, query, types).await?;
         frame.logical_plan().apply_with_subqueries(|p| {
-            if let LogicalPlan::TableScan(scan) = p {
-                touched.insert(scan.table_name.to_string());
+            match p {
+                LogicalPlan::SubqueryAlias(alias) => {
+                    touched.insert(alias.alias.to_string());
+                }
+                LogicalPlan::TableScan(scan) if scan.table_name.to_string() != "?table?" => {
+                    touched.insert(scan.table_name.to_string());
+                }
+                _ => {}
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
@@ -534,14 +569,21 @@ impl Sql {
         result: std::result::Result<usize, &str>,
     ) -> std::result::Result<(), Error> {
         let hash = format!("{:x}", Sha256::digest(query.as_bytes()));
-        let detail = json!({"principal":"engine-token","query_hash":hash,"datasets":touched,"row_count":result.as_ref().ok(),"error_class":result.err()});
+        let detail = json!({"principal":self.principal.as_ref().map(|p| &p.user.id),"query_hash":hash,"datasets":touched,"row_count":result.as_ref().ok(),"error_class":result.err()});
         let action = if detail["error_class"] == "rejected" {
             "sql.rejected"
         } else {
             "sql.query"
         };
         let mut tx = self.pool.begin().await.map_err(anyhow::Error::from)?;
-        store::audit(&mut tx, action, "engine-token", &detail.to_string()).await?;
+        store::audit_as(
+            &mut tx,
+            action,
+            self.principal.as_ref().map_or("", |p| p.user.id.as_str()),
+            &detail.to_string(),
+            self.principal.as_ref().map(|p| p.user.id.as_str()),
+        )
+        .await?;
         tx.commit().await.map_err(anyhow::Error::from)?;
         Ok(())
     }

@@ -34,6 +34,8 @@ import {
 import type { MapNode, MapEdge, TableNode, GroupNode } from './map-model';
 type Props = {
   map: DataMap;
+  canManage: boolean;
+  canCreateJob: (dataset: Dataset) => boolean;
   engineUrl: string;
   client: Api;
   action: (work: () => Promise<unknown>, message?: string) => Promise<void>;
@@ -65,6 +67,12 @@ function Table({ data }: NodeProps<TableNode>) {
         </span>
         <div className="dataset-heading">
           <strong>{datasetLabel(data.dataset)}</strong>
+          {data.dataset.row_filtered && (
+            <Pill title="Row filter active">
+              <Icon name="lock" />
+              Filtered
+            </Pill>
+          )}
           <small>
             {data.dataset.columns.length} columns ·{' '}
             {data.dataset.row_count?.toLocaleString() ?? '—'} rows
@@ -86,6 +94,7 @@ function Table({ data }: NodeProps<TableNode>) {
             {column.nullable ? '?' : ''}
           </span>
           <span className="column-badges">
+            {column.masked && <Pill title={column.mask_kind ?? 'Column mask'}>Masked</Pill>}
             {column.pk && (
               <Pill tone="primary" title="Primary key">
                 PK
@@ -152,6 +161,8 @@ export default function DataMapView(props: Props) {
 }
 function Canvas({
   map,
+  canManage,
+  canCreateJob,
   engineUrl,
   client,
   action,
@@ -302,6 +313,7 @@ function Canvas({
     [edges, nodes, hoveredEdge, enabledKinds, visibleIds, sourceFilter, excluded, search],
   );
   function connect(connection: FlowConnection) {
+    if (!canManage) return;
     if (!connection.sourceHandle || !connection.targetHandle) return;
     const forward = connection.sourceHandle.startsWith('out:');
     const source = forward ? connection.source : connection.target;
@@ -322,6 +334,7 @@ function Canvas({
     );
   }
   function removeSelected() {
+    if (!canManage) return;
     const ids = [
       ...new Set(
         edges
@@ -448,9 +461,11 @@ function Canvas({
                 </label>
               ))}
             </fieldset>
-            <p className="hint library-content">
-              Drag between column handles to create a manual relationship.
-            </p>
+            {canManage && (
+              <p className="hint library-content">
+                Drag between column handles to create a manual relationship.
+              </p>
+            )}
           </>
         )}
       </div>
@@ -492,6 +507,7 @@ function Canvas({
           onConnect={(connection) => {
             if (!busy) connect(connection);
           }}
+          nodesConnectable={canManage}
           connectionMode={ConnectionMode.Loose}
           isValidConnection={(c) =>
             !!c.sourceHandle &&
@@ -616,6 +632,7 @@ function Canvas({
                           </code>
                         </td>
                         <td>
+                          {c.masked && <Pill>Masked</Pill>}
                           {c.pk && <Pill tone="primary">PK</Pill>}
                           {map.edges.some(
                             (e) =>
@@ -682,6 +699,7 @@ function Canvas({
                   <Button
                     disabled={
                       busy ||
+                      !canCreateJob(selectedDataset) ||
                       selectedDataset.stale ||
                       !['postgres', 'sqlite', 'csv', 'noop'].includes(
                         (
@@ -727,7 +745,7 @@ function Canvas({
                       ({selectedEdge.to_cols.join(', ') || 'dataset'})
                     </dd>
                   </dl>
-                  {selectedEdge.kind === 'manual' && (
+                  {canManage && selectedEdge.kind === 'manual' && (
                     <Button variant="danger" disabled={busy} onClick={removeSelected}>
                       Delete manual edge
                     </Button>

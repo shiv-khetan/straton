@@ -1,8 +1,10 @@
+mod access;
 mod api;
 mod backup;
 mod catalog;
 mod config;
 mod credentials;
+mod policies;
 mod runner;
 mod scheduler;
 mod security;
@@ -70,6 +72,7 @@ async fn run(config: config::Config) -> Result<()> {
         )
         .init();
     let pool = store::open(&config.data_dir).await?;
+    access::bootstrap(&pool, secrecy::ExposeSecret::expose_secret(token.as_ref())).await?;
     let (events, _) = tokio::sync::broadcast::channel(256);
     let backups = backup::Backups::new(config.clone());
     scheduler::seed_backup(&pool, &config.backup.cron).await?;
@@ -85,7 +88,6 @@ async fn run(config: config::Config) -> Result<()> {
     let router = api::router(api::App {
         pool: pool.clone(),
         sql,
-        token,
         events: events.clone(),
         backups,
         started: Instant::now(),

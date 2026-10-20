@@ -1387,3 +1387,36 @@ dd {
   border-radius: 8px;
   box-shadow: var(--shadow-card);
 }
+
+.access-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: end;
+  margin-bottom: 24px;
+}
+.access-inline .field {
+  flex: 1;
+  min-width: 180px;
+  margin: 0;
+}
+.access-roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.access-roles label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.access-policy {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.access-policy:last-child {
+  border-bottom: 0;
+}

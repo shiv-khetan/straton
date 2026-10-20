@@ -26,7 +26,7 @@ use pgwire::{
 };
 use secrecy::{ExposeSecret, SecretString};
 use std::{collections::BTreeSet, fmt::Debug, sync::Arc, time::Duration};
-use subtle::ConstantTimeEq;
+
 use tokio::{
     net::TcpListener,
     sync::watch,
@@ -46,6 +46,7 @@ impl Server {
         config: &Config,
     ) -> anyhow::Result<Self> {
         config.validate()?;
+        crate::access::bootstrap(&sql.pool, token.expose_secret()).await?;
         let listener = if sql.config.enabled {
             Some(TcpListener::bind(sql.config.bind).await?)
         } else {
@@ -61,7 +62,6 @@ impl Server {
         };
         let backend = Arc::new(Backend {
             sql,
-            token,
             require_tls: !config.sql.bind.ip().is_loopback(),
         });
         let (stop, mut stopped) = watch::channel(false);
@@ -116,8 +116,25 @@ impl Server {
 #[derive(Clone)]
 struct Backend {
     sql: Sql,
-    token: Arc<SecretString>,
     require_tls: bool,
+}
+impl Backend {
+    async fn session<C: ClientInfo>(&self, client: &C) -> PgWireResult<Sql> {
+        let hash = client
+            .metadata()
+            .get("straton_token_hash")
+            .ok_or_else(|| pgerror("28P01", "Authentication required"))?;
+        let p = crate::access::authenticate_hash(&self.sql.pool, hash)
+            .await
+            .map_err(|_| pgerror("28P01", "Invalid credentials"))?;
+        if client.metadata().get("user") != Some(&p.user.name) {
+            return Err(pgerror("28P01", "Invalid credentials"));
+        }
+        if !p.has("read") {
+            return Err(pgerror("42501", "Read privilege required"));
+        }
+        Ok(self.sql.for_principal(p))
+    }
 }
 impl PgWireServerHandlers for Backend {
     fn simple_query_handler(&self) -> Arc<impl SimpleQueryHandler> {
@@ -158,13 +175,16 @@ impl StartupHandler for Backend {
             }
             PgWireFrontendMessage::PasswordMessageFamily(pwd) => {
                 let pwd = pwd.into_password()?;
-                if !bool::from(
-                    pwd.password
-                        .as_bytes()
-                        .ct_eq(self.token.expose_secret().as_bytes()),
-                ) {
-                    return Err(pgerror("28P01", "Invalid engine token"));
+                let p = crate::access::authenticate(&self.sql.pool, &pwd.password)
+                    .await
+                    .map_err(|_| pgerror("28P01", "Invalid credentials"))?;
+                if client.metadata().get("user") != Some(&p.user.name) {
+                    return Err(pgerror("28P01", "Invalid credentials"));
                 }
+                client.metadata_mut().insert(
+                    "straton_token_hash".into(),
+                    crate::access::hash(&pwd.password),
+                );
                 let mut parameters = DefaultServerParameterProvider::default();
                 parameters.server_version = "16.6-Straton".into();
                 parameters.is_superuser = false;
@@ -260,6 +280,7 @@ impl QueryParser for Backend {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
+        let session = self.session(_client).await?;
         let (sql, noop) = compatibility(query).unwrap_or_else(|| (query.to_owned(), false));
         let infer = types.iter().all(Option::is_none);
         let names = if infer {
@@ -273,14 +294,13 @@ impl QueryParser for Backend {
         let names = match names {
             Ok(names) => names,
             Err(e) => {
-                self.sql
+                session
                     .audit(query, &BTreeSet::new(), Err("parameters"))
                     .await?;
                 return Err(e);
             }
         };
-        let out = self
-            .sql
+        let out = session
             .audited(query, &sql, vec![], &names, Mode::Describe)
             .await?;
         let params: Vec<Type> = if infer {
@@ -325,9 +345,9 @@ impl SimpleQueryHandler for Backend {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
+        let session = self.session(_client).await?;
         let (sql, noop) = compatibility(query).unwrap_or_else(|| (query.to_owned(), false));
-        let result = self
-            .sql
+        let result = session
             .audited(query, &sql, vec![], &[], Mode::Query)
             .await?;
         Ok(vec![if noop {
@@ -344,7 +364,6 @@ impl ExtendedQueryHandler for Backend {
     fn query_parser(&self) -> Arc<Self::QueryParser> {
         Arc::new(Backend {
             sql: self.sql.clone(),
-            token: self.token.clone(),
             require_tls: self.require_tls,
         })
     }
@@ -357,18 +376,18 @@ impl ExtendedQueryHandler for Backend {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
+        let session = self.session(_client).await?;
         let stmt = &portal.statement.statement;
         let params = match parameters(portal) {
             Ok(params) => params,
             Err(e) => {
-                self.sql
+                session
                     .audit(&stmt.original, &BTreeSet::new(), Err("parameters"))
                     .await?;
                 return Err(e);
             }
         };
-        let out = self
-            .sql
+        let out = session
             .audited(
                 &stmt.original,
                 &stmt.query,

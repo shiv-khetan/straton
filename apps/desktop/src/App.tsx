@@ -4,6 +4,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { api, normalizeUrl, subscribe } from './api';
 import type {
   Api,
+  Me,
+  Role,
   Connection,
   DataMap,
   Dataset,
@@ -15,6 +17,8 @@ import type {
   Status,
 } from './api';
 import SqlView from './Sql';
+import Access from './Access';
+import { can, canPage } from './access-model';
 import Dashboard from './Dashboard';
 import {
   Breadcrumb,
@@ -32,7 +36,8 @@ import { backupTime, datasetLabel, isLoopback, relativeTime } from './view-model
 import { tableReference } from './sql-model';
 const DataMapView = lazy(() => import('./DataMap'));
 const emptyMap: DataMap = { nodes: [], edges: [] };
-type Page = 'Dashboard' | 'Sources' | 'Jobs' | 'Data Map' | 'SQL' | 'Connect' | 'Backups';
+type Page =
+  'Dashboard' | 'Sources' | 'Jobs' | 'Data Map' | 'SQL' | 'Connect' | 'Backups' | 'Access';
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="field">
@@ -102,6 +107,9 @@ function AppContent() {
   const [page, setPage] = useState<Page>('Connect');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [me, setMe] = useState<Me | null>(null);
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [asRole, setAsRole] = useState('');
   const [status, setStatus] = useState<Status | null>(null);
   const [sources, setSources] = useState<Source[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -132,22 +140,45 @@ function AppContent() {
   useEffect(() => {
     if (!client) return;
     let active = true;
-    void Promise.all([
-      client.status(),
-      client.sources(),
-      client.jobs(),
-      client.runs(),
-      client.datamap(),
-      client.backups(),
-    ])
-      .then(([s, so, j, r, m, b]) => {
+    void client
+      .me()
+      .then(async (identity) => {
+        const [s, so, j, r, m, b, ro] = await Promise.all([
+          client.status(),
+          canPage(identity, 'Sources') ? client.sources() : Promise.resolve([]),
+          can(identity, 'sync_admin') ? client.jobs() : Promise.resolve([]),
+          can(identity, 'sync_admin') ? client.runs() : Promise.resolve([]),
+          can(identity, 'read')
+            ? client.datamap(identity.privileges.admin ? asRole : '')
+            : Promise.resolve(emptyMap),
+          identity.privileges.admin ? client.backups() : Promise.resolve([]),
+          identity.privileges.admin ? client.roles() : Promise.resolve([]),
+        ]);
         if (active) {
+          setMe(identity);
+          setRoles(ro);
           setStatus(s);
           setBackups(b);
-          setSources(so);
           setJobs(j);
           setRuns(r);
+          setSources(
+            canPage(identity, 'Sources')
+              ? so
+              : identity.privileges.grants
+                  .filter(
+                    (g) =>
+                      g.target_kind === 'source' && ['sync_admin', 'admin'].includes(g.privilege),
+                  )
+                  .map((g) => ({
+                    id: g.target_id,
+                    name: g.target_id,
+                    kind: 'noop' as const,
+                    config: {},
+                    credential_id: null,
+                  })),
+          );
           setMap((previous) => (JSON.stringify(previous) === JSON.stringify(m) ? previous : m));
+          setPage((previous) => (canPage(identity, previous) ? previous : 'Dashboard'));
         }
       })
       .catch((e: unknown) => {
@@ -156,7 +187,7 @@ function AppContent() {
     return () => {
       active = false;
     };
-  }, [client, revision]);
+  }, [client, revision, asRole]);
   useEffect(() => {
     if (!connection) return;
     return subscribe(
@@ -236,6 +267,7 @@ function AppContent() {
                 label: 'System',
                 items: [
                   ['Backups', 'backup'],
+                  ['Access', 'lock'],
                   ['Connect', 'connect'],
                 ],
               },
@@ -243,22 +275,24 @@ function AppContent() {
           ).map((group) => (
             <div className="nav-group" key={group.label}>
               <p className="nav-label rail-hide">{group.label}</p>
-              {group.items.map(([item, icon]) => (
-                <button
-                  key={item}
-                  title={item}
-                  aria-label={item}
-                  aria-current={page === item ? 'page' : undefined}
-                  disabled={!connection && item !== 'Connect'}
-                  onClick={() => {
-                    setPage(item);
-                    setSelection('');
-                  }}
-                >
-                  <Icon name={icon} />
-                  <span className="rail-hide">{item}</span>
-                </button>
-              ))}
+              {group.items
+                .filter(([item]) => !connection || canPage(me, item))
+                .map(([item, icon]) => (
+                  <button
+                    key={item}
+                    title={item}
+                    aria-label={item}
+                    aria-current={page === item ? 'page' : undefined}
+                    disabled={!connection && item !== 'Connect'}
+                    onClick={() => {
+                      setPage(item);
+                      setSelection('');
+                    }}
+                  >
+                    <Icon name={icon} />
+                    <span className="rail-hide">{item}</span>
+                  </button>
+                ))}
             </div>
           ))}
         </nav>
@@ -272,6 +306,7 @@ function AppContent() {
             <span className={'connection-dot' + (live === 'Live' ? ' live' : '')} />
             <span className="rail-hide">{live}</span>
           </div>
+          {me && <small className="rail-hide">Signed in as {me.user.name}</small>}
           <small className="rail-hide">
             <code>{connection?.url || 'No engine connected'}</code>
           </small>
@@ -298,26 +333,46 @@ function AppContent() {
             >
               <Icon name={theme === 'light' ? 'moon' : 'sun'} />
             </Button>
+            {page === 'Data Map' && can(me, 'admin') && (
+              <Field label="View as role">
+                <select
+                  value={asRole}
+                  onChange={(e) => {
+                    setMap(emptyMap);
+                    setAsRole(e.target.value);
+                  }}
+                >
+                  <option value="">My access</option>
+                  {roles.map((r) => (
+                    <option value={r.id} key={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
             {connection && (
               <Button disabled={busy} onClick={refresh}>
                 <Icon name="refresh" />
                 Refresh
               </Button>
             )}
-            {client && (page === 'Sources' || page === 'Jobs') && (
-              <Button
-                variant="primary"
-                disabled={busy}
-                onClick={() => {
-                  setJobSeed(null);
-                  setSheet(page === 'Sources' ? 'source' : 'job');
-                }}
-              >
-                <Icon name="plus" />
-                {page === 'Sources' ? 'Add source' : 'New job'}
-              </Button>
-            )}
-            {client && page === 'Backups' && (
+            {client &&
+              ((page === 'Sources' && can(me, 'admin')) ||
+                (page === 'Jobs' && can(me, 'sync_admin'))) && (
+                <Button
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() => {
+                    setJobSeed(null);
+                    setSheet(page === 'Sources' ? 'source' : 'job');
+                  }}
+                >
+                  <Icon name="plus" />
+                  {page === 'Sources' ? 'Add source' : 'New job'}
+                </Button>
+              )}
+            {client && can(me, 'admin') && page === 'Backups' && (
               <Button
                 variant="primary"
                 disabled={busy}
@@ -344,8 +399,10 @@ function AppContent() {
               busy={busy}
               connect={(c) =>
                 action(async () => {
-                  await api(c).status();
+                  await api(c).me();
                   await invoke('save_connection', c as unknown as Record<string, unknown>);
+                  setMe(null);
+                  setAsRole('');
                   setConnection(c);
                   setPage('Dashboard');
                 }, 'Connection tested and saved in OS keychain')
@@ -354,6 +411,9 @@ function AppContent() {
                 action(async () => {
                   await invoke('forget_connection');
                   setConnection(null);
+                  setMe(null);
+                  setRoles([]);
+                  setAsRole('');
                   setStatus(null);
                   setSources([]);
                   setJobs([]);
@@ -413,7 +473,7 @@ function AppContent() {
               </Card>
             </>
           )}
-          {client && page === 'Sources' && (
+          {client && canPage(me, 'Sources') && page === 'Sources' && (
             <Sources
               sources={sources}
               client={client}
@@ -423,7 +483,7 @@ function AppContent() {
               onClose={() => setSheet(null)}
             />
           )}
-          {client && page === 'Jobs' && (
+          {client && can(me, 'sync_admin') && page === 'Jobs' && (
             <Jobs
               sources={sources}
               datasets={datasets}
@@ -438,14 +498,19 @@ function AppContent() {
               busy={busy}
             />
           )}
-          {client && page === 'SQL' && (
+          {client && can(me, 'read') && page === 'SQL' && (
             <SqlView client={client} revision={revision} initialQuery={querySeed} />
           )}
-          {client && connection && page === 'Data Map' && (
+          {client && can(me, 'admin') && page === 'Access' && (
+            <Access client={client} sources={sources} datasets={datasets} onChanged={refresh} />
+          )}
+          {client && connection && can(me, 'read') && page === 'Data Map' && (
             <ErrorBoundary>
               <Suspense fallback={<p role="status">Loading Data Map…</p>}>
                 <DataMapView
                   map={map}
+                  canManage={can(me, 'admin') && !asRole}
+                  canCreateJob={(d) => !asRole && can(me, 'sync_admin', d.source_id, d.id)}
                   onSelection={setSelection}
                   onQuery={(dataset) => {
                     setQuerySeed(

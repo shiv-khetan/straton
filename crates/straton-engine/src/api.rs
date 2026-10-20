@@ -1,3 +1,4 @@
+use crate::access::{Principal, Target};
 use crate::{
     backup::Backups,
     runner::{self, Events},
@@ -5,32 +6,33 @@ use crate::{
 };
 use crate::{catalog, credentials};
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, Query, State, WebSocketUpgrade},
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::{Row, SqlitePool};
-use std::{sync::Arc, time::Instant};
+use std::time::Instant;
 use straton_core::{Job, SourceKind};
-use subtle::ConstantTimeEq;
+mod access_api;
 
 #[derive(Clone)]
 pub struct App {
     pub pool: SqlitePool,
     pub sql: crate::sql::Sql,
-    pub token: Arc<SecretString>,
     pub events: Events,
     pub backups: Backups,
     pub started: Instant,
 }
 pub fn router(app: App) -> Router {
     Router::new()
+        .merge(access_api::routes())
+        .route("/v1/me", get(me))
         .route("/v1/status", get(status))
         .route("/v1/sql", post(sql_query))
         .route("/v1/sql/explain", post(sql_explain))
@@ -60,26 +62,47 @@ pub fn router(app: App) -> Router {
         .route("/health", get(|| async { Json(json!({"ok":true})) }))
         .with_state(app)
 }
-async fn auth(State(app): State<App>, req: Request<axum::body::Body>, next: Next) -> Response {
+async fn auth(State(app): State<App>, mut req: Request<axum::body::Body>, next: Next) -> Response {
     let supplied = req
         .headers()
         .get("authorization")
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
         .unwrap_or("");
-    if bool::from(
-        supplied
-            .as_bytes()
-            .ct_eq(app.token.expose_secret().as_bytes()),
-    ) {
-        next.run(req).await
+    let p = match crate::access::authenticate(&app.pool, supplied).await {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error":"invalid bearer token"})),
+            )
+                .into_response();
+        }
+    };
+    let path = req.uri().path();
+    let allowed = if path == "/v1/me" || path == "/v1/status" || path == "/v1/events" {
+        true
+    } else if path.starts_with("/v1/sql") || path == "/v1/datamap" {
+        p.has("read")
+    } else if path.starts_with("/v1/jobs") || path.starts_with("/v1/runs") {
+        p.has("sync_admin")
+    } else if path.starts_with("/v1/sources")
+        || path.starts_with("/v1/datasets/")
+        || path == "/v1/policies/validate"
+    {
+        p.has("admin")
     } else {
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error":"invalid bearer token"})),
-        )
-            .into_response()
+        p.admin()
+    };
+    if !allowed {
+        return forbidden().into_response();
     }
+    let actor = p.user.id.clone();
+    req.extensions_mut().insert(p);
+    store::ACTOR.scope(actor, next.run(req)).await
+}
+fn forbidden() -> ApiError {
+    ApiError(StatusCode::FORBIDDEN, "forbidden".into())
 }
 struct ApiError(StatusCode, String);
 type ApiResult<T> = Result<T, ApiError>;
@@ -117,28 +140,48 @@ fn found(n: u64) -> ApiResult<()> {
         Ok(())
     }
 }
-async fn status(State(a): State<App>) -> ApiResult<Json<Value>> {
+async fn status(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+) -> ApiResult<Json<Value>> {
     let depth: i64 = sqlx::query_scalar("SELECT count(*) FROM runs WHERE state='queued'")
         .fetch_one(&a.pool)
         .await?;
     Ok(Json(
-        json!({"version":env!("CARGO_PKG_VERSION"),"uptime_seconds":a.started.elapsed().as_secs(),"queue_depth":depth,"last_backup":a.backups.list().await?.first()}),
+        json!({"version":env!("CARGO_PKG_VERSION"),"uptime_seconds":a.started.elapsed().as_secs(),"queue_depth":if p.admin(){depth}else{0},"last_backup":if p.admin(){a.backups.list().await?.first().cloned()}else{None}}),
     ))
 }
 fn source_json(row: sqlx::sqlite::SqliteRow) -> Value {
     json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"kind":row.get::<String,_>("kind"),"credential_id":row.get::<Option<String>,_>("credential_id"),"config":serde_json::from_str::<Value>(row.get("config")).unwrap_or(json!({}))})
 }
-async fn sources(State(a): State<App>) -> ApiResult<Json<Value>> {
+async fn sources(
+    State(a): State<App>,
+    Extension(actor): Extension<Principal>,
+) -> ApiResult<Json<Value>> {
     Ok(Json(Value::Array(
         sqlx::query("SELECT * FROM sources ORDER BY id")
             .fetch_all(&a.pool)
             .await?
             .into_iter()
+            .filter(|r| {
+                actor.allows(
+                    "admin",
+                    Target {
+                        source: Some(r.get("id")),
+                        dataset: None,
+                    },
+                )
+            })
             .map(source_json)
             .collect(),
     )))
 }
-async fn source(State(a): State<App>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+async fn source(
+    State(a): State<App>,
+    Extension(actor): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    require_source_admin(&actor, &id)?;
     let row = sqlx::query("SELECT * FROM sources WHERE id=?")
         .bind(id)
         .fetch_optional(&a.pool)
@@ -147,7 +190,17 @@ async fn source(State(a): State<App>, Path(id): Path<String>) -> ApiResult<Json<
         ApiError(StatusCode::NOT_FOUND, "not found".into())
     })?)))
 }
-async fn save_source(a: App, mut s: SourceInput, update: bool) -> ApiResult<Json<Value>> {
+async fn save_source(
+    a: App,
+    actor: Principal,
+    mut s: SourceInput,
+    update: bool,
+) -> ApiResult<Json<Value>> {
+    if update {
+        require_source_admin(&actor, &s.id)?;
+    } else if !actor.admin() {
+        return Err(forbidden());
+    }
     if s.name.trim().is_empty() {
         return Err(bad("name is required"));
     }
@@ -207,23 +260,30 @@ async fn save_source(a: App, mut s: SourceInput, update: bool) -> ApiResult<Json
         credentials::set(&s.id, &secret)?;
     }
     tx.commit().await?;
-    source(State(a), Path(s.id)).await
+    source(State(a), Extension(actor), Path(s.id)).await
 }
 async fn create_source(
     State(a): State<App>,
+    Extension(actor): Extension<Principal>,
     Json(s): Json<SourceInput>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
-    Ok((StatusCode::CREATED, save_source(a, s, false).await?))
+    Ok((StatusCode::CREATED, save_source(a, actor, s, false).await?))
 }
 async fn update_source(
     State(a): State<App>,
+    Extension(actor): Extension<Principal>,
     Path(id): Path<String>,
     Json(mut s): Json<SourceInput>,
 ) -> ApiResult<Json<Value>> {
     s.id = id;
-    save_source(a, s, true).await
+    save_source(a, actor, s, true).await
 }
-async fn delete_source(State(a): State<App>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+async fn delete_source(
+    State(a): State<App>,
+    Extension(actor): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    require_source_admin(&actor, &id)?;
     let mut tx = a.pool.begin().await?;
     found(
         sqlx::query("DELETE FROM sources WHERE id=?")
@@ -240,26 +300,37 @@ async fn delete_source(State(a): State<App>, Path(id): Path<String>) -> ApiResul
 fn job_json(row: sqlx::sqlite::SqliteRow) -> Value {
     json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"source_id":row.get::<Option<String>,_>("source_id"),"dataset":row.get::<String,_>("dataset"),"cron":row.get::<Option<String>,_>("cron"),"enabled":row.get::<bool,_>("enabled"),"builtin":row.get::<bool,_>("builtin")})
 }
-async fn jobs(State(a): State<App>) -> ApiResult<Json<Value>> {
+async fn jobs(State(a): State<App>, Extension(p): Extension<Principal>) -> ApiResult<Json<Value>> {
     Ok(Json(Value::Array(
-        sqlx::query("SELECT * FROM jobs ORDER BY id")
+        sqlx::query("SELECT jobs.*,datasets.id AS target_dataset_id FROM jobs LEFT JOIN datasets ON datasets.source_id=jobs.source_id AND datasets.name=jobs.dataset ORDER BY jobs.id")
             .fetch_all(&a.pool)
             .await?
             .into_iter()
+            .filter(|r| job_allowed(&p,r))
             .map(job_json)
             .collect(),
     )))
 }
-async fn job(State(a): State<App>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let row = sqlx::query("SELECT * FROM jobs WHERE id=?")
+async fn job(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let row = sqlx::query("SELECT jobs.*,datasets.id AS target_dataset_id FROM jobs LEFT JOIN datasets ON datasets.source_id=jobs.source_id AND datasets.name=jobs.dataset WHERE jobs.id=?")
         .bind(id)
         .fetch_optional(&a.pool)
         .await?;
-    Ok(Json(job_json(row.ok_or_else(|| {
-        ApiError(StatusCode::NOT_FOUND, "not found".into())
-    })?)))
+    let row = row.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "not found".into()))?;
+    if !job_allowed(&p, &row) {
+        return Err(forbidden());
+    }
+    Ok(Json(job_json(row)))
 }
-async fn save_job(a: App, mut j: Job, update: bool) -> ApiResult<Json<Value>> {
+async fn save_job(a: App, p: Principal, mut j: Job, update: bool) -> ApiResult<Json<Value>> {
+    require_job_target(&a.pool, &p, Some(j.source_id.as_str()), &j.dataset).await?;
+    if update {
+        require_job(&a.pool, &p, &j.id).await?;
+    }
     if j.name.trim().is_empty() || j.dataset.trim().is_empty() {
         return Err(bad("name and dataset are required"));
     }
@@ -304,19 +375,26 @@ async fn save_job(a: App, mut j: Job, update: bool) -> ApiResult<Json<Value>> {
 }
 async fn create_job(
     State(a): State<App>,
+    Extension(p): Extension<Principal>,
     Json(j): Json<Job>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
-    Ok((StatusCode::CREATED, save_job(a, j, false).await?))
+    Ok((StatusCode::CREATED, save_job(a, p, j, false).await?))
 }
 async fn update_job(
     State(a): State<App>,
+    Extension(p): Extension<Principal>,
     Path(id): Path<String>,
     Json(mut j): Json<Job>,
 ) -> ApiResult<Json<Value>> {
     j.id = id;
-    save_job(a, j, true).await
+    save_job(a, p, j, true).await
 }
-async fn delete_job(State(a): State<App>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+async fn delete_job(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    require_job(&a.pool, &p, &id).await?;
     let mut tx = a.pool.begin().await?;
     found(
         sqlx::query("DELETE FROM jobs WHERE id=? AND builtin=0")
@@ -331,9 +409,11 @@ async fn delete_job(State(a): State<App>, Path(id): Path<String>) -> ApiResult<S
 }
 async fn run_job(
     State(a): State<App>,
+    Extension(p): Extension<Principal>,
     Path(id): Path<String>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let mut tx = a.pool.begin().await?;
+    require_job(&a.pool, &p, &id).await?;
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE id=?)")
         .bind(&id)
         .fetch_one(&mut *tx)
@@ -354,17 +434,35 @@ struct RunQuery {
     job: Option<String>,
     state: Option<String>,
 }
-async fn runs(State(a): State<App>, Query(q): Query<RunQuery>) -> ApiResult<Json<Value>> {
+async fn runs(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+    Query(q): Query<RunQuery>,
+) -> ApiResult<Json<Value>> {
     if let Some(ref state) = q.state {
         serde_json::from_value::<straton_core::RunState>(json!(state))
             .map_err(|_| bad("invalid run state"))?;
     }
-    let rows=sqlx::query("SELECT * FROM runs WHERE (?1 IS NULL OR job_id=?1) AND (?2 IS NULL OR state=?2) ORDER BY created_at DESC,id")
+    let rows=sqlx::query("SELECT runs.*,jobs.source_id,jobs.dataset,datasets.id AS target_dataset_id FROM runs JOIN jobs ON jobs.id=runs.job_id LEFT JOIN datasets ON datasets.source_id=jobs.source_id AND datasets.name=jobs.dataset WHERE (?1 IS NULL OR job_id=?1) AND (?2 IS NULL OR state=?2) ORDER BY runs.created_at DESC,runs.id")
         .bind(q.job).bind(q.state).fetch_all(&a.pool).await?;
-    Ok(Json(json!(rows.into_iter().map(|r| json!({"id":r.get::<String,_>("id"),"job_id":r.get::<String,_>("job_id"),"state":r.get::<String,_>("state"),"attempt":r.get::<i64,_>("attempt"),"available_at":r.get::<i64,_>("available_at"),"error":r.get::<Option<String>,_>("error"),"committed_batches":r.get::<i64,_>("committed_batches")})).collect::<Vec<_>>())))
+    Ok(Json(json!(rows.into_iter().filter(|r|job_allowed(&p,r)).map(|r| json!({"id":r.get::<String,_>("id"),"job_id":r.get::<String,_>("job_id"),"state":r.get::<String,_>("state"),"attempt":r.get::<i64,_>("attempt"),"available_at":r.get::<i64,_>("available_at"),"error":r.get::<Option<String>,_>("error"),"committed_batches":r.get::<i64,_>("committed_batches")})).collect::<Vec<_>>())))
 }
-async fn cancel(State(a): State<App>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+async fn cancel(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
     let mut tx = a.pool.begin().await?;
+    let job: Option<String> = sqlx::query_scalar("SELECT job_id FROM runs WHERE id=?")
+        .bind(&id)
+        .fetch_optional(&a.pool)
+        .await?;
+    require_job(
+        &a.pool,
+        &p,
+        job.as_deref().ok_or_else(|| bad("unknown run"))?,
+    )
+    .await?;
     let next: Option<String>=sqlx::query_scalar("UPDATE runs SET cancel_requested=1,state=CASE WHEN state='queued' THEN 'cancelled' ELSE state END,updated_at=? WHERE id=? AND state IN ('queued','running') RETURNING state")
         .bind(store::now()).bind(&id).fetch_optional(&mut *tx).await?;
     let next = next.ok_or_else(|| {
@@ -392,13 +490,17 @@ async fn backup(State(a): State<App>) -> ApiResult<(StatusCode, Json<Value>)> {
         Json(json!({"file":a.backups.create(&a.pool).await?})),
     ))
 }
-async fn events(State(a): State<App>, ws: WebSocketUpgrade) -> Response {
+async fn events(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+    ws: WebSocketUpgrade,
+) -> Response {
     let mut rx = a.events.subscribe();
     ws.on_upgrade(move |mut socket| async move {
         loop {
             tokio::select! {
                 event=rx.recv() => match event {
-                    Ok(value) => if socket.send(axum::extract::ws::Message::Text(value.to_string().into())).await.is_err() { break; },
+                    Ok(value) => if socket.send(axum::extract::ws::Message::Text((if p.admin(){value}else{json!({"type":"resync_required"})}).to_string().into())).await.is_err() { break; },
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         if socket.send(axum::extract::ws::Message::Text(json!({"type":"resync_required"}).to_string().into())).await.is_err() { break; }
                     },
@@ -466,7 +568,12 @@ fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
 fn changed(a: &App) {
     let _ = a.events.send(json!({"type":"catalog.changed"}));
 }
-async fn check_source(State(a): State<App>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+async fn check_source(
+    State(a): State<App>,
+    Extension(actor): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    require_source_admin(&actor, &id)?;
     catalog::connector(&a.pool, &id)
         .await?
         .check()
@@ -474,13 +581,31 @@ async fn check_source(State(a): State<App>, Path(id): Path<String>) -> ApiResult
         .map_err(anyhow::Error::from)?;
     Ok(Json(json!({"ok":true})))
 }
-async fn discover_source(State(a): State<App>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+async fn discover_source(
+    State(a): State<App>,
+    Extension(actor): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    require_source_admin(&actor, &id)?;
     catalog::discover(&a.pool, &id).await?;
     changed(&a);
     Ok(Json(json!({"ok":true})))
 }
-async fn datamap(State(a): State<App>) -> ApiResult<Json<Value>> {
-    Ok(Json(catalog::datamap(&a.pool).await?))
+async fn datamap(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+    Query(q): Query<MapQuery>,
+) -> ApiResult<Json<Value>> {
+    let overview = p.admin() && q.as_role.is_none();
+    let p = if let Some(role) = q.as_role {
+        if !p.admin() {
+            return Err(forbidden());
+        }
+        crate::access::as_role(&a.pool, &p, &role).await?
+    } else {
+        p
+    };
+    Ok(Json(filtered_map(&a.pool, &p, overview).await?))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -500,9 +625,11 @@ struct ManualColumn {
 }
 async fn manual_dataset(
     State(a): State<App>,
+    Extension(actor): Extension<Principal>,
     Path(id): Path<String>,
     Json(d): Json<ManualDataset>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
+    require_source_admin(&actor, &id)?;
     if d.name.trim().is_empty() || d.columns.is_empty() {
         return Err(bad("name and columns required"));
     }
@@ -621,7 +748,12 @@ struct SqlQuery {
     query: String,
     limit: Option<usize>,
 }
-async fn sql_query(State(a): State<App>, Json(q): Json<SqlQuery>) -> ApiResult<Json<Value>> {
+async fn sql_query(
+    State(mut a): State<App>,
+    Extension(p): Extension<Principal>,
+    Json(q): Json<SqlQuery>,
+) -> ApiResult<Json<Value>> {
+    a.sql = a.sql.for_principal(p);
     let limit = q.limit.unwrap_or(1000);
     if limit > 1000 {
         a.sql
@@ -637,12 +769,159 @@ async fn sql_query(State(a): State<App>, Json(q): Json<SqlQuery>) -> ApiResult<J
 struct ExplainQuery {
     query: String,
 }
-async fn sql_explain(State(a): State<App>, Json(q): Json<ExplainQuery>) -> ApiResult<Json<Value>> {
-    let result = a.sql.explain(&q.query).await?;
+async fn sql_explain(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+    Json(q): Json<ExplainQuery>,
+) -> ApiResult<Json<Value>> {
+    let result = a.sql.for_principal(p).explain(&q.query).await?;
     Ok(Json(
         json!({"logical":result.logical,"physical":result.physical}),
     ))
 }
-async fn sql_tables(State(a): State<App>) -> ApiResult<Json<Value>> {
-    Ok(Json(json!({"tables":a.sql.tables().await?})))
+async fn sql_tables(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        json!({"tables":a.sql.for_principal(p).tables().await?}),
+    ))
+}
+
+async fn me(Extension(p): Extension<Principal>) -> Json<Value> {
+    Json(
+        json!({"user":p.user,"roles":p.roles,"privileges":{"admin":p.admin(),"read":p.has("read"),"sync_admin":p.has("sync_admin"),"grants":p.grants}}),
+    )
+}
+fn job_allowed(p: &Principal, r: &sqlx::sqlite::SqliteRow) -> bool {
+    let source: Option<&str> = r.get("source_id");
+    p.allows(
+        "sync_admin",
+        Target {
+            source,
+            dataset: r
+                .try_get::<Option<&str>, _>("target_dataset_id")
+                .ok()
+                .flatten(),
+        },
+    )
+}
+async fn require_job_target(
+    pool: &SqlitePool,
+    p: &Principal,
+    source: Option<&str>,
+    name: &str,
+) -> ApiResult<()> {
+    let dataset: Option<String> =
+        sqlx::query_scalar("SELECT id FROM datasets WHERE source_id=? AND name=?")
+            .bind(source)
+            .bind(name)
+            .fetch_optional(pool)
+            .await?;
+    crate::access::require(
+        p,
+        "sync_admin",
+        Target {
+            source,
+            dataset: dataset.as_deref(),
+        },
+    )
+    .map_err(|_| forbidden())
+}
+async fn require_job(pool: &SqlitePool, p: &Principal, id: &str) -> ApiResult<()> {
+    let r = sqlx::query("SELECT source_id,dataset FROM jobs WHERE id=?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "not found".into()))?;
+    require_job_target(pool, p, r.get("source_id"), r.get("dataset")).await
+}
+#[derive(Deserialize)]
+struct MapQuery {
+    as_role: Option<String>,
+}
+async fn filtered_map(pool: &SqlitePool, p: &Principal, overview: bool) -> anyhow::Result<Value> {
+    let mut map = catalog::datamap(pool).await?;
+    let mut visible = std::collections::HashSet::new();
+    let mut sources = std::collections::HashSet::new();
+    for n in map["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .filter(|n| n["type"] == "dataset")
+    {
+        let id = n["id"].as_str().unwrap().to_owned();
+        let source = n["source_id"].as_str().unwrap().to_owned();
+        if !p.admin() && p.read_roles(&source, &id).is_empty() {
+            continue;
+        }
+        let frame = crate::policies::schema_frame(pool, &id).await?;
+        let Some(policy) = crate::policies::effective(pool, p, &source, &id, &frame).await? else {
+            continue;
+        };
+        visible.insert(id.clone());
+        sources.insert(source);
+        let any: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM row_filters WHERE dataset_id=?)")
+                .bind(&id)
+                .fetch_one(pool)
+                .await?;
+        n["row_filtered"] = json!(if overview { any } else { policy.filtered });
+        if policy.filtered {
+            n["row_count"] = Value::Null;
+        }
+        for c in n["columns"].as_array_mut().unwrap() {
+            let name = c["name"].as_str().unwrap().to_owned();
+            let kind = if overview {
+                sqlx::query_scalar::<_,String>("SELECT kind FROM column_masks WHERE dataset_id=? AND \"column\"=? ORDER BY kind LIMIT 1").bind(&id).bind(&name).fetch_optional(pool).await?
+            } else {
+                policy.masks.get(&name).cloned()
+            };
+            c["masked"] = json!(kind.is_some());
+            c["mask_kind"] = json!(kind);
+            if policy.masks.get(&name).is_some_and(|k| k != "null") {
+                c["type"] = json!("Utf8");
+            }
+        }
+    }
+    map["nodes"].as_array_mut().unwrap().retain(|n| {
+        if n["type"] == "dataset" {
+            visible.contains(n["id"].as_str().unwrap())
+        } else {
+            p.admin() || sources.contains(n["id"].as_str().unwrap())
+        }
+    });
+    map["edges"].as_array_mut().unwrap().retain(|e| {
+        visible.contains(e["from_dataset"].as_str().unwrap())
+            && visible.contains(e["to_dataset"].as_str().unwrap())
+    });
+    Ok(map)
+}
+
+fn require_source_admin(p: &Principal, id: &str) -> ApiResult<()> {
+    crate::access::require(
+        p,
+        "admin",
+        Target {
+            source: Some(id),
+            dataset: None,
+        },
+    )
+    .map_err(|_| forbidden())
+}
+async fn require_dataset_admin(pool: &SqlitePool, p: &Principal, id: &str) -> ApiResult<()> {
+    let source: Option<String> = sqlx::query_scalar("SELECT source_id FROM datasets WHERE id=?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    let source = source.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "not found".into()))?;
+    crate::access::require(
+        p,
+        "admin",
+        Target {
+            source: Some(&source),
+            dataset: Some(id),
+        },
+    )
+    .map_err(|_| forbidden())
 }

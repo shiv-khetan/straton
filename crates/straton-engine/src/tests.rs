@@ -31,6 +31,7 @@ impl Fixture {
             ..Default::default()
         };
         let pool = store::open(&dir).await.unwrap();
+        crate::access::bootstrap(&pool, "good-token").await.unwrap();
         let (events, _) = tokio::sync::broadcast::channel(32);
         sqlx::query("INSERT INTO sources(id,name,kind) VALUES('source','Noop','noop')")
             .execute(&pool)
@@ -242,7 +243,6 @@ async fn auth_and_crud_and_cancellation() {
     let app = api::router(api::App {
         pool: f.pool.clone(),
         sql: crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap(),
-        token: Arc::new("good-token".to_string().into()),
         events: f.events.clone(),
         backups: backup::Backups::new(f.config.clone()),
         started: Instant::now(),
@@ -363,7 +363,6 @@ fn app(f: &Fixture) -> axum::Router {
     api::router(api::App {
         pool: f.pool.clone(),
         sql: crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap(),
-        token: Arc::new("good-token".to_string().into()),
         events: f.events.clone(),
         backups: backup::Backups::new(f.config.clone()),
         started: Instant::now(),
@@ -375,13 +374,22 @@ async fn request(
     path: &str,
     body: serde_json::Value,
 ) -> (StatusCode, serde_json::Value) {
+    request_as(app, "good-token", method, path, body).await
+}
+async fn request_as(
+    app: &axum::Router,
+    token: &str,
+    method: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(method)
                 .uri(path)
-                .header("authorization", "Bearer good-token")
+                .header("authorization", format!("Bearer {token}"))
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
@@ -479,7 +487,7 @@ async fn catalog_api_secrets_manual_rules() {
         .unwrap();
     assert_eq!(
         dataset["columns"][0],
-        json!({"name":"id","type":"Int64","nullable":false,"pk":true})
+        json!({"name":"id","type":"Int64","nullable":false,"pk":true,"masked":false,"mask_kind":null})
     );
     let(status,r)=request(&app,"POST","/v1/relationships",json!({"kind":"manual","from_dataset":ids[0],"from_cols":["id"],"to_dataset":ids[1],"to_cols":["id"],"confidence":null})).await;
     assert_eq!(status, StatusCode::CREATED);
@@ -1239,7 +1247,7 @@ async fn sql_rest_current_snapshot_preview_explain_and_audit() {
     assert!(!detail.contains("SELECT"));
     let detail: serde_json::Value = serde_json::from_str(&detail).unwrap();
     assert_eq!(detail["query_hash"], format!("{:x}", Sha256::digest(query)));
-    assert_eq!(detail["principal"], "engine-token");
+    assert_eq!(detail["principal"], "admin");
     assert_eq!(detail["row_count"], 2);
     assert!(
         detail["datasets"]
@@ -1468,7 +1476,7 @@ async fn sql_pgwire_simple_extended_auth_and_refresh() {
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
         .port(server.address.unwrap().port())
-        .username("any-user")
+        .username("admin")
         .database("straton")
         .password("good-token")
         .ssl_mode(PgSslMode::Disable);
@@ -1594,6 +1602,1010 @@ async fn dataset_metrics_start_null_and_sql_aliases_are_deduplicated() {
     assert_eq!(
         nodes.iter().find(|n| n["id"] == "c").unwrap()["sql_table"],
         "123 table"
+    );
+    f.close().await;
+}
+
+async fn access_role(a: &axum::Router, name: &str) -> String {
+    let (s, r) = request(a, "POST", "/v1/roles", json!({"name":name})).await;
+    assert_eq!(s, StatusCode::CREATED, "{r}");
+    r["id"].as_str().unwrap().into()
+}
+async fn access_user(a: &axum::Router, name: &str, roles: &[&str]) -> (String, String) {
+    let (s, u) = request(a, "POST", "/v1/users", json!({"name":name})).await;
+    assert_eq!(s, StatusCode::CREATED, "{u}");
+    let id = u["id"].as_str().unwrap();
+    assert_eq!(
+        request(
+            a,
+            "PUT",
+            &format!("/v1/users/{id}/roles"),
+            json!({"role_ids":roles})
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    let (s, t) = request(
+        a,
+        "POST",
+        &format!("/v1/users/{id}/tokens"),
+        json!({"name":"Test client"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{t}");
+    (id.into(), t["token"].as_str().unwrap().into())
+}
+async fn access_grant(a: &axum::Router, role: &str, kind: &str, target: &str, privilege: &str) {
+    let (s, r) = request(
+        a,
+        "POST",
+        "/v1/grants",
+        json!({"role_id":role,"target_kind":kind,"target_id":target,"privilege":privilege}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{r}");
+}
+async fn dataset_id(f: &Fixture, name: &str) -> String {
+    sqlx::query_scalar("SELECT id FROM datasets WHERE source_id='source' AND name=?")
+        .bind(name)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap()
+}
+#[tokio::test]
+async fn access_tokens_hash_once_revoke_expire_disable_and_throttle() {
+    let f = Fixture::new().await;
+    let a = app(&f);
+    let role = access_role(&a, "reader").await;
+    access_grant(&a, &role, "source", "source", "read").await;
+    let (id, token) = access_user(&a, "alice", &[&role]).await;
+    assert!(token.starts_with("stn_"));
+    assert_eq!(token.len(), 68);
+    let stored: String = sqlx::query_scalar("SELECT token_hash FROM api_tokens WHERE user_id=?")
+        .bind(&id)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, crate::access::hash(&token));
+    assert_ne!(stored, token);
+    let (_, list) = request(&a, "GET", &format!("/v1/users/{id}/tokens"), json!(null)).await;
+    assert!(!list.to_string().contains(&token));
+    assert!(!list.to_string().contains(&stored));
+    let tid = list[0]["id"].as_str().unwrap();
+    let (s, me) = request_as(&a, &token, "GET", "/v1/me", json!(null)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(me["user"]["id"], id);
+    assert_eq!(me["privileges"]["read"], true);
+    sqlx::query("UPDATE api_tokens SET last_used_at=? WHERE id=?")
+        .bind(store::now() - 30)
+        .bind(tid)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let previous: i64 = sqlx::query_scalar("SELECT last_used_at FROM api_tokens WHERE id=?")
+        .bind(tid)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    request_as(&a, &token, "GET", "/v1/me", json!(null)).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT last_used_at FROM api_tokens WHERE id=?")
+            .bind(tid)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap(),
+        previous
+    );
+    sqlx::query("UPDATE api_tokens SET last_used_at=? WHERE id=?")
+        .bind(store::now() - 61)
+        .bind(tid)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    request_as(&a, &token, "GET", "/v1/me", json!(null)).await;
+    assert!(
+        sqlx::query_scalar::<_, i64>("SELECT last_used_at FROM api_tokens WHERE id=?")
+            .bind(tid)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap()
+            >= store::now() - 1
+    );
+    assert_eq!(
+        request(
+            &a,
+            "DELETE",
+            &format!("/v1/users/{id}/tokens/{tid}"),
+            json!(null)
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request_as(&a, &token, "GET", "/v1/me", json!(null)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (_, fresh) = request(
+        &a,
+        "POST",
+        &format!("/v1/users/{id}/tokens"),
+        json!({"name":"expiring","expires_at":store::now()+3600}),
+    )
+    .await;
+    let token = fresh["token"].as_str().unwrap();
+    sqlx::query("UPDATE api_tokens SET expires_at=? WHERE id=?")
+        .bind(store::now())
+        .bind(fresh["id"].as_str().unwrap())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        request_as(&a, token, "GET", "/v1/me", json!(null)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (_, fresh) = request(
+        &a,
+        "POST",
+        &format!("/v1/users/{id}/tokens"),
+        json!({"name":"disabled"}),
+    )
+    .await;
+    let token = fresh["token"].as_str().unwrap();
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/users/{id}"),
+        json!({"name":"alice","disabled":true}),
+    )
+    .await;
+    assert_eq!(
+        request_as(&a, token, "GET", "/v1/me", json!(null)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let audits: Vec<String> = sqlx::query_scalar("SELECT detail FROM audit_log")
+        .fetch_all(&f.pool)
+        .await
+        .unwrap();
+    assert!(
+        audits
+            .iter()
+            .all(|d| !d.contains(token) && !d.contains(&stored))
+    );
+    let count:i64=sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action IN ('user.created','token.created','token.revoked','user.updated','user.roles_updated') AND principal_id='admin'").fetch_one(&f.pool).await.unwrap();
+    assert!(count >= 7);
+    sqlx::query("UPDATE api_tokens SET revoked_at=? WHERE id='bootstrap'")
+        .bind(store::now())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    crate::access::bootstrap(&f.pool, "good-token")
+        .await
+        .unwrap();
+    assert!(
+        crate::access::authenticate(&f.pool, "good-token")
+            .await
+            .is_err()
+    );
+    f.close().await;
+}
+#[tokio::test]
+async fn access_privileges_scope_jobs_map_and_role_preview() {
+    let f = sql_fixture().await;
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    sqlx::query("INSERT INTO sources(id,name,kind) VALUES('other','Other','external')")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO jobs(id,name,source_id,dataset,enabled,last_scheduled) VALUES('other-job','Other','other','secret',1,0)").execute(&f.pool).await.unwrap();
+    sqlx::query(r#"INSERT INTO relationships(id,from_dataset,from_cols,to_dataset,to_cols,kind) SELECT 'hidden-edge',?,'["id"]',id,'["id"]','manual' FROM datasets WHERE name='unpublished'"#).bind(&did).execute(&f.pool).await.unwrap();
+    let read = access_role(&a, "read").await;
+    access_grant(&a, &read, "dataset", &did, "read").await;
+    let (_, reader) = access_user(&a, "reader", &[&read]).await;
+    for path in ["/v1/sources", "/v1/jobs"] {
+        assert_eq!(
+            request_as(&a, &reader, "POST", path, json!({})).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let (s, map) = request_as(&a, &reader, "GET", "/v1/datamap", json!(null)).await;
+    assert_eq!(s, StatusCode::OK, "{map}");
+    assert_eq!(map["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(map["edges"], json!([]));
+    assert!(
+        map["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n["id"] != "other")
+    );
+    assert_eq!(
+        request_as(
+            &a,
+            &reader,
+            "GET",
+            &format!("/v1/datamap?as_role={read}"),
+            json!(null)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (_, preview) = request(
+        &a,
+        "GET",
+        &format!("/v1/datamap?as_role={read}"),
+        json!(null),
+    )
+    .await;
+    assert_eq!(preview, map);
+    let sync = access_role(&a, "sync").await;
+    access_grant(&a, &sync, "source", "source", "sync_admin").await;
+    let (uid, token) = access_user(&a, "operator", &[&sync]).await;
+    assert_eq!(
+        request_as(&a, &token, "POST", "/v1/jobs/job/run", json!(null))
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        request_as(&a, &token, "POST", "/v1/jobs/other-job/run", json!(null))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request_as(
+            &a,
+            &token,
+            "PUT",
+            "/v1/jobs/job",
+            json!({"name":"Moved","source_id":"other","dataset":"secret","enabled":true})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (_, jobs) = request_as(&a, &token, "GET", "/v1/jobs", json!(null)).await;
+    assert_eq!(jobs.as_array().unwrap().len(), 1);
+    let principal: String = sqlx::query_scalar(
+        "SELECT principal_id FROM audit_log WHERE action='run.queued' ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(principal, uid);
+    let ds_sync = access_role(&a, "dataset sync").await;
+    access_grant(&a, &ds_sync, "dataset", &did, "sync_admin").await;
+    let (_, token) = access_user(&a, "dataset operator", &[&ds_sync]).await;
+    assert_eq!(
+        request_as(&a, &token, "POST", "/v1/jobs/job/run", json!(null))
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    let (_, jobs) = request_as(&a, &token, "GET", "/v1/jobs", json!(null)).await;
+    assert_eq!(jobs.as_array().unwrap().len(), 1);
+    assert_eq!(
+        request(
+            &a,
+            "POST",
+            "/v1/sources",
+            json!({"name":"New","kind":"external"})
+        )
+        .await
+        .0,
+        StatusCode::CREATED
+    );
+    f.close().await;
+}
+#[tokio::test]
+async fn access_sql_filters_masks_and_fail_closed() {
+    use sha2::{Digest, Sha256};
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    let r1 = access_role(&a, "one").await;
+    let r2 = access_role(&a, "two").await;
+    let irrelevant = access_role(&a, "no read").await;
+    for role in [&r1, &r2] {
+        access_grant(&a, role, "dataset", &did, "read").await;
+    }
+    let (uid, token) = access_user(&a, "analyst", &[&r1, &irrelevant]).await;
+    let query = json!({"query":"SELECT id,name FROM app_db.users ORDER BY id"});
+    for (role, predicate) in [(&r1, "id=1"), (&r2, "id=2"), (&irrelevant, "false")] {
+        let (s, e) = request(
+            &a,
+            "PUT",
+            &format!("/v1/datasets/{did}/row-filters/{role}"),
+            json!({"predicate":predicate}),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{e}");
+    }
+    let (s, v) = request_as(&a, &token, "POST", "/v1/sql", query.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], json!([[1, "Alice"]]));
+    for query in [
+        "SELECT * FROM app_db.unpublished",
+        "SELECT * FROM local_lake.app_db_users",
+        "SELECT * FROM information_schema.tables",
+    ] {
+        assert_eq!(
+            request_as(&a, &token, "POST", "/v1/sql", json!({"query":query}))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let (_, tables) = request_as(&a, &token, "GET", "/v1/sql/tables", json!(null)).await;
+    assert_eq!(tables["tables"].as_array().unwrap().len(), 1);
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/users/{uid}/roles"),
+        json!({"role_ids":[r1,r2,irrelevant]}),
+    )
+    .await;
+    let (_, v) = request_as(&a, &token, "POST", "/v1/sql", query.clone()).await;
+    assert_eq!(v["rows"], json!([[1, "Alice"], [2, "Bob"]]));
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/row-filters/{r2}"),
+        json!({"predicate":"false"}),
+    )
+    .await;
+    request(
+        &a,
+        "DELETE",
+        &format!("/v1/datasets/{did}/row-filters/{r1}"),
+        json!(null),
+    )
+    .await;
+    let (_, v) = request_as(&a, &token, "POST", "/v1/sql", query.clone()).await;
+    assert_eq!(v["rows"], json!([[1, "Alice"], [2, "Bob"]]));
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/users/{uid}/roles"),
+        json!({"role_ids":[r1]}),
+    )
+    .await;
+    for (kind, expected) in [
+        ("null", json!(null)),
+        ("redact", json!("***")),
+        ("hash", json!(format!("{:x}", Sha256::digest("Alice")))),
+        ("last4", json!("****lice")),
+    ] {
+        let (s, e) = request(
+            &a,
+            "PUT",
+            &format!("/v1/datasets/{did}/masks/{r1}/name"),
+            json!({"kind":kind}),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{e}");
+        let (s, v) = request_as(&a, &token, "POST", "/v1/sql", query.clone()).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["rows"][0][1], expected, "{kind}");
+    }
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/masks/{r1}/id"),
+        json!({"kind":"null"}),
+    )
+    .await;
+    let (_, v) = request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT id FROM app_db.users"}),
+    )
+    .await;
+    assert_eq!(v["rows"], json!([[null], [null]]));
+    assert_eq!(v["columns"][0]["type"], "Int64");
+    request(
+        &a,
+        "DELETE",
+        &format!("/v1/datasets/{did}/masks/{r1}/id"),
+        json!(null),
+    )
+    .await;
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/users/{uid}/roles"),
+        json!({"role_ids":[r1,r2]}),
+    )
+    .await;
+    let (_, v) = request_as(&a, &token, "POST", "/v1/sql", query.clone()).await;
+    assert_eq!(v["rows"][0][1], "Alice");
+    for (r, kind) in [(&r1, "redact"), (&r2, "hash")] {
+        request(
+            &a,
+            "PUT",
+            &format!("/v1/datasets/{did}/masks/{r}/name"),
+            json!({"kind":kind}),
+        )
+        .await;
+    }
+    let (_, v) = request_as(&a, &token, "POST", "/v1/sql", query.clone()).await;
+    assert_eq!(v["rows"][0][1], "***");
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/users/{uid}/roles"),
+        json!({"role_ids":[r1]}),
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO row_filters(id,dataset_id,role_id,predicate) VALUES(?,?,?,'missing_column=1')",
+    )
+    .bind(store::id())
+    .bind(&did)
+    .bind(&r1)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    let (s, e) = request_as(&a, &token, "POST", "/v1/sql", query).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
+    let (_, m) = request_as(&a, &token, "GET", "/v1/datamap", json!(null)).await;
+    assert_eq!(m["nodes"], json!([]));
+    assert!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_log WHERE action='policy.invalid' AND principal_id=?"
+        )
+        .bind(&uid)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap()
+            >= 1
+    );
+    assert!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_log WHERE action='sql.query' AND principal_id=?"
+        )
+        .bind(&uid)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap()
+            > 0
+    );
+    f.close().await;
+}
+#[tokio::test]
+async fn access_validation_is_deterministic_local_scalar_only() {
+    let f = sql_fixture().await;
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    for predicate in [
+        "id > 0 AND name IS NOT NULL",
+        "id IN (1,2)",
+        "id BETWEEN 1 AND 2",
+        "lower(name) LIKE 'a%'",
+        "CAST(id AS VARCHAR) = '1'",
+        "(id+2)*3>=0",
+    ] {
+        let (_, v) = request(
+            &a,
+            "POST",
+            "/v1/policies/validate",
+            json!({"dataset_id":did,"predicate":predicate}),
+        )
+        .await;
+        assert_eq!(v["ok"], true, "{predicate}: {v}");
+    }
+    for predicate in [
+        "id IN (SELECT 1)",
+        "EXISTS (SELECT 1)",
+        "id=(SELECT 1)",
+        "sum(id)>0",
+        "row_number() OVER ()>0",
+        "random()>0",
+        "now() IS NOT NULL",
+        "other.id=1",
+        "id=1; SELECT 2",
+        "id",
+    ] {
+        let (_, v) = request(
+            &a,
+            "POST",
+            "/v1/policies/validate",
+            json!({"dataset_id":did,"predicate":predicate}),
+        )
+        .await;
+        assert_eq!(v["ok"], false, "{predicate}: {v}");
+        assert_eq!(
+            request(
+                &a,
+                "PUT",
+                &format!("/v1/datasets/{did}/row-filters/admin"),
+                json!({"predicate":predicate})
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    f.close().await;
+}
+
+#[tokio::test]
+async fn access_pgwire_identity_and_policies_match_rest_and_revoke_live_sessions() {
+    use sqlx::{
+        Connection, Executor, PgConnection,
+        postgres::{PgConnectOptions, PgSslMode},
+    };
+    let mut f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    let role = access_role(&a, "wire reader").await;
+    access_grant(&a, &role, "dataset", &did, "read").await;
+    let (uid, token) = access_user(&a, "wire-user", &[&role]).await;
+    assert_eq!(
+        request(
+            &a,
+            "PUT",
+            &format!("/v1/datasets/{did}/row-filters/{role}"),
+            json!({"predicate":"id=2"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/masks/{role}/name"),
+        json!({"kind":"redact"}),
+    )
+    .await;
+    f.config.sql.bind = "127.0.0.1:0".parse().unwrap();
+    let mut server = crate::sql::wire::Server::start(
+        crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap(),
+        Arc::new("good-token".to_owned().into()),
+        &f.config,
+    )
+    .await
+    .unwrap();
+    let options = PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(server.address.unwrap().port())
+        .username("wire-user")
+        .database("straton")
+        .password(&token)
+        .ssl_mode(PgSslMode::Disable);
+    assert!(
+        PgConnection::connect_with(&options.clone().username("admin"))
+            .await
+            .is_err()
+    );
+    assert!(
+        PgConnection::connect_with(&options.clone().password("good-token"))
+            .await
+            .is_err()
+    );
+    let mut conn = PgConnection::connect_with(&options).await.unwrap();
+    let rows = conn
+        .fetch_all("SELECT id,name FROM app_db.users ORDER BY id")
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<i64, _>(0), 2);
+    assert_eq!(rows[0].get::<String, _>(1), "***");
+    let row = sqlx::query("SELECT name FROM app_db.users WHERE id=$1")
+        .bind(2_i64)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(row.get::<String, _>(0), "***");
+    assert!(
+        conn.fetch_all("SELECT * FROM local_lake.app_db_users")
+            .await
+            .is_err()
+    );
+    assert!(
+        conn.fetch_all("SELECT * FROM information_schema.tables")
+            .await
+            .is_err()
+    );
+    let (_, rest) = request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT id,name FROM app_db.users ORDER BY id"}),
+    )
+    .await;
+    assert_eq!(rest["rows"], json!([[2, "***"]]));
+    let (_, tokens) = request(&a, "GET", &format!("/v1/users/{uid}/tokens"), json!(null)).await;
+    let tid = tokens[0]["id"].as_str().unwrap();
+    request(
+        &a,
+        "DELETE",
+        &format!("/v1/users/{uid}/tokens/{tid}"),
+        json!(null),
+    )
+    .await;
+    assert!(conn.fetch_one("SELECT id FROM app_db.users").await.is_err());
+    assert!(PgConnection::connect_with(&options).await.is_err());
+    conn.close().await.unwrap();
+    server.shutdown().await;
+    f.close().await;
+}
+
+#[tokio::test]
+async fn access_target_admin_and_policy_cascades() {
+    let f = sql_fixture().await;
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    sqlx::query("INSERT INTO sources(id,name,kind) VALUES('private','Private','external')")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let r = access_role(&a, "source admin").await;
+    access_grant(&a, &r, "source", "source", "admin").await;
+    let (_, token) = access_user(&a, "source owner", &[&r]).await;
+    assert_eq!(
+        request_as(&a, &token, "GET", "/v1/sources/source", json!(null))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request_as(&a, &token, "GET", "/v1/sources/private", json!(null))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request_as(
+            &a,
+            &token,
+            "POST",
+            "/v1/sources",
+            json!({"name":"Denied","kind":"external"})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request_as(&a, &token, "POST", "/v1/roles", json!({"name":"Denied"}))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request_as(&a, &token, "POST", "/v1/jobs/job/run", json!(null))
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    let (s, v) = request_as(
+        &a,
+        &token,
+        "PUT",
+        &format!("/v1/datasets/{did}/row-filters/{r}"),
+        json!({"predicate":"id=1"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        request_as(
+            &a,
+            &token,
+            "PUT",
+            &format!("/v1/datasets/{did}/masks/{r}/name"),
+            json!({"kind":"hash"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (s, map) = request_as(&a, &token, "GET", "/v1/datamap", json!(null)).await;
+    assert_eq!(s, StatusCode::OK, "{map}");
+    let d = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == did)
+        .unwrap();
+    assert_eq!(d["row_filtered"], true);
+    assert!(d["row_count"].is_null());
+    assert!(
+        d["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["name"] == "name" && c["masked"] == true)
+    );
+    let (_, preview) = request(&a, "GET", "/v1/datamap?as_role=admin", json!(null)).await;
+    let d = preview["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == did)
+        .unwrap();
+    assert_eq!(d["row_filtered"], false);
+    assert!(
+        d["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["masked"] == false)
+    );
+    let id = "temporary-dataset";
+    sqlx::query("INSERT INTO datasets(id,source_id,name) VALUES(?,'source','temporary')")
+        .bind(id)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO columns(id,dataset_id,name,data_type,nullable) VALUES(?,?,'value','Int64',1)",
+    )
+    .bind(store::id())
+    .bind(id)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    access_grant(&a, &r, "dataset", id, "read").await;
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{id}/row-filters/{r}"),
+        json!({"predicate":"value>0"}),
+    )
+    .await;
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{id}/masks/{r}/value"),
+        json!({"kind":"null"}),
+    )
+    .await;
+    sqlx::query("DELETE FROM columns WHERE dataset_id=?")
+        .bind(id)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM datasets WHERE id=?")
+        .bind(id)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    for query in [
+        "SELECT count(*) FROM row_filters WHERE dataset_id=?",
+        "SELECT count(*) FROM column_masks WHERE dataset_id=?",
+        "SELECT count(*) FROM grants WHERE target_kind='dataset' AND target_id=?",
+    ] {
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(query)
+                .bind(id)
+                .fetch_one(&f.pool)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+    f.close().await;
+}
+
+#[tokio::test]
+async fn access_mask_type_changes_and_schema_drift_revalidation() {
+    use sha2::{Digest, Sha256};
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    let r1 = access_role(&a, "mask one").await;
+    let r2 = access_role(&a, "mask two").await;
+    for r in [&r1, &r2] {
+        access_grant(&a, r, "dataset", &did, "read").await;
+    }
+    let (uid, token) = access_user(&a, "masked", &[&r1, &r2]).await;
+    for (first, second, expected) in [
+        ("null", "redact", json!(null)),
+        ("redact", "hash", json!("***")),
+        ("hash", "last4", json!(format!("{:x}", Sha256::digest("1")))),
+    ] {
+        for (r, kind) in [(&r1, first), (&r2, second)] {
+            request(
+                &a,
+                "PUT",
+                &format!("/v1/datasets/{did}/masks/{r}/id"),
+                json!({"kind":kind}),
+            )
+            .await;
+        }
+        let (s, v) = request_as(
+            &a,
+            &token,
+            "POST",
+            "/v1/sql",
+            json!({"query":"SELECT id FROM app_db.users ORDER BY name"}),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["rows"][0][0], expected);
+        assert_eq!(
+            v["columns"][0]["type"],
+            if first == "null" { "Int64" } else { "Utf8" }
+        );
+        let (_, tables) = request_as(&a, &token, "GET", "/v1/sql/tables", json!(null)).await;
+        let column = &tables["tables"][0]["columns"][0];
+        assert_eq!(column["type"], v["columns"][0]["type"]);
+    }
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/users/{uid}/roles"),
+        json!({"role_ids":[r1]}),
+    )
+    .await;
+    assert_eq!(
+        request(
+            &a,
+            "PUT",
+            &format!("/v1/datasets/{did}/row-filters/{r1}"),
+            json!({"predicate":"name='Alice'"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let input =
+        sqlx::SqlitePool::connect(&format!("sqlite:{}", f.dir.join("sql-input.db").display()))
+            .await
+            .unwrap();
+    sqlx::query("ALTER TABLE users DROP COLUMN name")
+        .execute(&input)
+        .await
+        .unwrap();
+    input.close().await;
+    crate::catalog::discover(&f.pool, "source").await.unwrap();
+    sql_sync(&f).await;
+    let (s, _) = request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT * FROM app_db.users"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_log WHERE action='policy.invalid' AND principal_id=?"
+        )
+        .bind(&uid)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap()
+            > 0
+    );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn access_manual_run_audit_keeps_user_through_worker() {
+    let f = Fixture::new().await;
+    let a = app(&f);
+    let (s, r) = request(&a, "POST", "/v1/jobs/job/run", json!(null)).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let id = r["id"].as_str().unwrap();
+    let mut runner = runner::Runner::new(
+        f.pool.clone(),
+        f.events.clone(),
+        backup::Backups::new(f.config.clone()),
+        1,
+    );
+    runner.dispatch().await.unwrap();
+    runner.drain().await;
+    assert_eq!(f.state(id).await, "succeeded");
+    let actors: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT principal_id FROM audit_log WHERE entity_id=? AND action LIKE 'run.%'",
+    )
+    .bind(id)
+    .fetch_all(&f.pool)
+    .await
+    .unwrap();
+    assert!(actors.len() >= 3);
+    assert!(actors.iter().all(|p| p.as_deref() == Some("admin")));
+    drop(runner);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn access_admin_role_policies_are_enforced_and_fail_closed() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    assert_eq!(
+        request(
+            &a,
+            "PUT",
+            &format!("/v1/datasets/{did}/row-filters/admin"),
+            json!({"predicate":"id=1"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/masks/admin/name"),
+        json!({"kind":"redact"}),
+    )
+    .await;
+    let (s, v) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT id,name FROM app_db.users ORDER BY id"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], json!([[1, "***"]]));
+    sqlx::query("UPDATE row_filters SET predicate='missing_column=1' WHERE dataset_id=? AND role_id='admin'").bind(&did).execute(&f.pool).await.unwrap();
+    assert_eq!(
+        request(
+            &a,
+            "POST",
+            "/v1/sql",
+            json!({"query":"SELECT * FROM app_db.users"})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (_, map) = request(&a, "GET", "/v1/datamap", json!(null)).await;
+    assert!(
+        !map["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["id"] == did)
+    );
+    assert!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_log WHERE action='policy.invalid' AND principal_id='admin'"
+        )
+        .fetch_one(&f.pool)
+        .await
+        .unwrap()
+            > 0
+    );
+    assert_eq!(
+        request(
+            &a,
+            "DELETE",
+            &format!("/v1/datasets/{did}/row-filters/admin"),
+            json!(null)
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(
+            &a,
+            "POST",
+            "/v1/sql",
+            json!({"query":"SELECT * FROM app_db.users"})
+        )
+        .await
+        .0,
+        StatusCode::OK
     );
     f.close().await;
 }

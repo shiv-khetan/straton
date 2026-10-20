@@ -36,7 +36,47 @@ export interface Source {
   config: Record<string, string | number>;
 }
 export type SourceInput = Omit<Source, 'id' | 'credential_id'> & { secret?: string };
+export type Privilege = 'read' | 'sync_admin' | 'admin';
+export type MaskKind = 'null' | 'redact' | 'hash' | 'last4';
+export interface User {
+  id: string;
+  name: string;
+  disabled: boolean;
+  created_at: number;
+  role_ids: string[];
+}
+export interface Role {
+  id: string;
+  name: string;
+  is_admin: boolean;
+}
+export interface Grant {
+  id: string;
+  role_id: string;
+  target_kind: 'source' | 'dataset';
+  target_id: string;
+  privilege: Privilege;
+}
+export interface Me {
+  user: User;
+  roles: Role[];
+  privileges: { admin: boolean; read: boolean; sync_admin: boolean; grants: Grant[] };
+}
+export interface TokenInfo {
+  id: string;
+  name: string;
+  created_at: number;
+  last_used_at: number | null;
+  expires_at: number | null;
+  revoked_at: number | null;
+}
+export interface Policies {
+  row_filters: { role_id: string; predicate: string }[];
+  masks: { role_id: string; column: string; kind: MaskKind }[];
+}
 export interface Column {
+  masked?: boolean;
+  mask_kind?: MaskKind | null;
   name: string;
   type: string;
   nullable: boolean;
@@ -50,6 +90,7 @@ export interface MapSource {
   connected: boolean;
 }
 export interface Dataset {
+  row_filtered?: boolean;
   type: 'dataset';
   display_name?: string;
   id: string;
@@ -152,6 +193,46 @@ export function api(connection: Connection) {
     return response.json() as Promise<T>;
   }
   return {
+    me: () => request<Me>('/v1/me'),
+    users: () => request<User[]>('/v1/users'),
+    createUser: (name: string) => request<User>('/v1/users', 'POST', { name }),
+    updateUser: (user: User, disabled: boolean) =>
+      request<User>('/v1/users/' + idPath(user.id), 'PUT', { name: user.name, disabled }),
+    assignRoles: (user: string, role_ids: string[]) =>
+      request<void>('/v1/users/' + idPath(user) + '/roles', 'PUT', { role_ids }),
+    tokens: (user: string) => request<TokenInfo[]>('/v1/users/' + idPath(user) + '/tokens'),
+    issueToken: (user: string, name: string, expires_at: number | null) =>
+      request<{ id: string; token: string }>('/v1/users/' + idPath(user) + '/tokens', 'POST', {
+        name,
+        expires_at,
+      }),
+    revokeToken: (user: string, token: string) =>
+      request<void>('/v1/users/' + idPath(user) + '/tokens/' + idPath(token), 'DELETE'),
+    roles: () => request<Role[]>('/v1/roles'),
+    createRole: (name: string) => request<Role>('/v1/roles', 'POST', { name }),
+    deleteRole: (id: string) => request<void>('/v1/roles/' + idPath(id), 'DELETE'),
+    grants: () => request<Grant[]>('/v1/grants'),
+    createGrant: (grant: Omit<Grant, 'id'>) => request<Grant>('/v1/grants', 'POST', grant),
+    deleteGrant: (id: string) => request<void>('/v1/grants/' + idPath(id), 'DELETE'),
+    policies: (dataset: string) =>
+      request<Policies>('/v1/datasets/' + idPath(dataset) + '/policies'),
+    rowFilter: (dataset: string, role: string, predicate: string | null) =>
+      request<void>(
+        '/v1/datasets/' + idPath(dataset) + '/row-filters/' + idPath(role),
+        predicate === null ? 'DELETE' : 'PUT',
+        predicate === null ? undefined : { predicate },
+      ),
+    mask: (dataset: string, role: string, column: string, kind: MaskKind | null) =>
+      request<void>(
+        '/v1/datasets/' + idPath(dataset) + '/masks/' + idPath(role) + '/' + idPath(column),
+        kind === null ? 'DELETE' : 'PUT',
+        kind === null ? undefined : { kind },
+      ),
+    validatePolicy: (dataset_id: string, predicate: string) =>
+      request<{ ok: boolean; error?: string }>('/v1/policies/validate', 'POST', {
+        dataset_id,
+        predicate,
+      }),
     sqlQuery: (query: string, limit = 1000) =>
       request<SqlResult>('/v1/sql', 'POST', { query, limit }),
     sqlExplain: (query: string) => request<SqlExplain>('/v1/sql/explain', 'POST', { query }),
@@ -174,7 +255,8 @@ export function api(connection: Connection) {
         'POST',
         body,
       ),
-    datamap: () => request<DataMap>('/v1/datamap'),
+    datamap: (role = '') =>
+      request<DataMap>('/v1/datamap' + (role ? '?as_role=' + idPath(role) : '')),
     createRelationship: (body: Omit<Relationship, 'id'>) =>
       request<Relationship>('/v1/relationships', 'POST', body),
     deleteRelationship: (id: string) => request<void>('/v1/relationships/' + idPath(id), 'DELETE'),
