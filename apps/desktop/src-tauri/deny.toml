@@ -1,0 +1,19 @@
+# cargo-deny policy for the desktop shell's own lockfile (CI checks advisories + sources).
+# The engine workspace policy lives in the repository root deny.toml.
+
+[advisories]
+ignore = [
+  # webpki-roots 0.26.11 is a semver-trick shim that re-exports webpki-roots v1;
+  # the lockfile pins v1 at 1.0.10 (the fixed release), so the bundled roots are patched.
+  # Pulled in by tokio-tungstenite via tauri-plugin-websocket. Remove once that crate
+  # depends on webpki-roots v1 directly.
+  { id = "RUSTSEC-2026-0381", reason = "0.26.11 re-exports webpki-roots 1.0.10 (fixed)" },
+  # Unmaintained (not a vulnerability) proc-macro crate used at build time by Tauri's
+  # Linux GTK bindings; no safe upgrade exists upstream yet.
+  { id = "RUSTSEC-2024-0370", reason = "build-time only via Tauri GTK bindings; no upgrade available" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -29,6 +29,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-deny --locked
       - run: cargo deny --locked check advisories licenses bans sources
+      # The desktop shell has its own lockfile and policy (apps/desktop/src-tauri/deny.toml).
+      - run: cargo deny --locked --manifest-path apps/desktop/src-tauri/Cargo.toml check advisories sources
 
   desktop:
     runs-on: ubuntu-latest
