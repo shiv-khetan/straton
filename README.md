@@ -34,3 +34,45 @@ Do **not** attempt full Databricks parity in v1. Start with one sharp wedge: sel
 - What execution/storage architecture best serves the first use case?
 - Which optimizations are provably safe, explainable, and reversible?
 - Which enterprise security/compliance requirements matter first?
+
+## Running the engine
+
+Phase 1 provides the engine core and a deterministic noop connector. Real connectors, catalog discovery, Parquet sync and the desktop UI belong to later phases.
+
+```powershell
+Copy-Item straton.example.toml straton.toml
+cargo run -p straton-engine -- run
+# Equivalent default command:
+cargo run -p straton-engine
+cargo run -p straton-engine -- token
+```
+
+Default address: `http://127.0.0.1:8787`. `GET /health` is public. Every `/v1` route, including WebSocket upgrades, requires `Authorization: Bearer <token>`. The engine creates `data/token` on first start with user-only permissions; the `token` command prints its absolute path, never the secret. Keep the token private. `state.db`, the lock and daily rolling logs live in the data directory. Stdout also receives logs; `RUST_LOG` controls filtering.
+
+```powershell
+$token = Get-Content data/token -Raw
+$headers = @{ Authorization = "Bearer $token" }
+Invoke-RestMethod http://127.0.0.1:8787/v1/status -Headers $headers
+$source = @{ name="Example"; kind="noop"; credential_id=$null } | ConvertTo-Json
+$s = Invoke-RestMethod http://127.0.0.1:8787/v1/sources -Method Post -Headers $headers -ContentType application/json -Body $source
+$job = @{ name="Example"; source_id=$s.id; dataset="example"; cron=$null; enabled=$true } | ConvertTo-Json
+$j = Invoke-RestMethod http://127.0.0.1:8787/v1/jobs -Method Post -Headers $headers -ContentType application/json -Body $job
+Invoke-RestMethod "http://127.0.0.1:8787/v1/jobs/$($j.id)/run" -Method Post -Headers $headers
+Invoke-RestMethod http://127.0.0.1:8787/v1/runs -Headers $headers
+```
+
+Source/job collections accept POST and GET; individual IDs accept GET, PUT and DELETE. IDs may be omitted on creation. PUT uses the path ID. Sources contain only a credential reference, never connection secrets. Referenced sources/jobs cannot be deleted (409); run history is retained. The built-in backup job is configured through TOML. `GET /v1/runs?job=<id>&state=failed` filters history; `POST /v1/runs/<id>/cancel` requests cancellation at a batch boundary. `GET /v1/events` streams run states; reconnecting or receiving `resync_required` means clients should refresh run history.
+
+Settings override TOML via `STRATON_DATA_DIR`, `STRATON_BIND`, `STRATON_MAX_CONCURRENT_RUNS`, `STRATON_MAX_ATTEMPTS`, `STRATON_TLS_CERT`, `STRATON_TLS_KEY`, `STRATON_BACKUP_CRON`, `STRATON_BACKUP_DIR`, and `STRATON_BACKUP_KEEP`. Paths are relative to the process working directory; set the backup directory explicitly if changing the data directory. Unknown settings and invalid cron expressions fail startup. Cron uses UTC and a seconds field, e.g. `0 */5 * * * *`. Missed schedules produce one catch-up run per job. A newly created job starts scheduling from its creation time. Manual jobs have `cron = null` in JSON. Crash recovery retains checkpoints, retries up to three attempts by default, and waits 1, 2, 4, … seconds (capped at 1024 seconds). Failures and panics are recorded as failed; crash interruptions alone are retried.
+
+Non-loopback binding requires both TLS PEM certificate/key settings. A lock prevents concurrent engines and restore while running. Ctrl-C (or SIGTERM on Unix) stops scheduling and drains workers for up to 30 seconds.
+
+Backups run daily at 02:00 UTC by default, retaining the newest seven snapshots. `POST /v1/backups` creates a snapshot now; `GET /v1/backups` lists them newest first. Stop the engine, then restore using the same working directory/configuration:
+
+```powershell
+cargo run -p straton-engine -- restore data/backups/<snapshot.db>
+```
+
+Restore validates the SQLite snapshot and replaces state; it does not restore tokens, configuration or logs. See [systemd unit](deploy/straton-engine.service) and [Windows service notes](deploy/windows-service.md).
+
+Verification: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.

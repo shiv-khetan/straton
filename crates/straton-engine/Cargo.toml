@@ -1,0 +1,35 @@
+[package]
+name = "straton-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+straton-core = { path = "../straton-core" }
+straton-connectors = { path = "../straton-connectors" }
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["ws"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+cron = "0.15"
+clap = { version = "4", features = ["derive"] }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+futures.workspace = true
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+anyhow = "1"
+secrecy = "0.10"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.9"
+subtle = "2"
+fs2 = "0.4"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }

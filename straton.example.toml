@@ -1,0 +1,13 @@
+# Copy to straton.toml. Cron includes a seconds field and uses UTC.
+data_dir = "data"
+bind = "127.0.0.1:8787"
+max_concurrent_runs = 4
+max_attempts = 3
+# Required together for non-loopback binds:
+# tls_cert = "cert.pem"
+# tls_key = "key.pem"
+
+[backup]
+cron = "0 0 2 * * *"
+dir = "data/backups"
+keep = 7

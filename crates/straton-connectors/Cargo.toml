@@ -1,0 +1,11 @@
+[package]
+name = "straton-connectors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+straton-core = { path = "../straton-core" }
+arrow.workspace = true
+futures.workspace = true
+serde_json.workspace = true

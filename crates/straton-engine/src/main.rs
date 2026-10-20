@@ -1,0 +1,145 @@
+mod api;
+mod backup;
+mod config;
+mod runner;
+mod scheduler;
+mod security;
+mod store;
+#[cfg(test)]
+mod tests;
+
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tracing_subscriber::{EnvFilter, prelude::*};
+
+#[derive(Parser)]
+#[command(version, about = "Straton engine core")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+#[derive(Subcommand)]
+enum Command {
+    Run,
+    Restore { file: PathBuf },
+    Token,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let config = config::Config::load()?;
+    match cli.command.unwrap_or(Command::Run) {
+        Command::Token => {
+            println!(
+                "{}",
+                std::path::absolute(config.data_dir.join("token"))?.display()
+            );
+            Ok(())
+        }
+        Command::Restore { file } => {
+            backup::restore(&config, &file).await?;
+            println!("restored {}", file.display());
+            Ok(())
+        }
+        Command::Run => run(config).await,
+    }
+}
+async fn run(config: config::Config) -> Result<()> {
+    let _lock = security::lock(&config.data_dir)?;
+    let token = Arc::new(security::token(&config.data_dir)?);
+    let (file, _guard) = tracing_appender::non_blocking(tracing_appender::rolling::daily(
+        config.data_dir.join("logs"),
+        "engine.log",
+    ));
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(file),
+        )
+        .init();
+    let pool = store::open(&config.data_dir).await?;
+    let (events, _) = tokio::sync::broadcast::channel(256);
+    let backups = backup::Backups::new(config.clone());
+    scheduler::seed_backup(&pool, &config.backup.cron).await?;
+    runner::recover(&pool, &events, config.max_attempts).await?;
+    let mut runner = runner::Runner::new(
+        pool.clone(),
+        events.clone(),
+        backups.clone(),
+        config.max_concurrent_runs,
+    );
+    let router = api::router(api::App {
+        pool: pool.clone(),
+        token,
+        events: events.clone(),
+        backups,
+        started: Instant::now(),
+    });
+    let handle = axum_server::Handle::new();
+    let server_handle = handle.clone();
+    let address = config.bind;
+    let tls = match (config.tls_cert, config.tls_key) {
+        (Some(cert), Some(key)) => {
+            Some(axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key).await?)
+        }
+        _ => None,
+    };
+    let mut server = tokio::spawn(async move {
+        if let Some(tls) = tls {
+            axum_server::bind_rustls(address, tls)
+                .handle(server_handle)
+                .serve(router.into_make_service())
+                .await
+        } else {
+            axum_server::bind(address)
+                .handle(server_handle)
+                .serve(router.into_make_service())
+                .await
+        }
+    });
+    tracing::info!(%address,"engine started");
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let signal = shutdown();
+    tokio::pin!(signal);
+    let result = loop {
+        tokio::select! {
+            signal = &mut signal => { break signal; },
+            result = &mut server => { break match result { Ok(Ok(())) => Ok(()), Ok(Err(e)) => Err(e.into()), Err(e) => Err(e.into()) }; },
+            _ = tick.tick() => {
+                match scheduler::tick(&pool).await {
+                    Ok(ids) => for id in ids { runner::event(&events,&id,"queued"); },
+                    Err(e) => tracing::error!(error=%e,"scheduler tick failed"),
+                }
+                if let Err(e)=runner.dispatch().await { tracing::error!(error=%e,"runner dispatch failed"); }
+            }
+        }
+    };
+    tracing::info!("stopping scheduling; draining runs");
+    handle.graceful_shutdown(Some(Duration::from_secs(30)));
+    runner.drain().await;
+    if !server.is_finished() {
+        let _ = tokio::time::timeout(Duration::from_secs(1), &mut server).await;
+    }
+    result
+}
+async fn shutdown() -> Result<()> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate())?;
+        tokio::select! { result=tokio::signal::ctrl_c()=>result?, _=term.recv()=>{} }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await?;
+    Ok(())
+}
