@@ -200,6 +200,8 @@ export interface Status {
   last_backup: string | null;
 }
 export interface EngineEvent {
+  /** Local receipt time; the engine event payload has no timestamp. */
+  received_at?: number;
   type: string;
   id?: string;
   state?: RunState;

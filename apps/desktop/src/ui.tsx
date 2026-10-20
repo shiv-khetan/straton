@@ -1,7 +1,17 @@
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
 export type Tone = 'neutral' | 'primary' | 'success' | 'warning' | 'danger' | 'info';
 const paths = {
+  model: 'M4 4h6v6H4z M14 14h6v6h-6z M14 4h6v6h-6z M7 10v7h7 M10 7h4',
+  copy: 'M8 8h12v13H8z M16 8V3H3v13h5',
+  expand: 'm6 14 6-6 6 6',
+  minimize: 'm6 10 6 6 6-6',
+  more: 'M5 12h.01 M12 12h.01 M19 12h.01',
+  console: 'M3 4h18v16H3z m4 5 3 3-3 3 M13 15h4',
+  user: 'M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M4 21v-2a8 8 0 0 1 16 0v2',
+  list: 'M8 6h13 M8 12h13 M8 18h13 M3 6h1 M3 12h1 M3 18h1',
+  straton: 'M3 17 9 5l6 12 6-12 M6 12h12',
+  server: 'M4 4h16v6H4z M4 14h16v6H4z M8 7h.01 M8 17h.01',
   lock: 'M6 10h12v11H6z M8 10V6a4 4 0 0 1 8 0v4 M12 14v3',
   dashboard: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
   map: 'M4 4h6v6H4z M14 14h6v6h-6z M14 4h6v6h-6z M7 10v7h7 M10 7h4',
@@ -36,7 +46,7 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.6"
+      strokeWidth="1.5"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
@@ -61,11 +71,12 @@ export function Button({
 }
 export function Pill({
   tone = 'neutral',
+  className = '',
   children,
   ...props
 }: HTMLAttributes<HTMLSpanElement> & { tone?: Tone }) {
   return (
-    <span className={'pill tone-' + tone} {...props}>
+    <span className={'pill tone-' + tone + ' ' + className} {...props}>
       {children}
     </span>
   );
@@ -78,7 +89,7 @@ export function stateTone(state: string): Tone {
       : ['queued', 'Stale data'].includes(state)
         ? 'warning'
         : state === 'running'
-          ? 'primary'
+          ? 'info'
           : 'neutral';
 }
 export function Card({ children, className = '', ...props }: HTMLAttributes<HTMLElement>) {
@@ -88,41 +99,103 @@ export function Card({ children, className = '', ...props }: HTMLAttributes<HTML
     </section>
   );
 }
-export function KpiCard({
-  icon,
-  label,
-  value,
-  delta,
-  tone = 'primary',
-  title,
-}: {
-  icon: IconName;
-  label: string;
-  value: ReactNode;
-  delta: string;
-  tone?: Tone;
-  title?: string;
-}) {
-  return (
-    <Card className="kpi">
-      <div className="kpi-label">
-        <span className={'icon-tile tone-' + tone}>
-          <Icon name={icon} />
-        </span>
-        {label}
-      </div>
-      <strong className="kpi-value" title={title}>
-        {value}
-      </strong>
-      <Pill tone={tone}>{delta}</Pill>
-    </Card>
-  );
-}
 export function Table({ children, label }: { children: ReactNode; label: string }) {
   return (
     <div className="table-wrap" role="region" aria-label={label} tabIndex={0}>
       <table>{children}</table>
     </div>
+  );
+}
+export function Inspector({
+  entityId,
+  title,
+  label,
+  onClose,
+  children,
+}: {
+  entityId: string;
+  title: string;
+  label: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const panel = useRef<HTMLElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [closing, setClosing] = useState(false);
+  useEffect(() => {
+    const previous = document.activeElement;
+    setClosing(false);
+    panel.current?.focus();
+    return () => {
+      clearTimeout(timer.current);
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
+  }, [entityId]);
+  const close = () => {
+    if (closing) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      onClose();
+      return;
+    }
+    setClosing(true);
+    timer.current = setTimeout(onClose, 150);
+  };
+  return (
+    <aside
+      ref={panel}
+      className={'map-inspector' + (closing ? ' is-closing' : '')}
+      aria-label={label}
+      tabIndex={-1}
+      inert={closing}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          close();
+        }
+      }}
+    >
+      <div className="panel-heading">
+        <h2 title={title}>{title}</h2>
+        <Button aria-label="Close inspector" onClick={close}>
+          <Icon name="close" />
+        </Button>
+      </div>
+      {children}
+    </aside>
+  );
+}
+export function RowMenu({ children, label }: { children: ReactNode; label: string }) {
+  const id = useId();
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  return (
+    <>
+      <Button
+        aria-label={label}
+        title={label}
+        popoverTarget={id}
+        onClick={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          setPosition({
+            top: Math.max(8, Math.min(window.innerHeight - 160, rect.bottom + 4)),
+            left: Math.max(8, Math.min(window.innerWidth - 208, rect.right - 200)),
+          });
+        }}
+      >
+        <Icon name="more" />
+      </Button>
+      <div
+        id={id}
+        popover="auto"
+        className="row-menu-panel"
+        aria-label={label}
+        style={position}
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest('button')) e.currentTarget.hidePopover();
+        }}
+      >
+        {children}
+      </div>
+    </>
   );
 }
 export function Sheet({

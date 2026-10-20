@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import { rankCommands, statusChip, datasetJobs, datasetRun, datasetState, clampDrawerHeight, drawerBounds, eventLevel, formatEvent, modelGraph } from '../src/workbench-model.ts';
+const commands = [{id:'1',label:'orders_archive',kind:'dataset',detail:'lake'}, {id:'2',label:'orders',kind:'model'}, {id:'3',label:'customer_orders',kind:'dataset'}, {id:'4',label:'Run job',kind:'action',keywords:'orders'}, {id:'5',label:'Customers',kind:'source'}];
+assert.deepEqual(rankCommands(commands,'  ORDERS ').map(c=>c.id),['2','1','3','4']);
+assert.deepEqual(rankCommands(commands,'orders lake').map(c=>c.id),['1']);
+assert.deepEqual(rankCommands(commands,'missing'),[]);assert.deepEqual(rankCommands(commands,''),commands);
+assert.equal(rankCommands(commands,'source')[0].id,'5');
+for(const [input,state,tone] of [['RUNNING','running','info'],['succeeded','succeeded','success'],['ready','succeeded','success'],['queued','queued','warning'],['stale','stale','warning'],['broken','failed','danger'],['interrupted','failed','danger'],['cancelled','stale','warning'],[null,'never synced','neutral']]) assert.deepEqual(statusChip(input),{state,label:state.toUpperCase(),tone});
+assert.deepEqual(statusChip('inlined'),{state:'inlined',label:'VIEW · INLINED',tone:'neutral'}); // views never run
+const dataset={id:'d',name:'orders',source_id:'s',stale:false,last_synced_at:null};
+const jobs=[{id:'j',source_id:'s',dataset:'orders'},{id:'other',source_id:'x',dataset:'orders'}];
+const runs=[{id:'old',job_id:'j',state:'failed',available_at:1},{id:'new',job_id:'j',state:'running',available_at:2},{id:'unrelated',job_id:'other',state:'failed',available_at:3}];
+assert.equal(datasetRun(dataset,jobs,runs).id,'new');
+assert.deepEqual(datasetJobs({...dataset,source_id:'straton-local-lake',name:'s/orders'},jobs).map(job=>job.id),['j']);
+assert.equal(datasetState({...dataset,source_id:'straton-local-lake',name:'s/orders'},jobs,runs),'running');
+assert.equal(datasetJobs({...dataset,source_id:'unrelated',name:'s/orders'},jobs).length,0);
+assert.equal(datasetState(dataset,jobs,runs),'running');assert.equal(datasetState({...dataset,stale:true},jobs,runs),'stale');assert.equal(datasetState(dataset,[],runs),'never synced');assert.equal(datasetState({...dataset,last_synced_at:'2026-10-20'},[],[]),'succeeded');
+assert.equal(clampDrawerHeight(256,800),256);assert.equal(clampDrawerHeight(900,800),560);assert.equal(clampDrawerHeight(-1,800),120);assert.equal(clampDrawerHeight(NaN,800),256);assert.equal(clampDrawerHeight(Infinity,200),140);assert.equal(clampDrawerHeight(100,0),36);assert.equal(clampDrawerHeight(100,NaN),120);assert.deepEqual(drawerBounds(100),{min:70,max:70});
+assert.equal(eventLevel({type:'run.state',state:'running'}),'RUN');assert.equal(eventLevel({type:'run.state',state:'failed'}),'ERROR');assert.equal(eventLevel({type:'run.state',state:'queued'}),'WARN');assert.equal(eventLevel({type:'catalog.changed'}),'INFO');assert.equal(eventLevel({type:'sql.error'}),'ERROR');assert.equal(eventLevel({type:'sql'}),'INFO');
+const receipt=new Date(2026,9,20,9,8,7,6).getTime();
+assert.deepEqual(formatEvent({type:'run.state',id:'r1',state:'running',received_at:receipt}),{time:'09:08:07.006',level:'RUN',entity:'r1',message:'run.state → running',text:'09:08:07.006  RUN  r1  run.state → running'});
+assert.equal(formatEvent({type:'sql',message:'done'}).text,'—  INFO  engine  done');
+assert.equal(formatEvent({type:'x',received_at:Infinity}).time,'—');
+const ms=[{id:'a',name:'revenue'},{id:'b',name:'daily'}];
+const source={id:'orders',sql_schema:'lake',sql_table:'orders'};
+const graph=modelGraph(ms,{a:{upstream:[source,source]},b:{upstream:[{id:'model-a',sql_schema:'models',sql_table:'revenue'}]}});
+assert.equal(graph.nodes.length,3);assert.equal(graph.edges.length,2);assert.equal(graph.edges[1].source,'model:a');assert.equal(graph.edges[1].target,'model:b');
+assert.deepEqual(modelGraph([],{}),{nodes:[],edges:[]});assert.equal(modelGraph(ms,{}).edges.length,0);
+assert.equal(modelGraph([ms[0]],{a:{upstream:[{id:'self',sql_schema:'models',sql_table:'revenue'}]}}).edges.length,0);
+console.log('Command ranking, status chips, dataset runs, drawer bounds, event formatting, and model graph checks passed.');
+
+assert.equal(datasetState(dataset,jobs,[{...runs[0],state:'cancelled'}]),'never synced');
+assert.equal(datasetState({...dataset,last_synced_at:'2026-10-20'},jobs,[{...runs[0],state:'cancelled'}]),'stale');

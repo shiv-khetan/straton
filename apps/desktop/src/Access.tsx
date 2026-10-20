@@ -13,6 +13,7 @@ import type {
 } from './api';
 import { Button, Card, EmptyState, Pill, Sheet, Table, Tabs, Toast } from './ui';
 import { Field } from './App';
+import { Skeleton } from './Workbench';
 import { setMask } from './access-model';
 import { datasetLabel, relativeTime } from './view-model';
 const emptyPolicies: Policies = { row_filters: [], masks: [] };
@@ -28,6 +29,7 @@ export default function Access({
   onChanged: () => void;
 }) {
   const [tab, setTab] = useState('Users');
+  const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState<User[]>([]),
     [roles, setRoles] = useState<Role[]>([]),
     [grants, setGrants] = useState<Grant[]>([]);
@@ -55,13 +57,17 @@ export default function Access({
     void Promise.all([client.users(), client.roles(), client.grants()])
       .then(([u, r, g]) => {
         if (active) {
+          setLoading(false);
           setUsers(u);
           setRoles(r);
           setGrants(g);
         }
       })
       .catch((e) => {
-        if (active) setError(String(e));
+        if (active) {
+          setLoading(false);
+          setError(String(e));
+        }
       });
     return () => {
       active = false;
@@ -143,6 +149,7 @@ export default function Access({
       </div>
       {error && <Toast error message={error} onClose={() => setError('')} />}
       {message && <Toast message={message} onClose={() => setMessage('')} />}
+      {loading && <Skeleton label="Loading access settings…" />}
       <Tabs id="access" items={['Users', 'Roles', 'Policies']} value={tab} onChange={setTab} />
       <section role="tabpanel" id={'access-panel-' + tab} aria-labelledby={'access-tab-' + tab}>
         {tab === 'Users' && (

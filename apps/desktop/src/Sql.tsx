@@ -1,20 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Api, SqlExplain, SqlResult, SqlTable } from './api';
 import { cellText, tableReference } from './sql-model';
-import { Card, EmptyState, SchemaTree, Tabs } from './ui';
+import { Button, Card, EmptyState, Icon, SchemaTree } from './ui';
+import { ConsoleDrawer, Skeleton } from './Workbench';
 
 export default function SqlView({
   client,
   revision,
   initialQuery,
+  consoleCollapsed,
+  onConsoleCollapsed,
+  readOnly,
 }: {
   client: Api;
   revision: number;
   initialQuery: string;
+  consoleCollapsed: boolean;
+  onConsoleCollapsed: (value: boolean) => void;
+  readOnly: boolean;
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [tab, setTab] = useState('Results');
   const [search, setSearch] = useState('');
+  const [catalogOpen, setCatalogOpen] = useState(false);
   useEffect(() => {
     setQuery(initialQuery);
   }, [initialQuery]);
@@ -24,6 +32,7 @@ export default function SqlView({
   const [result, setResult] = useState<SqlResult | null>(null);
   const [plans, setPlans] = useState<SqlExplain | null>(null);
   const [busy, setBusy] = useState(false);
+  const gutter = useRef<HTMLPreElement>(null);
   const editor = useRef<HTMLTextAreaElement>(null);
   const current = useRef(0);
   useEffect(() => {
@@ -48,7 +57,8 @@ export default function SqlView({
     [client],
   );
   async function run(explain = false) {
-    if (busy || !query.trim()) return;
+    if (busy || readOnly || !query.trim()) return;
+    onConsoleCollapsed(false);
     const request = ++current.current;
     setBusy(true);
     setError('');
@@ -87,25 +97,40 @@ export default function SqlView({
           <h2>SQL editor</h2>
           <label className="field" htmlFor="sql-query">
             <span>Query</span>
-            <textarea
-              id="sql-query"
-              ref={editor}
-              value={query}
-              spellCheck={false}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                  e.preventDefault();
-                  void run();
-                }
-              }}
-            />
+            <div className="editor-with-gutter">
+              <pre ref={gutter} className="line-numbers" aria-hidden="true">
+                {query
+                  .split('\n')
+                  .map((_, i) => i + 1)
+                  .join('\n')}
+              </pre>
+              <textarea
+                id="sql-query"
+                ref={editor}
+                onScroll={(e) => {
+                  if (gutter.current) gutter.current.scrollTop = e.currentTarget.scrollTop;
+                }}
+                value={query}
+                spellCheck={false}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    void run();
+                  }
+                }}
+              />
+            </div>
           </label>
           <div className="actions">
-            <button className="primary" disabled={busy || !query.trim()} onClick={() => void run()}>
+            <button
+              className="primary"
+              disabled={busy || readOnly || !query.trim()}
+              onClick={() => void run()}
+            >
               {busy ? 'Running…' : 'Run'}
             </button>
-            <button disabled={busy || !query.trim()} onClick={() => void run(true)}>
+            <button disabled={busy || readOnly || !query.trim()} onClick={() => void run(true)}>
               Explain
             </button>
             <span className="hint">
@@ -118,73 +143,75 @@ export default function SqlView({
             </p>
           )}
         </Card>
-        <Card className="results-card">
-          <Tabs id="sql-output" items={['Results', 'Explain']} value={tab} onChange={setTab} />
-          <div
-            id={'sql-output-panel-' + tab}
-            role="tabpanel"
-            aria-labelledby={'sql-output-tab-' + tab}
-            tabIndex={0}
-          >
-            {tab === 'Results' && result && (
-              <>
-                <p role="status">
-                  {result.row_count.toLocaleString()} rows · {result.elapsed_ms.toLocaleString()} ms
-                  {result.truncated_preview && ' · Showing the first 1,000 rows'}
-                </p>
-                {result.columns.length > 0 && (
-                  <div
-                    className="sql-results"
-                    tabIndex={0}
-                    role="region"
-                    aria-label="Query results"
-                  >
-                    <table>
-                      <thead>
-                        <tr>
-                          {result.columns.map((column, i) => (
-                            <th key={i} scope="col">
-                              {column.name}
-                              <small>{column.type}</small>
-                            </th>
+        <ConsoleDrawer
+          tabs={['Results', 'Explain']}
+          tab={tab}
+          onTab={setTab}
+          collapsed={consoleCollapsed}
+          onCollapsed={onConsoleCollapsed}
+        >
+          {busy && <Skeleton label={tab === 'Explain' ? 'Planning query…' : 'Running query…'} />}
+          {tab === 'Results' && result && (
+            <>
+              <p role="status">
+                {result.row_count.toLocaleString()} rows · {result.elapsed_ms.toLocaleString()} ms
+                {result.truncated_preview && ' · Showing the first 1,000 rows'}
+              </p>
+              {result.columns.length > 0 && (
+                <div className="sql-results" tabIndex={0} role="region" aria-label="Query results">
+                  <table>
+                    <thead>
+                      <tr>
+                        {result.columns.map((column, i) => (
+                          <th key={i} scope="col">
+                            {column.name}
+                            <small>{column.type}</small>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.rows.map((row, r) => (
+                        <tr key={r}>
+                          {row.map((value, c) => (
+                            <td key={c} className={value === null ? 'sql-null' : undefined}>
+                              {cellText(value)}
+                            </td>
                           ))}
                         </tr>
-                      </thead>
-                      <tbody>
-                        {result.rows.map((row, r) => (
-                          <tr key={r}>
-                            {row.map((value, c) => (
-                              <td key={c} className={value === null ? 'sql-null' : undefined}>
-                                {cellText(value)}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                {result.row_count === 0 && <p className="empty">Query returned no rows.</p>}
-              </>
-            )}
-            {tab === 'Explain' && plans && (
-              <div className="sql-plans">
-                <h2>Logical plan</h2>
-                <pre tabIndex={0}>{plans.logical}</pre>
-                <h2>Physical plan</h2>
-                <pre tabIndex={0}>{plans.physical}</pre>
-              </div>
-            )}
-            {tab === 'Results' && !result && (
-              <EmptyState icon="sql">Run a query to explore your published data.</EmptyState>
-            )}
-            {tab === 'Explain' && !plans && (
-              <EmptyState icon="map">Choose Explain to inspect the query plan.</EmptyState>
-            )}
-          </div>
-        </Card>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {result.row_count === 0 && <p className="empty">Query returned no rows.</p>}
+            </>
+          )}
+          {tab === 'Explain' && plans && (
+            <div className="sql-plans">
+              <h2>Logical plan</h2>
+              <pre tabIndex={0}>{plans.logical}</pre>
+              <h2>Physical plan</h2>
+              <pre tabIndex={0}>{plans.physical}</pre>
+            </div>
+          )}
+          {tab === 'Results' && !result && !busy && (
+            <EmptyState icon="sql">Run a query to explore your published data.</EmptyState>
+          )}
+          {tab === 'Explain' && !plans && !busy && (
+            <EmptyState icon="map">Choose Explain to inspect the query plan.</EmptyState>
+          )}
+        </ConsoleDrawer>
       </div>
-      <section className="sql-tables" aria-label="Available tables">
+      <section className="sql-tables" data-open={catalogOpen} aria-label="Available tables">
+        <Button
+          className="schema-toggle"
+          aria-label={catalogOpen ? 'Close schema browser' : 'Open schema browser'}
+          aria-expanded={catalogOpen}
+          onClick={() => setCatalogOpen(!catalogOpen)}
+        >
+          <Icon name={catalogOpen ? 'close' : 'source'} />
+        </Button>
         <h2>Available tables</h2>
         <p className="hint">Click a table to insert its name at the cursor.</p>
         {catalogError && <p role="alert">{catalogError}</p>}

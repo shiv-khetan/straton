@@ -6,3 +6,12 @@ assert.deepEqual(eligibleWatermarkColumns([]), []);
 assert.equal(runStats({rows_inserted:2, rows_updated:1, rows_deleted:0, rows_read:3}), '+2 / ~1 / −0 / 3 rows read');
 assert.equal(runStats({rows_inserted:0, rows_updated:0, rows_deleted:2, rows_read:0}), '+0 / ~0 / −2 / 0 rows read');
 console.log('Incremental watermark eligibility and run stats passed.');
+
+const { hasIncrementalSettings } = await import('../src/job-model.ts');
+assert.equal(hasIncrementalSettings('stripe','',[]),true);
+assert.equal(hasIncrementalSettings('salesforce','',[]),true);
+assert.equal(hasIncrementalSettings('postgres','updated_at',['id']),true);
+assert.equal(hasIncrementalSettings('postgres','', ['id']),false);
+assert.equal(hasIncrementalSettings('postgres','updated_at',[]),false);
+assert.equal(hasIncrementalSettings(undefined,'',[]),false);
+console.log('Event-feed incremental validation and required watermark/key checks passed.');

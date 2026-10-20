@@ -19,7 +19,14 @@ export function backupTime(path: string | null | undefined): string | null {
   const time = y + '-' + mo + '-' + d + 'T' + h + ':' + mi + ':' + s + 'Z';
   return Number.isFinite(Date.parse(time)) ? time : null;
 }
-export const chartStates = ['succeeded', 'failed', 'cancelled'] as const;
+export const chartStates = [
+  'succeeded',
+  'running',
+  'queued',
+  'failed',
+  'interrupted',
+  'cancelled',
+] as const;
 export function bucketRuns(runs: Run[], now = Date.now()) {
   const today = new Date(now);
   today.setHours(0, 0, 0, 0);
@@ -33,6 +40,9 @@ export function bucketRuns(runs: Run[], now = Date.now()) {
       end: end.getTime(),
       label: date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
       succeeded: 0,
+      running: 0,
+      queued: 0,
+      interrupted: 0,
       failed: 0,
       cancelled: 0,
     };

@@ -1,9 +1,15 @@
-import { datasetLabel } from './view-model.ts';
 import type { Edge, Node, XYPosition } from '@xyflow/react';
 import type { ELK, ElkNode, LayoutOptions } from 'elkjs/lib/elk-api';
 import type { DataMap, Dataset, EdgeKind, MapSource } from './api';
 type LayoutData = { layoutPosition?: XYPosition };
-export type TableData = LayoutData & { dataset: Dataset; fk: string[]; highlighted: boolean };
+export type TableData = LayoutData & {
+  dataset: Dataset;
+  fk: string[];
+  highlighted: boolean;
+  state?: string;
+  batches?: number;
+  external?: boolean;
+};
 export type TableNode = Node<TableData, 'table'>;
 export type GroupNode = Node<
   LayoutData & { label: string; external: boolean; stale: boolean },
@@ -16,9 +22,9 @@ export type MapEdge = Edge<{
   description: string;
   route?: XYPosition[][];
 }>;
-export const TABLE_HEADER_HEIGHT = 88;
-export const TABLE_ROW_HEIGHT = 32;
-export const TABLE_FOOTER_HEIGHT = 40;
+export const TABLE_HEADER_HEIGHT = 64;
+export const TABLE_ROW_HEIGHT = 28;
+export const TABLE_FOOTER_HEIGHT = 32;
 let elkPromise: Promise<ELK> | undefined;
 function storageKey(url: string) {
   return 'straton:map:v1:' + url;
@@ -62,22 +68,13 @@ function textWidth(text: string, header = false) {
     typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d');
   if (!textContext) return Array.from(text).length * (header ? 9 : 8);
   textContext.font = header
-    ? '600 14px "Cascadia Code", ui-monospace, monospace'
-    : '12px "Cascadia Code", ui-monospace, monospace';
+    ? '600 14px "JetBrains Mono Variable", ui-monospace, monospace'
+    : '12px "JetBrains Mono Variable", ui-monospace, monospace';
   return textContext.measureText(text).width;
 }
 export function tableSize(dataset: Dataset) {
   return {
-    width: Math.ceil(
-      Math.max(
-        320,
-        textWidth(datasetLabel(dataset), true) + 84 + (dataset.stale ? 60 : 0),
-        ...dataset.columns.map(
-          (column) =>
-            textWidth(column.name) + textWidth(column.type + (column.nullable ? '?' : '')) + 88,
-        ),
-      ),
-    ),
+    width: 256,
     height: TABLE_HEADER_HEIGHT + dataset.columns.length * TABLE_ROW_HEIGHT + TABLE_FOOTER_HEIGHT,
   };
 }

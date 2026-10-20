@@ -269,7 +269,7 @@ const longDataset = {
     },
   ],
 };
-assert.ok(tableSize(longDataset).width > 600);
+assert.equal(tableSize(longDataset).width, 256, 'Workbench nodes keep a fixed width; long identifiers remain available via tooltips and inspector');
 assert.equal(tableSize(longDataset).height, TABLE_HEADER_HEIGHT + TABLE_ROW_HEIGHT + TABLE_FOOTER_HEIGHT);
 
 // ELK can store an edge at root while its coordinates belong to a nested container.

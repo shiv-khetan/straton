@@ -20,3 +20,11 @@ export function runStats(
     ' rows read'
   );
 }
+
+export function hasIncrementalSettings(
+  kind: string | undefined,
+  watermark: string,
+  keys: string[],
+): boolean {
+  return kind === 'stripe' || kind === 'salesforce' || Boolean(watermark && keys.length);
+}

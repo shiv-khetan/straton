@@ -15,10 +15,13 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import type { Connection as FlowConnection, EdgeProps, NodeProps } from '@xyflow/react';
-import type { Api, DataMap, Dataset, EdgeKind, MapSource } from './api';
-import { Button, Icon, Pill, SchemaTree, Table as UiTable } from './ui';
+import type { Api, DataMap, Dataset, EdgeKind, MapSource, Job, Run, EngineEvent } from './api';
+import { Button, Icon, Inspector, Pill, SchemaTree, Table as UiTable } from './ui';
 import { datasetLabel, relativeTime } from './view-model';
 import { Field } from './App';
+import { ConsoleDrawer, CopyButton, RunHistory, StatusChip, Skeleton } from './Workbench';
+import { datasetState, datasetRun, datasetJobs } from './workbench-model';
+import { tableReference } from './sql-model';
 import {
   buildEdges,
   layout,
@@ -34,6 +37,14 @@ import {
 import type { MapNode, MapEdge, TableNode, GroupNode } from './map-model';
 type Props = {
   map: DataMap;
+  jobs: Job[];
+  runs: Run[];
+  events: EngineEvent[];
+  focusId: string;
+  initialStatusFilter: string;
+  consoleCollapsed: boolean;
+  onConsoleCollapsed: (value: boolean) => void;
+  onConnectSource?: () => void;
   canManage: boolean;
   canCreateJob: (dataset: Dataset) => boolean;
   engineUrl: string;
@@ -49,34 +60,27 @@ function Table({ data }: NodeProps<TableNode>) {
   return (
     <article
       className={
-        'dataset-node' +
+        'dataset-node state-' +
+        (data.state ?? 'never-synced').replaceAll(' ', '-') +
+        (data.external ? ' external-node' : '') +
         (data.dataset.stale ? ' stale' : '') +
         (data.highlighted ? ' highlighted' : '')
       }
     >
       <div className="dataset-title" style={{ height: TABLE_HEADER_HEIGHT }}>
         <Handle type="target" position={Position.Left} id="dataset:in" isConnectable={false} />
-        {data.dataset.stale && (
-          <div className="stale-banner">
-            <Icon name="warning" />
-            Stale data · absent from source
-          </div>
-        )}
-        <span className="icon-tile tone-primary">
+        <div className="node-heading-row">
           <Icon name="table" />
-        </span>
-        <div className="dataset-heading">
-          <strong>{datasetLabel(data.dataset)}</strong>
+          <strong title={datasetLabel(data.dataset)}>{datasetLabel(data.dataset)}</strong>
+        </div>
+        <div className="node-state-row">
+          <StatusChip state={data.state} />
           {data.dataset.row_filtered && (
             <Pill title="Row filter active">
               <Icon name="lock" />
               Filtered
             </Pill>
           )}
-          <small>
-            {data.dataset.columns.length} columns ·{' '}
-            {data.dataset.row_count?.toLocaleString() ?? '—'} rows
-          </small>
         </div>
         <Handle type="source" position={Position.Right} id="dataset:out" isConnectable={false} />
       </div>
@@ -88,8 +92,10 @@ function Table({ data }: NodeProps<TableNode>) {
             id={'in:' + column.name}
             aria-label={'Connect to ' + column.name}
           />
-          <span className="column-name">{column.name}</span>
-          <span className="column-type">
+          <span className="column-name" title={column.name}>
+            {column.name}
+          </span>
+          <span className="column-type" title={column.type}>
             {column.type}
             {column.nullable ? '?' : ''}
           </span>
@@ -110,8 +116,17 @@ function Table({ data }: NodeProps<TableNode>) {
           />
         </div>
       ))}
+      {data.state === 'running' && (
+        <div className="node-progress" role="status">
+          <span className="indeterminate-progress" />
+          <span className="visually-hidden">
+            Running · {data.batches ?? 0} committed batches; total unavailable
+          </span>
+        </div>
+      )}
       <div className="dataset-footer" style={{ height: TABLE_FOOTER_HEIGHT }}>
-        <Pill>{data.dataset.row_count?.toLocaleString() ?? '—'} rows</Pill>
+        <span>{data.dataset.row_count?.toLocaleString() ?? '—'} rows</span>
+        {data.state === 'running' && <span>{data.batches ?? 0} batches</span>}
         <Pill title={data.dataset.last_synced_at ?? 'Never synced'}>
           <Icon name="clock" />
           {relativeTime(data.dataset.last_synced_at)}
@@ -161,6 +176,14 @@ export default function DataMapView(props: Props) {
 }
 function Canvas({
   map,
+  jobs,
+  runs,
+  events,
+  focusId,
+  initialStatusFilter,
+  consoleCollapsed,
+  onConsoleCollapsed,
+  onConnectSource,
   canManage,
   canCreateJob,
   engineUrl,
@@ -173,7 +196,10 @@ function Canvas({
 }: Props) {
   const [nodes, setNodes, onNodesChange] = useNodesState<MapNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<MapEdge>([]);
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [consoleTab, setConsoleTab] = useState('Live events');
+  const [stateFilter, setStateFilter] = useState(initialStatusFilter);
+  useEffect(() => setStateFilter(initialStatusFilter), [initialStatusFilter]);
   const [minimap, setMinimap] = useState(true);
   const [excluded, setExcluded] = useState<string[]>([]);
   const { zoom } = useViewport();
@@ -218,8 +244,18 @@ function Canvas({
         const positioned = restore
           ? restorePositions(next.nodes, loadPositions(engineUrl))
           : next.nodes;
-        setNodes(positioned);
-        setEdges(next.edges);
+        setNodes((previous) =>
+          positioned.map((node) => ({
+            ...node,
+            selected: previous.find((existing) => existing.id === node.id)?.selected ?? false,
+          })),
+        );
+        setEdges((previous) =>
+          next.edges.map((edge) => ({
+            ...edge,
+            selected: previous.find((existing) => existing.id === edge.id)?.selected ?? false,
+          })),
+        );
         if (!restore) persist(engineUrl, positioned);
         requestAnimationFrame(() => {
           void fitView({ padding: 0.15 });
@@ -240,7 +276,12 @@ function Canvas({
     };
   }, [arrange]);
   useEffect(() => {
-    setEdges(buildEdges(map));
+    setEdges((previous) =>
+      buildEdges(map).map((edge) => ({
+        ...edge,
+        selected: previous.find((existing) => existing.id === edge.id)?.selected ?? false,
+      })),
+    );
   }, [map, setEdges]);
   const visibleNodes = useMemo(
     () =>
@@ -255,27 +296,57 @@ function Canvas({
                 (node.type === 'source'
                   ? node.id !== sourceFilter
                   : node.parentId !== sourceFilter)),
+            style: {
+              ...node.style,
+              opacity:
+                node.type === 'table' &&
+                stateFilter &&
+                datasetState(node.data.dataset, jobs, runs) !== stateFilter
+                  ? 0.35
+                  : 1,
+            },
             data:
               node.type === 'table'
                 ? {
                     ...node.data,
+                    state: datasetState(node.data.dataset, jobs, runs),
+                    batches: datasetRun(node.data.dataset, jobs, runs)?.committed_batches,
+                    external: !(
+                      map.nodes.find((n) => n.id === node.data.dataset.source_id) as
+                        MapSource | undefined
+                    )?.connected,
                     highlighted:
                       !!query && datasetLabel(node.data.dataset).toLowerCase().includes(query),
                   }
                 : node.data,
           }) as MapNode,
       ),
-    [nodes, sourceFilter, query, excluded],
+    [nodes, sourceFilter, query, excluded, stateFilter, map, jobs, runs],
   );
   const visibleIds = useMemo(
     () => new Set(visibleNodes.filter((n) => !n.hidden).map((n) => n.id)),
+    [visibleNodes],
+  );
+  const activeNodes = useMemo(
+    () =>
+      new Set(
+        visibleNodes
+          .filter((node) => node.type === 'table' && node.data.state === 'running')
+          .map((node) => node.id),
+      ),
     [visibleNodes],
   );
   const visibleEdges = useMemo(
     () =>
       routeEdges(edges, nodes).map((edge) => ({
         ...edge,
-        className: 'edge-kind-' + edge.data!.kind,
+        className:
+          'edge-kind-' +
+          edge.data!.kind +
+          (edge.data?.kind === 'lineage' &&
+          (activeNodes.has(edge.source) || activeNodes.has(edge.target))
+            ? ' edge-active'
+            : ''),
         style: {
           ...edge.style,
           stroke:
@@ -284,7 +355,10 @@ function Canvas({
             enabledKinds.length !== kinds.length ||
             !!sourceFilter ||
             excluded.length > 0 ||
-            !!search
+            !!search ||
+            activeNodes.has(edge.source) ||
+            activeNodes.has(edge.target) ||
+            !!stateFilter
               ? edge.style?.stroke
               : 'var(--edge-quiet)',
         },
@@ -298,7 +372,10 @@ function Canvas({
             enabledKinds.length !== kinds.length ||
             !!sourceFilter ||
             excluded.length > 0 ||
-            !!search
+            !!search ||
+            !!stateFilter ||
+            activeNodes.has(edge.source) ||
+            activeNodes.has(edge.target)
               ? String(edge.style?.stroke)
               : 'var(--edge-quiet)',
         },
@@ -310,7 +387,18 @@ function Canvas({
           !visibleIds.has(edge.source) ||
           !visibleIds.has(edge.target),
       })),
-    [edges, nodes, hoveredEdge, enabledKinds, visibleIds, sourceFilter, excluded, search],
+    [
+      edges,
+      nodes,
+      hoveredEdge,
+      enabledKinds,
+      visibleIds,
+      sourceFilter,
+      excluded,
+      search,
+      stateFilter,
+      activeNodes,
+    ],
   );
   function connect(connection: FlowConnection) {
     if (!canManage) return;
@@ -365,6 +453,17 @@ function Canvas({
       });
     });
   }
+  const focused = useRef('');
+  useEffect(() => {
+    if (!focusId) focused.current = '';
+    if (focusId && focused.current !== focusId && nodes.some((n) => n.id === focusId)) {
+      focused.current = focusId;
+      selectDataset(focusId);
+    }
+  }, [focusId, nodes]);
+  const selectedJobs = selectedDataset ? datasetJobs(selectedDataset, jobs) : [];
+  const selectedRuns = runs.filter((run) => selectedJobs.some((job) => job.id === run.job_id));
+  const lastRun = selectedDataset ? datasetRun(selectedDataset, jobs, runs) : undefined;
   function zoomSearch() {
     if (!query) return;
     const match = nodes.find(
@@ -475,141 +574,235 @@ function Canvas({
         </p>
       )}
       {!map.nodes.some((n) => n.type === 'dataset') && (
-        <p className="map-feedback">
-          Discover a source or add an external dataset to start mapping.
-        </p>
+        <div className="map-feedback empty-state">
+          <p>Connect a source and run Discover to see your data here</p>
+          {onConnectSource && <Button onClick={onConnectSource}>Connect a source</Button>}
+          {canManage &&
+            map.nodes
+              .filter(
+                (node): node is MapSource =>
+                  node.type === 'source' &&
+                  node.connected &&
+                  ['postgres', 'sqlite', 'csv', 'stripe', 'salesforce', 'noop'].includes(node.kind),
+              )
+              .map((source) => (
+                <Button
+                  key={source.id}
+                  disabled={busy}
+                  onClick={() =>
+                    void action(() => client.discoverSource(source.id), 'Catalog discovered')
+                  }
+                >
+                  Discover {source.name}
+                </Button>
+              ))}
+        </div>
       )}
-      <div
-        className="map-canvas"
-        tabIndex={0}
-        role="region"
-        aria-label="Data Map canvas"
-        onKeyDown={(e) => {
-          if (
-            (e.key === 'Delete' || e.key === 'Backspace') &&
-            !(e.target instanceof HTMLInputElement) &&
-            !(e.target instanceof HTMLTextAreaElement) &&
-            !busy
-          ) {
-            e.preventDefault();
-            removeSelected();
-          }
-        }}
-      >
-        <ReactFlow<MapNode, MapEdge>
-          nodes={visibleNodes}
-          edges={visibleEdges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          elevateNodesOnSelect={false}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={(connection) => {
-            if (!busy) connect(connection);
+      {layingOut && (
+        <div className="map-feedback">
+          <Skeleton label="Arranging Data Map…" />
+        </div>
+      )}
+      <div className="map-center">
+        <div
+          className="map-canvas"
+          tabIndex={0}
+          role="region"
+          aria-label="Data Map canvas"
+          onKeyDown={(e) => {
+            if (
+              (e.key === 'Delete' || e.key === 'Backspace') &&
+              !(e.target instanceof HTMLInputElement) &&
+              !(e.target instanceof HTMLTextAreaElement) &&
+              !busy
+            ) {
+              e.preventDefault();
+              removeSelected();
+            }
           }}
-          nodesConnectable={canManage}
-          connectionMode={ConnectionMode.Loose}
-          isValidConnection={(c) =>
-            !!c.sourceHandle &&
-            !!c.targetHandle &&
-            c.sourceHandle.startsWith('out:') !== c.targetHandle.startsWith('out:')
-          }
-          onNodeDragStop={(_, node) => {
-            const next = nodes.map((n) =>
-              n.id === node.id ? { ...n, position: node.position } : n,
-            );
-            persist(engineUrl, next);
-          }}
-          onEdgeMouseEnter={(_, edge) => {
-            setHover(edge.data?.description || '');
-            setHoveredEdge(edge.id);
-          }}
-          onEdgeMouseLeave={() => {
-            setHover('');
-            setHoveredEdge('');
-          }}
-          deleteKeyCode={null}
-          fitView
-          minZoom={0.1}
-          maxZoom={2}
         >
-          <Background gap={24} />
-          {minimap && (
-            <MiniMap
-              pannable
-              zoomable
-              nodeColor={(node) => (node.type === 'source' ? 'var(--line)' : 'var(--primary-300)')}
-            />
-          )}
-          <Panel position="bottom-left" className="map-tools">
-            <Button
-              aria-label="Fit to view"
-              title="Fit to view"
-              onClick={() => void fitView({ padding: 0.15 })}
-            >
-              <Icon name="fit" />
-            </Button>
-            <Button aria-label="Zoom out" onClick={() => void zoomOut()}>
-              <Icon name="minus" />
-            </Button>
-            <output aria-label="Zoom level">{Math.round(zoom * 100)}%</output>
-            <Button aria-label="Zoom in" onClick={() => void zoomIn()}>
-              <Icon name="plus" />
-            </Button>
-            <span className="tool-divider" />
-            <Button
-              disabled={layingOut}
-              title="Re-layout"
-              aria-label="Re-layout"
-              onClick={() => void arrange(false)}
-            >
-              <Icon name="refresh" />
-            </Button>
-            <Button
-              aria-label="Toggle minimap"
-              aria-pressed={minimap}
-              title="Toggle minimap"
-              onClick={() => setMinimap(!minimap)}
-            >
-              <Icon name="map" />
-            </Button>
-          </Panel>
-        </ReactFlow>
+          <ReactFlow<MapNode, MapEdge>
+            nodes={visibleNodes}
+            edges={visibleEdges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            elevateNodesOnSelect={false}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={(connection) => {
+              if (!busy) connect(connection);
+            }}
+            nodesConnectable={canManage}
+            connectionMode={ConnectionMode.Loose}
+            isValidConnection={(c) =>
+              !!c.sourceHandle &&
+              !!c.targetHandle &&
+              c.sourceHandle.startsWith('out:') !== c.targetHandle.startsWith('out:')
+            }
+            onNodeDragStop={(_, node) => {
+              const next = nodes.map((n) =>
+                n.id === node.id ? { ...n, position: node.position } : n,
+              );
+              persist(engineUrl, next);
+            }}
+            onEdgeMouseEnter={(_, edge) => {
+              setHover(edge.data?.description || '');
+              setHoveredEdge(edge.id);
+            }}
+            onEdgeMouseLeave={() => {
+              setHover('');
+              setHoveredEdge('');
+            }}
+            deleteKeyCode={null}
+            fitView
+            minZoom={0.1}
+            maxZoom={2}
+          >
+            <Background gap={24} size={1} color="var(--grid-dot)" />
+            <Panel position="top-left" className="map-legend">
+              {(['succeeded', 'running', 'queued', 'stale', 'failed', 'never synced'] as const).map(
+                (state) => (
+                  <button
+                    key={state}
+                    aria-pressed={stateFilter === state}
+                    onClick={() => setStateFilter(stateFilter === state ? '' : state)}
+                  >
+                    <StatusChip state={state} />
+                    <code>
+                      {
+                        map.nodes
+                          .filter((d): d is Dataset => d.type === 'dataset')
+                          .filter((d) => datasetState(d, jobs, runs) === state).length
+                      }
+                    </code>
+                  </button>
+                ),
+              )}
+            </Panel>
+            {minimap && (
+              <MiniMap
+                pannable
+                zoomable
+                nodeColor={(node) =>
+                  node.type === 'source' ? 'var(--line)' : 'var(--primary-300)'
+                }
+              />
+            )}
+            <Panel position="top-right" className="map-tools">
+              <Button
+                aria-label="Fit to view"
+                title="Fit to view"
+                onClick={() => void fitView({ padding: 0.15 })}
+              >
+                <Icon name="fit" />
+              </Button>
+              <Button aria-label="Zoom out" onClick={() => void zoomOut()}>
+                <Icon name="minus" />
+              </Button>
+              <output aria-label="Zoom level">{Math.round(zoom * 100)}%</output>
+              <Button aria-label="Zoom in" onClick={() => void zoomIn()}>
+                <Icon name="plus" />
+              </Button>
+              <span className="tool-divider" />
+              <Button
+                disabled={layingOut}
+                title="Re-layout"
+                aria-label="Re-layout"
+                onClick={() => void arrange(false)}
+              >
+                <Icon name="refresh" />
+              </Button>
+              <Button
+                aria-label="Toggle minimap"
+                aria-pressed={minimap}
+                title="Toggle minimap"
+                onClick={() => setMinimap(!minimap)}
+              >
+                <Icon name="map" />
+              </Button>
+            </Panel>
+          </ReactFlow>
+        </div>
+        <ConsoleDrawer
+          tab={consoleTab}
+          onTab={setConsoleTab}
+          collapsed={consoleCollapsed}
+          onCollapsed={onConsoleCollapsed}
+          events={events}
+        >
+          <RunHistory
+            jobs={jobs}
+            runs={selectedRuns}
+            busy={busy}
+            cancel={
+              selectedDataset && canCreateJob(selectedDataset)
+                ? (id) => void action(() => client.cancelRun(id), 'Cancellation requested')
+                : undefined
+            }
+          />
+        </ConsoleDrawer>
       </div>
       {(selectedDataset || selectedEdge) && (
-        <section className="map-inspector" aria-label="Selection inspector" tabIndex={0}>
-          <div className="panel-heading">
-            <h2>{selectedDataset ? 'Dataset' : 'Relationship'}</h2>
-            <Button
-              aria-label="Close inspector"
-              onClick={() => {
-                setNodes((previous) => previous.map((n) => ({ ...n, selected: false })));
-                setEdges((previous) => previous.map((e) => ({ ...e, selected: false })));
-              }}
-            >
-              <Icon name="close" />
-            </Button>
-          </div>
+        <Inspector
+          entityId={selectedDataset?.id ?? selectedEdge!.id}
+          label="Selection inspector"
+          title={selectedDataset ? datasetLabel(selectedDataset) : 'Relationship'}
+          onClose={() => {
+            setNodes((previous) => previous.map((node) => ({ ...node, selected: false })));
+            setEdges((previous) => previous.map((edge) => ({ ...edge, selected: false })));
+          }}
+        >
           <div className="inspector-content">
             {selectedDataset ? (
               <>
-                <span className="icon-tile tone-primary">
-                  <Icon name="table" />
-                </span>
-                <h2 className="mono">{datasetLabel(selectedDataset)}</h2>
-                <Pill tone={selectedDataset.stale ? 'warning' : 'neutral'}>
-                  {selectedDataset.stale ? 'Stale data' : 'Dataset'}
+                <Pill>
+                  <code title={selectedDataset.id}>{selectedDataset.id}</code>
                 </Pill>
-                <dl>
-                  <dt>Source</dt>
-                  <dd>{map.nodes.find((n) => n.id === selectedDataset.source_id)?.name}</dd>
-                  <dt>Rows</dt>
-                  <dd>{selectedDataset.row_count?.toLocaleString() ?? 'Never synced'}</dd>
-                  <dt>Last sync</dt>
-                  <dd title={selectedDataset.last_synced_at ?? undefined}>
-                    {relativeTime(selectedDataset.last_synced_at)}
-                  </dd>
+                <StatusChip state={datasetState(selectedDataset, jobs, runs)} />
+                <h3>Target</h3>
+                <div className="target-path">
+                  <code>
+                    {tableReference(selectedDataset.sql_schema, selectedDataset.sql_table)}
+                  </code>
+                  <CopyButton
+                    text={tableReference(selectedDataset.sql_schema, selectedDataset.sql_table)}
+                    label="Copy SQL target"
+                  />
+                </div>
+                <h3>Runtime</h3>
+                <dl className="runtime-grid">
+                  <div>
+                    <dt>Duration</dt>
+                    <dd title="Run duration is not exposed by this engine">—</dd>
+                  </div>
+                  <div>
+                    <dt>Rows</dt>
+                    <dd>{selectedDataset.row_count?.toLocaleString() ?? '—'}</dd>
+                  </div>
+                  <div>
+                    <dt>Last sync</dt>
+                    <dd title={selectedDataset.last_synced_at ?? undefined}>
+                      {relativeTime(selectedDataset.last_synced_at)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Mode</dt>
+                    <dd>{lastRun?.mode_used ?? selectedJobs[0]?.mode ?? '—'}</dd>
+                  </div>
                 </dl>
+                {canManage && (
+                  <>
+                    <h3>Policies</h3>
+                    <div className="actions">
+                      <Pill>
+                        {selectedDataset.row_filtered ? 'Row filter active' : 'No row filter'}
+                      </Pill>
+                      <Pill>
+                        {selectedDataset.columns.filter((c) => c.masked).length} masked columns
+                      </Pill>
+                    </div>
+                  </>
+                )}
                 <h3>Columns</h3>
                 <UiTable label="Dataset columns">
                   <thead>
@@ -647,7 +840,7 @@ function Canvas({
                 </UiTable>
                 {(['Incoming', 'Outgoing'] as const).map((direction) => (
                   <div key={direction}>
-                    <h3>{direction} relationships</h3>
+                    <h3>{direction === 'Incoming' ? 'Upstream' : 'Downstream'}</h3>
                     {map.edges
                       .filter(
                         (e) =>
@@ -670,7 +863,17 @@ function Canvas({
                             );
                           }}
                         >
-                          <Icon name="link" />
+                          <StatusChip
+                            state={(() => {
+                              const dataset = map.nodes.find(
+                                (node): node is Dataset =>
+                                  node.type === 'dataset' &&
+                                  node.id ===
+                                    (direction === 'Incoming' ? e.from_dataset : e.to_dataset),
+                              );
+                              return dataset ? datasetState(dataset, jobs, runs) : null;
+                            })()}
+                          />
                           <span>
                             {datasetLabel(
                               map.nodes.find(
@@ -692,6 +895,29 @@ function Canvas({
                   </div>
                 ))}
                 <div className="inspector-actions">
+                  {lastRun &&
+                    ['running', 'queued'].includes(lastRun.state) &&
+                    canCreateJob(selectedDataset) && (
+                      <Button
+                        variant="danger"
+                        disabled={busy}
+                        onClick={() =>
+                          void action(() => client.cancelRun(lastRun.id), 'Cancellation requested')
+                        }
+                      >
+                        Cancel run
+                      </Button>
+                    )}
+                  {selectedJobs[0] && canCreateJob(selectedDataset) && (
+                    <Button
+                      disabled={busy || selectedDataset.stale}
+                      onClick={() =>
+                        void action(() => client.runJob(selectedJobs[0].id), 'Run queued')
+                      }
+                    >
+                      Run now
+                    </Button>
+                  )}
                   <Button variant="primary" onClick={() => onQuery(selectedDataset)}>
                     <Icon name="sql" />
                     Query in SQL
@@ -701,7 +927,7 @@ function Canvas({
                       busy ||
                       !canCreateJob(selectedDataset) ||
                       selectedDataset.stale ||
-                      !['postgres', 'sqlite', 'csv', 'noop'].includes(
+                      !['postgres', 'sqlite', 'csv', 'stripe', 'salesforce', 'noop'].includes(
                         (
                           map.nodes.find((n) => n.id === selectedDataset.source_id) as
                             MapSource | undefined
@@ -754,7 +980,7 @@ function Canvas({
               )
             )}
           </div>
-        </section>
+        </Inspector>
       )}
       <span className="visually-hidden" role="status">
         {hover}
