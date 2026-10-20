@@ -362,6 +362,22 @@ async fn publish_snapshot(
     if !snapshot.is_dir() {
         std::fs::rename(output.join(format!(".staging-{id}")), &snapshot)?;
     }
+    // Read durable part metadata so resumed publications include checkpointed batches.
+    let mut row_count = 0_i64;
+    for entry in std::fs::read_dir(&snapshot)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && entry.path().extension().is_some_and(|ext| ext == "parquet")
+        {
+            let reader = straton_connectors::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(entry.path())?)?;
+            row_count = row_count
+                .checked_add(reader.metadata().file_metadata().num_rows())
+                .ok_or_else(|| anyhow::anyhow!("snapshot row count overflow"))?;
+        }
+    }
+    sqlx::query("UPDATE datasets SET row_count=?1,last_synced_at=?2 WHERE (source_id,name) IN (SELECT j.source_id,j.dataset FROM jobs j JOIN runs r ON r.job_id=j.id WHERE r.id=?3) OR (source_id='straton-local-lake' AND name IN (SELECT j.source_id || '/' || j.dataset FROM jobs j JOIN runs r ON r.job_id=j.id WHERE r.id=?3))")
+        .bind(row_count).bind(chrono::Utc::now().to_rfc3339()).bind(id)
+        .execute(&mut *tx).await?;
     let temporary = output.join("_current.partial");
     let mut file = std::fs::File::create(&temporary)?;
     file.write_all(id.as_bytes())?;
@@ -387,6 +403,7 @@ async fn publish_snapshot(
     }
     tx.commit().await?;
     event(events, id, "succeeded");
+    let _ = events.send(json!({"type":"catalog.changed"}));
     Ok(())
 }
 fn clean_snapshots(output: &Path, current: &str, active: &[String]) -> Result<()> {

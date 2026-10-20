@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "tauri": "tauri",
-    "test": "node tests/api.test.mjs && node tests/map.test.mjs && node tests/events.test.mjs && node tests/sql.test.mjs",
+    "test": "node tests/api.test.mjs && node tests/map.test.mjs && node tests/events.test.mjs && node tests/sql.test.mjs && node tests/view.test.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\""
   },
   "dependencies": {

@@ -4,7 +4,10 @@ import type { DataMap, Dataset, EdgeKind, MapSource } from './api';
 type LayoutData = { layoutPosition?: XYPosition };
 export type TableData = LayoutData & { dataset: Dataset; fk: string[]; highlighted: boolean };
 export type TableNode = Node<TableData, 'table'>;
-export type GroupNode = Node<LayoutData & { label: string; external: boolean }, 'source'>;
+export type GroupNode = Node<
+  LayoutData & { label: string; external: boolean; stale: boolean },
+  'source'
+>;
 export type MapNode = TableNode | GroupNode;
 export type MapEdge = Edge<{
   relationshipId: string;
@@ -12,8 +15,9 @@ export type MapEdge = Edge<{
   description: string;
   route?: XYPosition[][];
 }>;
-export const TABLE_HEADER_HEIGHT = 48;
+export const TABLE_HEADER_HEIGHT = 88;
 export const TABLE_ROW_HEIGHT = 32;
+export const TABLE_FOOTER_HEIGHT = 40;
 let elkPromise: Promise<ELK> | undefined;
 function storageKey(url: string) {
   return 'straton:map:v1:' + url;
@@ -57,8 +61,8 @@ function textWidth(text: string, header = false) {
     typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d');
   if (!textContext) return Array.from(text).length * (header ? 9 : 8);
   textContext.font = header
-    ? '650 14px "Segoe UI", system-ui, sans-serif'
-    : '12px "Segoe UI", system-ui, sans-serif';
+    ? '600 14px "Cascadia Code", ui-monospace, monospace'
+    : '12px "Cascadia Code", ui-monospace, monospace';
   return textContext.measureText(text).width;
 }
 export function tableSize(dataset: Dataset) {
@@ -66,14 +70,14 @@ export function tableSize(dataset: Dataset) {
     width: Math.ceil(
       Math.max(
         320,
-        textWidth(dataset.display_name ?? dataset.name, true) + 28 + (dataset.stale ? 60 : 0),
+        textWidth(dataset.display_name ?? dataset.name, true) + 84 + (dataset.stale ? 60 : 0),
         ...dataset.columns.map(
           (column) =>
             textWidth(column.name) + textWidth(column.type + (column.nullable ? '?' : '')) + 88,
         ),
       ),
     ),
-    height: TABLE_HEADER_HEIGHT + dataset.columns.length * TABLE_ROW_HEIGHT,
+    height: TABLE_HEADER_HEIGHT + dataset.columns.length * TABLE_ROW_HEIGHT + TABLE_FOOTER_HEIGHT,
   };
 }
 function portId(datasetId: string, handle: string) {
@@ -127,8 +131,8 @@ export function buildLayoutGraph(map: DataMap): ElkNode {
           return {
             id: dataset.id,
             ...size,
-            layoutOptions: { 'elk.portConstraints': 'FIXED_ORDER' },
-            // Row-sized ports fill each side, keeping FIXED_ORDER anchors at row centers.
+            layoutOptions: { 'elk.portConstraints': 'FIXED_POS' },
+            // Fixed positions keep anchors at row centers when the footer adds unported height.
             ports: rows.flatMap((row, index) => [
               {
                 id: portId(dataset.id, row.incoming),
@@ -288,7 +292,12 @@ export async function layout(map: DataMap): Promise<{ nodes: MapNode[]; edges: M
       id: source.id,
       type: 'source',
       position,
-      data: { label: source.name, external: !source.connected, layoutPosition: position },
+      data: {
+        label: source.name,
+        external: !source.connected,
+        stale: datasets.some((d) => d.source_id === source.id && d.stale),
+        layoutPosition: position,
+      },
       style: { width: group.width, height: group.height },
       className: source.connected ? 'source-group' : 'source-group external-group',
       connectable: false,
@@ -369,8 +378,15 @@ export function buildEdges(map: DataMap): MapEdge[] {
       },
       style: {
         stroke: colors[relationship.kind],
-        strokeWidth: relationship.kind === 'manual' ? 3 : 2,
-        strokeDasharray: relationship.kind === 'inferred' ? '6 5' : undefined,
+        strokeWidth: 1.5,
+        strokeDasharray:
+          relationship.kind === 'inferred'
+            ? '6 5'
+            : relationship.kind === 'manual'
+              ? '2 3'
+              : relationship.kind === 'lineage'
+                ? '8 3'
+                : undefined,
       },
       markerEnd: { type: 'arrowclosed', color: colors[relationship.kind] },
     }));

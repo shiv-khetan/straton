@@ -719,6 +719,19 @@ async fn sqlite_sync_and_crash_resume() {
         .unwrap();
     assert_eq!(lake["name"], "source/users");
     assert_eq!(lake["display_name"], "App DB.users");
+    assert_eq!(lake["row_count"], 5);
+    let synced_at = lake["last_synced_at"].as_str().unwrap();
+    chrono::DateTime::parse_from_rfc3339(synced_at).unwrap();
+    let source = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["source_id"] == "source" && n["name"] == "users")
+        .unwrap();
+    assert_eq!(source["row_count"], 5);
+    assert_eq!(source["last_synced_at"], synced_at);
+    assert_eq!(lake["sql_schema"], "local_lake");
+    assert_eq!(lake["sql_table"], "app_db_users");
     let lake_id = lake["id"].clone();
     sqlx::query("UPDATE sources SET name='Renamed App DB' WHERE id='source'")
         .execute(&f.pool)
@@ -981,6 +994,13 @@ async fn snapshot_publication_failure_cancellation_and_recovery() {
         .execute(&f.pool)
         .await
         .unwrap();
+    sqlx::query(
+        "INSERT INTO sources(id,name,kind) VALUES('straton-local-lake','Local lake','parquet')",
+    )
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO datasets(id,source_id,name) VALUES('origin','source','test'),('lake','straton-local-lake','source/test')").execute(&f.pool).await.unwrap();
     let output = f.dir.join("data/source/test");
     let previous = f.enqueue().await;
     runner::state(&f.pool, &f.events, &previous, "succeeded", None)
@@ -1009,6 +1029,11 @@ async fn snapshot_publication_failure_cancellation_and_recovery() {
     .await
     .unwrap();
     assert_eq!(f.state(&failed).await, "failed");
+    let count: Option<i64> = sqlx::query_scalar("SELECT row_count FROM datasets WHERE id='origin'")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, None);
     assert_eq!(
         std::fs::read_to_string(output.join("_current")).unwrap(),
         previous
@@ -1072,6 +1097,15 @@ async fn snapshot_publication_failure_cancellation_and_recovery() {
     .await
     .unwrap();
     assert_eq!(f.state(&resumed).await, "succeeded");
+    for dataset in ["origin", "lake"] {
+        let row = sqlx::query("SELECT row_count,last_synced_at FROM datasets WHERE id=?")
+            .bind(dataset)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<i64, _>("row_count"), 0);
+        chrono::DateTime::parse_from_rfc3339(row.get::<&str, _>("last_synced_at")).unwrap();
+    }
     assert_eq!(
         std::fs::read_to_string(output.join("_current")).unwrap(),
         resumed
@@ -1179,13 +1213,13 @@ async fn sql_rest_current_snapshot_preview_explain_and_audit() {
     assert!(
         tables
             .iter()
-            .any(|t| t["schema"] == "local_lake" && t["name"] == "source/users")
+            .any(|t| t["schema"] == "local_lake" && t["name"] == "app_db_users")
     );
     let (status, lake) = request(
         &a,
         "POST",
         "/v1/sql",
-        json!({"query":"SELECT id,name FROM local_lake.\"source/users\" ORDER BY id"}),
+        json!({"query":"SELECT id,name FROM local_lake.\"app_db_users\" ORDER BY id"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{lake}");
@@ -1535,4 +1569,31 @@ fn sql_config_defaults_and_remote_tls_rule() {
     assert!(c.validate().is_ok());
     c.sql.query_timeout_secs = f64::NAN;
     assert!(c.validate().is_err());
+}
+
+#[tokio::test]
+async fn dataset_metrics_start_null_and_sql_aliases_are_deduplicated() {
+    let f = Fixture::new().await;
+    sqlx::query("INSERT INTO sources(id,name,kind) VALUES('other','App DB','sqlite'),('straton-local-lake','Local lake','parquet')").execute(&f.pool).await.unwrap();
+    sqlx::query("UPDATE sources SET name='App DB' WHERE id='source'")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO datasets(id,source_id,name) VALUES('a','straton-local-lake','other/users'),('b','straton-local-lake','source/users'),('c','source','123 table')").execute(&f.pool).await.unwrap();
+    let map = crate::catalog::datamap(&f.pool).await.unwrap();
+    let nodes = map["nodes"].as_array().unwrap();
+    for id in ["a", "b", "c"] {
+        let node = nodes.iter().find(|n| n["id"] == id).unwrap();
+        assert!(node["row_count"].is_null());
+        assert!(node["last_synced_at"].is_null());
+    }
+    let a = nodes.iter().find(|n| n["id"] == "a").unwrap();
+    let b = nodes.iter().find(|n| n["id"] == "b").unwrap();
+    assert_eq!(a["sql_table"], "app_db_users");
+    assert_eq!(b["sql_table"], "app_db_users_2");
+    assert_eq!(
+        nodes.iter().find(|n| n["id"] == "c").unwrap()["sql_table"],
+        "123 table"
+    );
+    f.close().await;
 }

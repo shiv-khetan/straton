@@ -11,6 +11,7 @@ import {
   routedEdgePath,
   tableSize,
   TABLE_HEADER_HEIGHT,
+  TABLE_FOOTER_HEIGHT,
   TABLE_ROW_HEIGHT,
 } from '../src/map-model.ts';
 const map = {
@@ -224,7 +225,7 @@ for (const group of elkGraph.children) {
   for (const table of group.children) {
     const data = liveMap.nodes.find((n) => n.id === table.id);
     assert.deepEqual({ width: table.width, height: table.height }, tableSize(data));
-    assert.equal(table.layoutOptions['elk.portConstraints'], 'FIXED_ORDER');
+    assert.equal(table.layoutOptions['elk.portConstraints'], 'FIXED_POS');
     assert.equal(table.ports.length, 2 * (data.columns.length + 1));
     for (const [side, direction] of [
       ['WEST', 'in'],
@@ -269,7 +270,7 @@ const longDataset = {
   ],
 };
 assert.ok(tableSize(longDataset).width > 600);
-assert.equal(tableSize(longDataset).height, TABLE_HEADER_HEIGHT + TABLE_ROW_HEIGHT);
+assert.equal(tableSize(longDataset).height, TABLE_HEADER_HEIGHT + TABLE_ROW_HEIGHT + TABLE_FOOTER_HEIGHT);
 
 // ELK can store an edge at root while its coordinates belong to a nested container.
 const nested = {

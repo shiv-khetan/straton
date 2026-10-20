@@ -56,6 +56,10 @@ export interface Dataset {
   source_id: string;
   name: string;
   stale: boolean;
+  row_count: number | null;
+  last_synced_at: string | null;
+  sql_schema: string;
+  sql_table: string;
   columns: Column[];
 }
 export type EdgeKind = 'declared_fk' | 'inferred' | 'lineage' | 'manual';

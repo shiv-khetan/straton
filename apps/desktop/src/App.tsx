@@ -15,9 +15,24 @@ import type {
   Status,
 } from './api';
 import SqlView from './Sql';
+import Dashboard from './Dashboard';
+import {
+  Breadcrumb,
+  Button,
+  Card,
+  Icon,
+  Pill,
+  Sheet,
+  Toast,
+  Table as UiTable,
+  stateTone,
+} from './ui';
+import type { IconName } from './ui';
+import { backupTime, isLoopback, relativeTime } from './view-model';
+import { tableReference } from './sql-model';
 const DataMapView = lazy(() => import('./DataMap'));
 const emptyMap: DataMap = { nodes: [], edges: [] };
-type Page = 'Dashboard' | 'Sources' | 'Jobs' | 'Data Map' | 'SQL' | 'Connect';
+type Page = 'Dashboard' | 'Sources' | 'Jobs' | 'Data Map' | 'SQL' | 'Connect' | 'Backups';
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="field">
@@ -52,6 +67,37 @@ export default function App() {
   );
 }
 function AppContent() {
+  const [collapsed, setCollapsed] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      const saved = localStorage.getItem('straton:theme');
+      if (saved === 'light' || saved === 'dark') return saved;
+    } catch {
+      /* Use system preference when storage is unavailable. */
+    }
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const follow = () => {
+      try {
+        if (localStorage.getItem('straton:theme')) return;
+      } catch {
+        /* Follow system preference. */
+      }
+      setTheme(media.matches ? 'dark' : 'light');
+    };
+    media.addEventListener('change', follow);
+    return () => media.removeEventListener('change', follow);
+  }, []);
+  const [sheet, setSheet] = useState<'source' | 'job' | null>(null);
+  const [jobSeed, setJobSeed] = useState<Dataset | null>(null);
+  const [querySeed, setQuerySeed] = useState('SELECT 1;');
+  const [selection, setSelection] = useState('');
+  const [backups, setBackups] = useState<string[]>([]);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [page, setPage] = useState<Page>('Connect');
   const [error, setError] = useState('');
@@ -92,10 +138,12 @@ function AppContent() {
       client.jobs(),
       client.runs(),
       client.datamap(),
+      client.backups(),
     ])
-      .then(([s, so, j, r, m]) => {
+      .then(([s, so, j, r, m, b]) => {
         if (active) {
           setStatus(s);
+          setBackups(b);
           setSources(so);
           setJobs(j);
           setRuns(r);
@@ -141,159 +189,286 @@ function AppContent() {
   }
   const datasets = map.nodes.filter((node): node is Dataset => node.type === 'dataset');
   return (
-    <div className="shell">
-      <aside>
-        <div className="brand">◈ Straton</div>
-        <p className="sidebar-caption">Engine workspace</p>
-        <nav aria-label="Main navigation">
-          {(['Dashboard', 'Sources', 'Jobs', 'Data Map', 'SQL', 'Connect'] as Page[]).map(
-            (item) => (
-              <button
-                key={item}
-                aria-current={page === item ? 'page' : undefined}
-                disabled={!connection && item !== 'Connect'}
-                onClick={() => setPage(item)}
-              >
-                {item}
-              </button>
-            ),
-          )}
+    <div className={'shell' + (collapsed ? ' rail' : '')}>
+      <aside className="sidebar">
+        <div className="workspace-card">
+          <span className="workspace-mark">
+            <Icon name="source" size={20} />
+          </span>
+          <div className="rail-hide">
+            <strong>Straton</strong>
+            <small>{connection ? new URL(connection.url).hostname : 'Engine workspace'}</small>
+          </div>
+          <span className="rail-hide">
+            <Pill tone="primary">
+              {connection && !isLoopback(connection.url) ? 'REMOTE' : 'LOCAL'}
+            </Pill>
+          </span>
+        </div>
+        <Button
+          className="collapse-button"
+          onClick={() => setCollapsed(!collapsed)}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!collapsed}
+        >
+          <Icon name="collapse" />
+          <span className="rail-hide">Collapse sidebar</span>
+        </Button>
+        <nav className="main-nav" aria-label="Main navigation">
+          {(
+            [
+              {
+                label: 'Main',
+                items: [
+                  ['Dashboard', 'dashboard'],
+                  ['Data Map', 'map'],
+                ],
+              },
+              {
+                label: 'Data',
+                items: [
+                  ['Sources', 'source'],
+                  ['Jobs', 'jobs'],
+                  ['SQL', 'sql'],
+                ],
+              },
+              {
+                label: 'System',
+                items: [
+                  ['Backups', 'backup'],
+                  ['Connect', 'connect'],
+                ],
+              },
+            ] as { label: string; items: [Page, IconName][] }[]
+          ).map((group) => (
+            <div className="nav-group" key={group.label}>
+              <p className="nav-label rail-hide">{group.label}</p>
+              {group.items.map(([item, icon]) => (
+                <button
+                  key={item}
+                  title={item}
+                  aria-label={item}
+                  aria-current={page === item ? 'page' : undefined}
+                  disabled={!connection && item !== 'Connect'}
+                  onClick={() => {
+                    setPage(item);
+                    setSelection('');
+                  }}
+                >
+                  <Icon name={icon} />
+                  <span className="rail-hide">{item}</span>
+                </button>
+              ))}
+            </div>
+          ))}
         </nav>
-        <div className="connection-state">
-          <span className={live === 'Live' ? 'live-dot' : ''}>●</span> {live}
-          <small>{connection?.url || 'No engine connected'}</small>
+        <div
+          className="connection-state"
+          role="status"
+          aria-label={live + ' · ' + (connection?.url ?? 'No engine connected')}
+          title={live + ': ' + (connection?.url ?? 'No engine connected')}
+        >
+          <div>
+            <span className={'connection-dot' + (live === 'Live' ? ' live' : '')} />
+            <span className="rail-hide">{live}</span>
+          </div>
+          <small className="rail-hide">
+            <code>{connection?.url || 'No engine connected'}</code>
+          </small>
         </div>
       </aside>
       <main>
-        <header>
-          <div>
-            <h1>{page}</h1>
-            <p>
-              {page === 'Data Map'
-                ? 'Explore the catalog, trace relationships, and connect columns.'
-                : page === 'Connect'
-                  ? 'Connect to your self-hosted engine.'
-                  : 'Your data operations, in one place.'}
-            </p>
-          </div>
-          {connection && (
-            <button disabled={busy} onClick={refresh}>
-              Refresh
-            </button>
-          )}
-        </header>
-        {error && (
-          <div className="message error" role="alert">
-            {error}
-            <button onClick={() => setError('')} aria-label="Dismiss error">
-              ×
-            </button>
-          </div>
-        )}
-        {notice && (
-          <div className="message" role="status">
-            {notice}
-          </div>
-        )}
-        {page === 'Connect' && (
-          <Connect
-            connection={connection}
-            busy={busy}
-            connect={(c) =>
-              action(async () => {
-                await api(c).status();
-                await invoke('save_connection', c as unknown as Record<string, unknown>);
-                setConnection(c);
-                setPage('Dashboard');
-              }, 'Connection tested and saved in OS keychain')
-            }
-            forget={() =>
-              action(async () => {
-                await invoke('forget_connection');
-                setConnection(null);
-                setStatus(null);
-                setSources([]);
-                setJobs([]);
-                setRuns([]);
-                setMap(emptyMap);
-                setEvents([]);
-                setLive('Disconnected');
-              }, 'Connection forgotten')
-            }
+        <header className="topbar">
+          <Breadcrumb
+            items={['Engine', page, ...(page === 'Data Map' && selection ? [selection] : [])]}
           />
-        )}
-        {client && page === 'Dashboard' && (
-          <>
-            <section className="status-strip" aria-label="Engine status">
-              <div>
-                Version<strong>{status?.version ?? 'Loading…'}</strong>
-              </div>
-              <div>
-                Uptime
-                <strong>
-                  {status ? Math.floor(status.uptime_seconds / 60) + ' minutes' : 'Loading…'}
-                </strong>
-              </div>
-              <div>
-                Queued<strong>{status?.queue_depth ?? '…'}</strong>
-              </div>
-              <div>
-                Last backup
-                <strong className="path">{status?.last_backup || 'No backup yet'}</strong>
-              </div>
-            </section>
-            <div className="section-heading">
-              <h2>Recent activity</h2>
-              <button
-                className="primary"
+          <div className="actions">
+            <Button
+              aria-label={'Switch to ' + (theme === 'light' ? 'dark' : 'light') + ' theme'}
+              title="Toggle theme"
+              onClick={() => {
+                const next = theme === 'light' ? 'dark' : 'light';
+                setTheme(next);
+                try {
+                  localStorage.setItem('straton:theme', next);
+                } catch {
+                  /* Theme works without persistence. */
+                }
+              }}
+            >
+              <Icon name={theme === 'light' ? 'moon' : 'sun'} />
+            </Button>
+            {connection && (
+              <Button disabled={busy} onClick={refresh}>
+                <Icon name="refresh" />
+                Refresh
+              </Button>
+            )}
+            {client && (page === 'Sources' || page === 'Jobs') && (
+              <Button
+                variant="primary"
+                disabled={busy}
+                onClick={() => {
+                  setJobSeed(null);
+                  setSheet(page === 'Sources' ? 'source' : 'job');
+                }}
+              >
+                <Icon name="plus" />
+                {page === 'Sources' ? 'Add source' : 'New job'}
+              </Button>
+            )}
+            {client && page === 'Backups' && (
+              <Button
+                variant="primary"
                 disabled={busy}
                 onClick={() => void action(() => client.backup(), 'Backup created')}
               >
-                Backup now
-              </button>
-            </div>
-            {(['running', 'queued', 'failed'] as const).map((state) => (
-              <section key={state}>
-                <h3>
-                  {state}{' '}
-                  <span className="count">{runs.filter((r) => r.state === state).length}</span>
-                </h3>
-                <RunTable runs={runs.filter((r) => r.state === state).slice(0, 8)} jobs={jobs} />
-              </section>
-            ))}
-            <h2>Latest runs</h2>
-            <RunTable runs={runs.slice(0, 12)} jobs={jobs} />
-          </>
-        )}
-        {client && page === 'Sources' && (
-          <Sources sources={sources} client={client} busy={busy} action={action} />
-        )}
-        {client && page === 'Jobs' && (
-          <Jobs
-            sources={sources}
-            datasets={datasets}
-            jobs={jobs}
-            runs={runs}
-            events={events}
-            client={client}
-            action={action}
-            busy={busy}
-          />
-        )}
-        {client && page === 'SQL' && <SqlView client={client} revision={revision} />}
-        {client && connection && page === 'Data Map' && (
-          <ErrorBoundary>
-            <Suspense fallback={<p role="status">Loading Data Map…</p>}>
-              <DataMapView
-                map={map}
-                engineUrl={connection.url}
-                client={client}
-                action={action}
-                busy={busy}
-              />
-            </Suspense>
-          </ErrorBoundary>
-        )}
+                <Icon name="backup" />
+                Back up now
+              </Button>
+            )}
+          </div>
+        </header>
+        <div
+          className={
+            'page-content' +
+            (page === 'Data Map' ? ' map-page' : '') +
+            (page === 'Connect' ? ' connect-page' : '')
+          }
+        >
+          {error && <Toast message={error} error onClose={() => setError('')} />}
+          {notice && <Toast message={notice} onClose={() => setNotice('')} />}
+          {page === 'Connect' && (
+            <Connect
+              connection={connection}
+              busy={busy}
+              connect={(c) =>
+                action(async () => {
+                  await api(c).status();
+                  await invoke('save_connection', c as unknown as Record<string, unknown>);
+                  setConnection(c);
+                  setPage('Dashboard');
+                }, 'Connection tested and saved in OS keychain')
+              }
+              forget={() =>
+                action(async () => {
+                  await invoke('forget_connection');
+                  setConnection(null);
+                  setStatus(null);
+                  setSources([]);
+                  setJobs([]);
+                  setRuns([]);
+                  setMap(emptyMap);
+                  setEvents([]);
+                  setBackups([]);
+                  setLive('Disconnected');
+                }, 'Connection forgotten')
+              }
+            />
+          )}
+          {client && page === 'Dashboard' && (
+            <Dashboard datasets={datasets} runs={runs} jobs={jobs} status={status}>
+              <RunTable runs={runs.slice(0, 12)} jobs={jobs} />
+            </Dashboard>
+          )}
+          {client && page === 'Backups' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <h1>Backups</h1>
+                  <p className="hint">Engine snapshots, ready when you need them.</p>
+                </div>
+              </div>
+              <Card>
+                <div className="table-wrap" tabIndex={0} role="region" aria-label="Engine backups">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th scope="col">Filename</th>
+                        <th scope="col">Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {backups.map((path) => {
+                        const time = backupTime(path);
+                        return (
+                          <tr key={path}>
+                            <td title={path}>
+                              <code>{path.split(/[\\/]/).pop()}</code>
+                            </td>
+                            <td title={time ? new Date(time).toLocaleString() : path}>
+                              {relativeTime(time)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {!backups.length && (
+                  <p className="empty">
+                    No backups yet. Create your first snapshot with Back up now.
+                  </p>
+                )}
+              </Card>
+            </>
+          )}
+          {client && page === 'Sources' && (
+            <Sources
+              sources={sources}
+              client={client}
+              busy={busy}
+              action={action}
+              open={sheet === 'source'}
+              onClose={() => setSheet(null)}
+            />
+          )}
+          {client && page === 'Jobs' && (
+            <Jobs
+              sources={sources}
+              datasets={datasets}
+              jobs={jobs}
+              runs={runs}
+              events={events}
+              open={sheet === 'job'}
+              onClose={() => setSheet(null)}
+              seed={jobSeed}
+              client={client}
+              action={action}
+              busy={busy}
+            />
+          )}
+          {client && page === 'SQL' && (
+            <SqlView client={client} revision={revision} initialQuery={querySeed} />
+          )}
+          {client && connection && page === 'Data Map' && (
+            <ErrorBoundary>
+              <Suspense fallback={<p role="status">Loading Data Map…</p>}>
+                <DataMapView
+                  map={map}
+                  onSelection={setSelection}
+                  onQuery={(dataset) => {
+                    setQuerySeed(
+                      'SELECT * FROM ' +
+                        tableReference(dataset.sql_schema, dataset.sql_table) +
+                        ' LIMIT 100',
+                    );
+                    setPage('SQL');
+                  }}
+                  onCreateJob={(dataset) => {
+                    setJobSeed(dataset);
+                    setSheet('job');
+                    setPage('Jobs');
+                  }}
+                  engineUrl={connection.url}
+                  client={client}
+                  action={action}
+                  busy={busy}
+                />
+              </Suspense>
+            </ErrorBoundary>
+          )}
+        </div>
       </main>
     </div>
   );
@@ -328,7 +503,12 @@ function Connect({
     }
   }
   return (
-    <section className="form-section">
+    <section className="card connect-card">
+      <div className="icon-tile tone-primary">
+        <Icon name="connect" size={24} />
+      </div>
+      <h1>Connect your engine</h1>
+      <p className="hint">Your workspace starts with a connection.</p>
       <form onSubmit={submit}>
         <Field label="Engine URL">
           <input type="url" required value={url} onChange={(e) => setUrl(e.target.value)} />
@@ -374,11 +554,15 @@ function Sources({
   client,
   action,
   busy,
+  open,
+  onClose,
 }: {
   sources: Source[];
   client: Api;
   action: Action;
   busy: boolean;
+  open: boolean;
+  onClose: () => void;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -417,99 +601,118 @@ function Sources({
         if (editing) await client.updateSource(editing, body);
         else await client.createSource(body);
         reset();
+        onClose();
       },
       editing ? 'Source updated' : 'Source created',
     );
   }
   return (
     <>
-      <section>
-        <h2>Connected systems</h2>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Kind</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sources.map((source) => (
-                <tr key={source.id}>
-                  <td>{source.name}</td>
-                  <td>{source.kind}</td>
-                  <td>
-                    <div className="actions">
-                      {['postgres', 'sqlite', 'csv', 'external'].includes(source.kind) && (
-                        <>
-                          <button
-                            disabled={busy}
-                            onClick={() => {
-                              setEditing(source.id);
-                              setName(source.name);
-                              setKind(source.kind);
-                              setConfig(source.config);
-                              setSecret('');
-                            }}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            disabled={busy}
-                            onClick={() => {
-                              if (window.confirm('Delete source “' + source.name + '”?'))
-                                void action(() => client.deleteSource(source.id), 'Source deleted');
-                            }}
-                          >
-                            Delete
-                          </button>
-                        </>
-                      )}
-                      {!['external', 'parquet'].includes(source.kind) && (
-                        <>
-                          <button
-                            disabled={busy}
-                            onClick={() =>
-                              void action(
-                                () => client.checkSource(source.id),
-                                'Connection check passed',
-                              )
-                            }
-                          >
-                            Check
-                          </button>
-                          <button
-                            disabled={busy}
-                            onClick={() =>
-                              void action(
-                                () => client.discoverSource(source.id),
-                                'Catalog discovered',
-                              )
-                            }
-                          >
-                            Discover
-                          </button>
-                        </>
-                      )}
-                      {source.kind === 'external' && (
-                        <button disabled={busy} onClick={() => setManual(source.id)}>
-                          Add dataset
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div className="page-heading">
+        <div>
+          <h1>Sources</h1>
+          <p className="hint">Connect systems and discover their datasets.</p>
         </div>
+      </div>
+      <Card>
+        <h2>Connected systems</h2>
+        <UiTable label="Sources">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Status</th>
+              <th scope="col">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sources.map((source) => (
+              <tr key={source.id}>
+                <td>{source.name}</td>
+                <td>
+                  <code>{source.kind}</code>
+                </td>
+                <td>
+                  <Pill tone={source.kind === 'external' ? 'neutral' : 'success'}>
+                    {source.kind === 'external' ? 'External' : 'Configured'}
+                  </Pill>
+                </td>
+                <td>
+                  <div className="actions">
+                    {['postgres', 'sqlite', 'csv', 'external'].includes(source.kind) && (
+                      <>
+                        <button
+                          disabled={busy}
+                          onClick={() => {
+                            setEditing(source.id);
+                            setName(source.name);
+                            setKind(source.kind);
+                            setConfig(source.config);
+                            setSecret('');
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          disabled={busy}
+                          onClick={() => {
+                            if (window.confirm('Delete source “' + source.name + '”?'))
+                              void action(() => client.deleteSource(source.id), 'Source deleted');
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </>
+                    )}
+                    {!['external', 'parquet'].includes(source.kind) && (
+                      <>
+                        <button
+                          disabled={busy}
+                          onClick={() =>
+                            void action(
+                              () => client.checkSource(source.id),
+                              'Connection check passed',
+                            )
+                          }
+                        >
+                          Check
+                        </button>
+                        <button
+                          disabled={busy}
+                          onClick={() =>
+                            void action(
+                              () => client.discoverSource(source.id),
+                              'Catalog discovered',
+                            )
+                          }
+                        >
+                          Discover
+                        </button>
+                      </>
+                    )}
+                    {source.kind === 'external' && (
+                      <button disabled={busy} onClick={() => setManual(source.id)}>
+                        Add dataset
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </UiTable>
         {!sources.length && (
-          <p className="empty">Add a source below, then Discover to populate your Data Map.</p>
+          <p className="empty">Add a source, then Discover to populate your Data Map.</p>
         )}
-      </section>
-      <section className="form-section">
-        <h2>{editing ? 'Edit source' : 'Add source'}</h2>
+      </Card>
+      <Sheet
+        open={open || !!editing}
+        title={editing ? 'Edit source' : 'Add source'}
+        onClose={() => {
+          reset();
+          onClose();
+        }}
+      >
         <form onSubmit={submit}>
           <div className="form-grid">
             <Field label="Name">
@@ -570,10 +773,13 @@ function Sources({
             )}
           </div>
         </form>
-      </section>
+      </Sheet>
       {manual && (
-        <section className="form-section">
-          <h2>Add dataset to {sources.find((s) => s.id === manual)?.name}</h2>
+        <Sheet
+          open={!!manual}
+          title={'Add dataset to ' + sources.find((s) => s.id === manual)?.name}
+          onClose={() => setManual('')}
+        >
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -666,7 +872,7 @@ function Sources({
               </button>
             </div>
           </form>
-        </section>
+        </Sheet>
       )}
     </>
   );
@@ -680,6 +886,9 @@ function Jobs({
   client,
   action,
   busy,
+  open,
+  onClose,
+  seed,
 }: {
   sources: Source[];
   datasets: Dataset[];
@@ -689,78 +898,95 @@ function Jobs({
   client: Api;
   action: Action;
   busy: boolean;
+  open: boolean;
+  onClose: () => void;
+  seed: Dataset | null;
 }) {
-  const [name, setName] = useState('');
-  const [source, setSource] = useState('');
-  const [dataset, setDataset] = useState('');
+  const [name, setName] = useState(seed ? 'Sync ' + seed.name : '');
+  const [source, setSource] = useState(seed?.source_id ?? '');
+  const [dataset, setDataset] = useState(seed?.name ?? '');
+  useEffect(() => {
+    if (open) {
+      setName(seed ? 'Sync ' + seed.name : '');
+      setSource(seed?.source_id ?? '');
+      setDataset(seed?.name ?? '');
+    }
+  }, [seed, open]);
   const [cron, setCron] = useState('0 */5 * * * *');
   const [jobFilter, setJobFilter] = useState('');
   const [stateFilter, setStateFilter] = useState('');
   return (
     <>
-      <section>
+      <div className="page-heading">
+        <div>
+          <h1>Jobs</h1>
+          <p className="hint">Keep your local lake in sync.</p>
+        </div>
+      </div>
+      <Card>
         <h2>Sync jobs</h2>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Dataset</th>
-                <th>Schedule (UTC)</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.map((job) => (
-                <tr key={job.id}>
-                  <td>
-                    {job.name}
-                    <small>{job.enabled ? 'Enabled' : 'Disabled'}</small>
-                  </td>
-                  <td>{job.dataset}</td>
-                  <td>
-                    <code>{job.cron || 'Manual'}</code>
-                  </td>
-                  <td>
-                    <div className="actions">
+        <UiTable label="Sync jobs">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Dataset</th>
+              <th scope="col">Schedule (UTC)</th>
+              <th scope="col">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {jobs.map((job) => (
+              <tr key={job.id}>
+                <td>
+                  {job.name}
+                  <small>
+                    <Pill tone={job.enabled ? 'success' : 'neutral'}>
+                      {job.enabled ? 'Enabled' : 'Disabled'}
+                    </Pill>
+                  </small>
+                </td>
+                <td>{job.dataset}</td>
+                <td>
+                  <code>{job.cron || 'Manual'}</code>
+                </td>
+                <td>
+                  <div className="actions">
+                    <button
+                      disabled={busy}
+                      onClick={() => void action(() => client.runJob(job.id), 'Run queued')}
+                    >
+                      Run now
+                    </button>
+                    {!job.builtin && job.source_id && (
                       <button
                         disabled={busy}
-                        onClick={() => void action(() => client.runJob(job.id), 'Run queued')}
+                        onClick={() =>
+                          void action(
+                            () =>
+                              client.updateJob(job.id, {
+                                name: job.name,
+                                source_id: job.source_id!,
+                                dataset: job.dataset,
+                                cron: job.cron,
+                                enabled: !job.enabled,
+                              }),
+                            'Job updated',
+                          )
+                        }
                       >
-                        Run now
+                        {job.enabled ? 'Disable' : 'Enable'}
                       </button>
-                      {!job.builtin && job.source_id && (
-                        <button
-                          disabled={busy}
-                          onClick={() =>
-                            void action(
-                              () =>
-                                client.updateJob(job.id, {
-                                  name: job.name,
-                                  source_id: job.source_id!,
-                                  dataset: job.dataset,
-                                  cron: job.cron,
-                                  enabled: !job.enabled,
-                                }),
-                              'Job updated',
-                            )
-                          }
-                        >
-                          {job.enabled ? 'Disable' : 'Enable'}
-                        </button>
-                      )}
-                      <button onClick={() => setJobFilter(job.id)}>History</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    )}
+                    <button onClick={() => setJobFilter(job.id)}>History</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </UiTable>
         {!jobs.length && <p className="empty">Create a job after discovering a source.</p>}
-      </section>
-      <section className="form-section">
-        <h2>Create sync job</h2>
+      </Card>
+      <Sheet open={open} title="Create sync job" onClose={onClose}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -773,6 +999,7 @@ function Jobs({
                 enabled: true,
               });
               setName('');
+              onClose();
             }, 'Job created');
           }}
         >
@@ -827,8 +1054,8 @@ function Jobs({
             Create job
           </button>
         </form>
-      </section>
-      <section>
+      </Sheet>
+      <Card>
         <h2>Run history</h2>
         <div className="toolbar">
           <Field label="Job">
@@ -859,8 +1086,8 @@ function Jobs({
           cancel={(id) => void action(() => client.cancelRun(id), 'Cancellation requested')}
           busy={busy}
         />
-      </section>
-      <section>
+      </Card>
+      <Card>
         <h2>Live activity</h2>
         <p className="hint">
           Run state events from the engine. Historical log text is not exposed by this engine
@@ -876,7 +1103,7 @@ function Jobs({
               </div>
             ))}
         </div>
-      </section>
+      </Card>
     </>
   );
 }
@@ -892,42 +1119,42 @@ function RunTable({
   busy?: boolean;
 }) {
   return runs.length ? (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Job / run</th>
-            <th>State</th>
-            <th>Attempt</th>
-            <th>Batches</th>
-            <th>Details</th>
+    <UiTable label="Run history">
+      <thead>
+        <tr>
+          <th scope="col">Job / run</th>
+          <th scope="col">State</th>
+          <th scope="col">Attempt</th>
+          <th scope="col">Batches</th>
+          <th scope="col">Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {runs.map((run) => (
+          <tr key={run.id}>
+            <td>
+              {jobs.find((j) => j.id === run.job_id)?.name || run.job_id}
+              <small>
+                <code>{run.id}</code>
+              </small>
+            </td>
+            <td>
+              <Pill tone={stateTone(run.state)}>{run.state}</Pill>
+            </td>
+            <td>{run.attempt}</td>
+            <td>{run.committed_batches}</td>
+            <td>
+              {run.error || new Date(run.available_at * 1000).toLocaleString()}
+              {cancel && ['queued', 'running'].includes(run.state) && (
+                <button disabled={busy} onClick={() => cancel(run.id)}>
+                  Cancel run
+                </button>
+              )}
+            </td>
           </tr>
-        </thead>
-        <tbody>
-          {runs.map((run) => (
-            <tr key={run.id}>
-              <td>
-                {jobs.find((j) => j.id === run.job_id)?.name || run.job_id}
-                <small>{run.id}</small>
-              </td>
-              <td>
-                <span className={'badge ' + run.state}>{run.state}</span>
-              </td>
-              <td>{run.attempt}</td>
-              <td>{run.committed_batches}</td>
-              <td>
-                {run.error || new Date(run.available_at * 1000).toLocaleString()}
-                {cancel && ['queued', 'running'].includes(run.state) && (
-                  <button disabled={busy} onClick={() => cancel(run.id)}>
-                    Cancel run
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+        ))}
+      </tbody>
+    </UiTable>
   ) : (
     <p className="empty">No matching runs.</p>
   );

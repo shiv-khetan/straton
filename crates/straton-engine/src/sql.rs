@@ -158,6 +158,66 @@ fn schema_name(name: &str) -> String {
     }
     out
 }
+
+fn unique_name(base: String, used: &mut BTreeSet<String>) -> String {
+    let mut name = base.clone();
+    let mut suffix = 2;
+    while !used.insert(name.clone()) {
+        name = format!("{base}_{suffix}");
+        suffix += 1;
+    }
+    name
+}
+// Both the map and SQL catalog use the same aliases, including collision suffixes.
+pub fn catalog_names(
+    sources: &[sqlx::sqlite::SqliteRow],
+    datasets: &[sqlx::sqlite::SqliteRow],
+) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+    let mut used = BTreeSet::from([
+        "public".to_owned(),
+        "information_schema".to_owned(),
+        "pg_catalog".to_owned(),
+    ]);
+    let schemas = sources
+        .iter()
+        .map(|s| {
+            (
+                s.get::<String, _>("id"),
+                unique_name(schema_name(s.get("name")), &mut used),
+            )
+        })
+        .collect();
+    let mut ordered: Vec<_> = datasets.iter().collect();
+    ordered.sort_by_key(|d| (d.get::<String, _>("source_id"), d.get::<String, _>("name")));
+    let mut used_tables = BTreeMap::<String, BTreeSet<String>>::new();
+    let tables = ordered
+        .into_iter()
+        .map(|d| {
+            let source: &str = d.get("source_id");
+            let name: &str = d.get("name");
+            let alias = if source == "straton-local-lake" {
+                let display = name
+                    .split_once('/')
+                    .and_then(|(id, table)| {
+                        sources
+                            .iter()
+                            .find(|s| s.get::<&str, _>("id") == id)
+                            .map(|s| format!("{}.{table}", s.get::<&str, _>("name")))
+                    })
+                    .unwrap_or_else(|| name.to_owned());
+                unique_name(
+                    schema_name(&display),
+                    used_tables.entry(source.to_owned()).or_default(),
+                )
+            } else {
+                name.to_owned()
+            };
+            (d.get::<String, _>("id"), alias)
+        })
+        .collect();
+    (schemas, tables)
+}
+
 fn columns(schema: &Schema) -> Vec<Column> {
     schema
         .fields()
@@ -201,20 +261,10 @@ impl Sql {
             sqlx::query("SELECT id,source_id,name FROM datasets ORDER BY source_id,name")
                 .fetch_all(&self.pool)
                 .await?;
+        let (schema_names, table_names) = catalog_names(&sources, &datasets);
         let mut schemas = BTreeMap::new();
-        let mut used = BTreeSet::from([
-            "public".to_owned(),
-            "information_schema".to_owned(),
-            "pg_catalog".to_owned(),
-        ]);
         for source in sources {
-            let base = schema_name(source.get("name"));
-            let mut name = base.clone();
-            let mut suffix = 2;
-            while !used.insert(name.clone()) {
-                name = format!("{base}_{suffix}");
-                suffix += 1;
-            }
+            let name = schema_names[source.get::<&str, _>("id")].clone();
             let provider = Arc::new(MemorySchemaProvider::new());
             ctx.catalog("datafusion")
                 .unwrap()
@@ -317,12 +367,13 @@ impl Sql {
             };
             let table = ListingTable::try_new(cfg)?;
             let (schema, provider) = &schemas[source];
+            let alias = &table_names[d.get::<&str, _>("id")];
             tables.push(Table {
                 schema: schema.clone(),
-                name: name.to_owned(),
+                name: alias.clone(),
                 columns: columns(&table.schema()),
             });
-            provider.register_table(name.to_owned(), Arc::new(table))?;
+            provider.register_table(alias.clone(), Arc::new(table))?;
         }
         Ok((ctx, tables))
     }
@@ -588,5 +639,19 @@ mod tests {
         let url = super::listing_url(&path).unwrap();
         assert!(url.get_glob().is_none());
         assert_eq!(url.get_url().to_file_path().unwrap(), path);
+    }
+}
+
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+    #[test]
+    fn identifiers_and_numeric_suffixes() {
+        assert_eq!(schema_name("App DB.customers"), "app_db_customers");
+        assert_eq!(schema_name("123"), "_123");
+        assert_eq!(schema_name(""), "_");
+        assert_eq!(schema_name("a-\"b"), "a__b");
+        let mut used = BTreeSet::from(["x".to_owned(), "x_2".to_owned()]);
+        assert_eq!(unique_name("x".to_owned(), &mut used), "x_3");
     }
 }

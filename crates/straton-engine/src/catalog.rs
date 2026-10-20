@@ -201,6 +201,7 @@ pub async fn datamap(pool: &SqlitePool) -> Result<Value> {
         .fetch_all(&mut *tx)
         .await?;
     let mut nodes:Vec<Value>=sources.iter().map(|r|json!({"type":"source","id":r.get::<String,_>("id"),"name":r.get::<String,_>("name"),"kind":r.get::<String,_>("kind"),"connected":r.get::<&str,_>("kind")!="external"})).collect();
+    let (schema_names, table_names) = crate::sql::catalog_names(&sources, &datasets);
     for d in datasets {
         let id: &str = d.get("id");
         let name: &str = d.get("name");
@@ -217,7 +218,7 @@ pub async fn datamap(pool: &SqlitePool) -> Result<Value> {
         }
         .unwrap_or_else(|| name.to_owned());
         let columns:Vec<_>=cols.iter().filter(|c|c.get::<&str,_>("dataset_id")==id).map(|c|json!({"name":c.get::<String,_>("name"),"type":c.get::<String,_>("data_type"),"nullable":c.get::<bool,_>("nullable"),"pk":c.get::<bool,_>("primary_key")})).collect();
-        nodes.push(json!({"type":"dataset","id":id,"source_id":d.get::<String,_>("source_id"),"name":name,"display_name":display_name,"stale":d.get::<bool,_>("stale"),"columns":columns}));
+        nodes.push(json!({"type":"dataset","id":id,"source_id":d.get::<String,_>("source_id"),"name":name,"display_name":display_name,"stale":d.get::<bool,_>("stale"),"row_count":d.get::<Option<i64>,_>("row_count"),"last_synced_at":d.get::<Option<String>,_>("last_synced_at"),"sql_schema":schema_names[d.get::<&str,_>("source_id")],"sql_table":table_names[id],"columns":columns}));
     }
     let edges:Result<Vec<_>>=edges.iter().map(|r|Ok(json!({"id":r.get::<String,_>("id"),"kind":r.get::<String,_>("kind"),"from_dataset":r.get::<String,_>("from_dataset"),"from_cols":serde_json::from_str::<Value>(r.get("from_cols"))?,"to_dataset":r.get::<String,_>("to_dataset"),"to_cols":serde_json::from_str::<Value>(r.get("to_cols"))?,"confidence":r.get::<Option<f64>,_>("confidence")}))).collect();
     tx.commit().await?;
