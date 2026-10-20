@@ -23,6 +23,7 @@ pub enum SourceKind {
     Parquet,
     Noop,
     Stripe,
+    Salesforce,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

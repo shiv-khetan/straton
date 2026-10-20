@@ -214,6 +214,7 @@ async fn save_source(
         SourceKind::External => "external",
         SourceKind::Noop => "noop",
         SourceKind::Stripe => "stripe",
+        SourceKind::Salesforce => "salesforce",
         SourceKind::Parquet => return Err(bad("parquet sources are managed by sync")),
     };
     if s.id == "straton-local-lake" {
@@ -642,6 +643,14 @@ fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
         "sqlite" => &["path", "batch_size"],
         "csv" => &["path", "batch_size", "sample_size"],
         "stripe" => &["account_label", "objects", "rate_limit_rps", "api_base"],
+        "salesforce" => &[
+            "instance_url",
+            "login_url",
+            "client_id",
+            "objects",
+            "api_version",
+            "rate_limit_rps",
+        ],
         _ => &[],
     };
     if obj.keys().any(|k| !allowed.contains(&k.as_str())) {

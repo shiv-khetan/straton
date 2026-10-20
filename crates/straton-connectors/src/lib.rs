@@ -141,6 +141,9 @@ struct Connected {
     sample_size: usize,
 }
 mod http;
+mod salesforce;
+#[cfg(test)]
+mod salesforce_tests;
 mod stripe;
 #[cfg(test)]
 mod stripe_tests;
@@ -153,13 +156,18 @@ pub fn incremental_style(kind: &str) -> straton_core::IncrementalStyle {
         "stripe" => Events {
             horizon_secs: Some(stripe::EVENT_HORIZON_SECS),
         },
+        "salesforce" => Events {
+            horizon_secs: Some(salesforce::DELETE_HORIZON_SECS),
+        },
         _ => None,
     }
 }
 
 pub fn build(kind: &str, config: &Value, secret: Option<&str>) -> Result<Box<dyn Connector>> {
-    if kind == "stripe" {
-        return stripe::build(config, secret);
+    match kind {
+        "stripe" => return stripe::build(config, secret),
+        "salesforce" => return salesforce::build(config, secret),
+        _ => {}
     }
     let batch_size = config
         .get("batch_size")

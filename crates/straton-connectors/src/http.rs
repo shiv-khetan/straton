@@ -1,15 +1,16 @@
 //! Shared HTTP client for SaaS connectors: HTTPS only, rate limited, retrying.
 use rand::Rng;
-use reqwest::{StatusCode, Url, header::RETRY_AFTER};
+use reqwest::{Method, Response, StatusCode, Url, header::HeaderMap, header::RETRY_AFTER};
 use serde_json::Value;
 use std::time::{Duration, Instant};
 use straton_core::{Error, Result};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 pub(crate) struct Http {
     client: reqwest::Client,
     base: Url,
-    auth: String,
+    /// `Authorization` header value; swappable for providers with short-lived access tokens.
+    auth: RwLock<String>,
     bucket: Mutex<(f64, Instant)>,
     rps: f64,
     pub(crate) backoff: Duration,
@@ -24,6 +25,18 @@ pub(crate) fn base_url(raw: &str) -> Result<Url> {
         return Err(Error::Invalid("api_base must use https".into()));
     }
     Ok(url)
+}
+
+/// Provider error bodies can echo masked keys, so only a machine-readable code is kept.
+fn error_code(v: &Value) -> Option<String> {
+    [
+        &v["error"]["code"],
+        &v["error"]["type"],
+        &v[0]["errorCode"],
+        &v["error"],
+    ]
+    .into_iter()
+    .find_map(|c| c.as_str().map(str::to_owned))
 }
 
 impl Http {
@@ -41,12 +54,16 @@ impl Http {
         Ok(Self {
             client,
             base,
-            auth,
+            auth: RwLock::new(auth),
             bucket: Mutex::new((rps, Instant::now())),
             rps,
             backoff: Duration::from_millis(500),
             attempts: 5,
         })
+    }
+
+    pub(crate) async fn set_auth(&self, auth: String) {
+        *self.auth.write().await = auth;
     }
 
     // ponytail: one token bucket per source, held across the sleep; fine at SaaS request rates.
@@ -63,33 +80,38 @@ impl Http {
         b.0 -= 1.0;
     }
 
-    /// GET a JSON document. Errors name the status only: never the URL or credentials.
-    pub(crate) async fn get(&self, path: &str, query: &[(String, String)]) -> Result<Value> {
+    /// Send a request and return a successful response. Only GETs are retried (429/5xx/timeouts).
+    /// Errors name the status only: never the URL or credentials.
+    async fn send(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(String, String)],
+        body: Option<&Value>,
+    ) -> Result<Response> {
         let url = self
             .base
             .join(path)
             .map_err(|_| Error::Invalid("invalid request path".into()))?;
+        let retry = method == Method::GET;
         let mut attempt = 0;
         loop {
             attempt += 1;
             self.throttle().await;
-            let sent = self
+            let mut request = self
                 .client
-                .get(url.clone())
+                .request(method.clone(), url.clone())
                 .query(query)
-                .header("Authorization", &self.auth)
-                .send()
-                .await;
-            let retry_after = match sent {
-                Ok(r) if r.status().is_success() => {
-                    return r
-                        .json()
-                        .await
-                        .map_err(|_| Error::Connector("response was not valid JSON".into()));
-                }
+                .header("Authorization", self.auth.read().await.as_str());
+            if let Some(body) = body {
+                request = request.json(body);
+            }
+            let retry_after = match request.send().await {
+                Ok(r) if r.status().is_success() => return Ok(r),
                 Ok(r)
-                    if r.status() == StatusCode::TOO_MANY_REQUESTS
-                        || r.status().is_server_error() =>
+                    if retry
+                        && (r.status() == StatusCode::TOO_MANY_REQUESTS
+                            || r.status().is_server_error()) =>
                 {
                     r.headers()
                         .get(RETRY_AFTER)
@@ -105,19 +127,13 @@ impl Http {
                 }
                 Ok(r) => {
                     let status = r.status().as_u16();
-                    // Provider messages can echo masked keys, so only the error code is kept.
-                    let code = r.json::<Value>().await.ok().and_then(|v| {
-                        v["error"]["code"]
-                            .as_str()
-                            .or(v["error"]["type"].as_str())
-                            .map(str::to_owned)
-                    });
+                    let code = r.json::<Value>().await.ok().and_then(|v| error_code(&v));
                     return Err(Error::Connector(match code {
                         Some(code) => format!("request failed (HTTP {status}, {code})"),
                         None => format!("request failed (HTTP {status})"),
                     }));
                 }
-                Err(e) if e.is_timeout() || e.is_connect() => None,
+                Err(e) if retry && (e.is_timeout() || e.is_connect()) => None,
                 Err(_) => return Err(Error::Connector("request failed".into())),
             };
             if attempt >= self.attempts {
@@ -132,4 +148,62 @@ impl Http {
             tokio::time::sleep(wait.min(Duration::from_secs(60))).await;
         }
     }
+
+    pub(crate) async fn get(&self, path: &str, query: &[(String, String)]) -> Result<Value> {
+        json(self.send(Method::GET, path, query, None).await?).await
+    }
+
+    /// GET a text body (e.g. CSV) together with its response headers.
+    pub(crate) async fn get_text(
+        &self,
+        path: &str,
+        query: &[(String, String)],
+    ) -> Result<(HeaderMap, String)> {
+        let r = self.send(Method::GET, path, query, None).await?;
+        let headers = r.headers().clone();
+        let text = r
+            .text()
+            .await
+            .map_err(|_| Error::Connector("response body could not be read".into()))?;
+        Ok((headers, text))
+    }
+
+    /// POST JSON. Not retried: the caller decides whether a repeat is safe.
+    pub(crate) async fn post(&self, path: &str, body: &Value) -> Result<Value> {
+        json(self.send(Method::POST, path, &[], Some(body)).await?).await
+    }
+
+    /// POST an OAuth token request (form-encoded, no Authorization header, not retried).
+    /// Returns the provider's `error` code on failure so callers can spot `invalid_grant`.
+    pub(crate) async fn token(
+        &self,
+        path: &str,
+        form: &[(&str, &str)],
+    ) -> std::result::Result<Value, String> {
+        let url = self.base.join(path).map_err(|_| "invalid token path")?;
+        self.throttle().await;
+        let r = self
+            .client
+            .post(url)
+            .form(form)
+            .send()
+            .await
+            .map_err(|_| "token request failed".to_owned())?;
+        let ok = r.status().is_success();
+        let body: Value = r.json().await.unwrap_or(Value::Null);
+        if ok {
+            Ok(body)
+        } else {
+            Err(body["error"]
+                .as_str()
+                .unwrap_or("token request failed")
+                .to_owned())
+        }
+    }
+}
+
+async fn json(r: Response) -> Result<Value> {
+    r.json()
+        .await
+        .map_err(|_| Error::Connector("response was not valid JSON".into()))
 }
