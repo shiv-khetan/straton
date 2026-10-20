@@ -1,11 +1,19 @@
 import type { Edge, Node, XYPosition } from '@xyflow/react';
-import type { ELK } from 'elkjs/lib/elk-api';
+import type { ELK, ElkNode, LayoutOptions } from 'elkjs/lib/elk-api';
 import type { DataMap, Dataset, EdgeKind, MapSource } from './api';
-export type TableData = { dataset: Dataset; fk: string[]; highlighted: boolean };
+type LayoutData = { layoutPosition?: XYPosition };
+export type TableData = LayoutData & { dataset: Dataset; fk: string[]; highlighted: boolean };
 export type TableNode = Node<TableData, 'table'>;
-export type GroupNode = Node<{ label: string; external: boolean }, 'source'>;
+export type GroupNode = Node<LayoutData & { label: string; external: boolean }, 'source'>;
 export type MapNode = TableNode | GroupNode;
-export type MapEdge = Edge<{ relationshipId: string; kind: EdgeKind; description: string }>;
+export type MapEdge = Edge<{
+  relationshipId: string;
+  kind: EdgeKind;
+  description: string;
+  route?: XYPosition[][];
+}>;
+export const TABLE_HEADER_HEIGHT = 48;
+export const TABLE_ROW_HEIGHT = 32;
 let elkPromise: Promise<ELK> | undefined;
 function storageKey(url: string) {
   return 'straton:map:v1:' + url;
@@ -43,70 +51,277 @@ export function persist(url: string, nodes: MapNode[]) {
     /* Layout still works when storage is unavailable. */
   }
 }
-export async function layout(map: DataMap): Promise<MapNode[]> {
+let textContext: CanvasRenderingContext2D | null | undefined;
+function textWidth(text: string, header = false) {
+  textContext ??=
+    typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d');
+  if (!textContext) return Array.from(text).length * (header ? 9 : 8);
+  textContext.font = header
+    ? '650 14px "Segoe UI", system-ui, sans-serif'
+    : '12px "Segoe UI", system-ui, sans-serif';
+  return textContext.measureText(text).width;
+}
+export function tableSize(dataset: Dataset) {
+  return {
+    width: Math.ceil(
+      Math.max(
+        320,
+        textWidth(dataset.display_name ?? dataset.name, true) + 28 + (dataset.stale ? 60 : 0),
+        ...dataset.columns.map(
+          (column) =>
+            textWidth(column.name) + textWidth(column.type + (column.nullable ? '?' : '')) + 88,
+        ),
+      ),
+    ),
+    height: TABLE_HEADER_HEIGHT + dataset.columns.length * TABLE_ROW_HEIGHT,
+  };
+}
+function portId(datasetId: string, handle: string) {
+  return JSON.stringify([datasetId, handle]);
+}
+const layoutOptions: LayoutOptions = {
+  'elk.algorithm': 'layered',
+  'elk.direction': 'RIGHT',
+  'elk.edgeRouting': 'ORTHOGONAL',
+  'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
+  'elk.spacing.nodeNode': '100',
+  'elk.layered.spacing.nodeNodeBetweenLayers': '160',
+  'elk.spacing.edgeNode': '28',
+  'elk.layered.spacing.edgeNodeBetweenLayers': '36',
+  'elk.spacing.edgeEdge': '18',
+  'elk.layered.spacing.edgeEdgeBetweenLayers': '18',
+  'elk.spacing.portPort': '0',
+};
+export function buildLayoutGraph(map: DataMap): ElkNode {
   const sources = map.nodes.filter((n): n is MapSource => n.type === 'source');
   const datasets = map.nodes.filter((n): n is Dataset => n.type === 'dataset');
-  elkPromise ??= import('elkjs/lib/elk.bundled.js').then(({ default: ELK }) => new ELK());
-  const elk = await elkPromise;
-  const graph = await elk.layout({
+  return {
     id: 'root',
-    layoutOptions: {
-      'elk.algorithm': 'layered',
-      'elk.direction': 'RIGHT',
-      'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
-      'elk.spacing.nodeNode': '70',
-      'elk.layered.spacing.nodeNodeBetweenLayers': '90',
-    },
+    layoutOptions,
     children: sources.map((source) => ({
       id: source.id,
       layoutOptions: {
-        'elk.padding': '[top=60,left=30,bottom=30,right=30]',
-        'elk.algorithm': 'layered',
+        ...layoutOptions,
+        'elk.padding': '[top=96,left=64,bottom=64,right=64]',
+        'elk.nodeSize.constraints': 'MINIMUM_SIZE',
+        'elk.nodeSize.minimum':
+          '(' +
+          Math.ceil(
+            Math.max(380, textWidth(source.name, true) + 44 + (source.connected ? 0 : 80)),
+          ) +
+          ',160)',
       },
       children: datasets
         .filter((d) => d.source_id === source.id)
-        .map((d) => ({ id: d.id, width: 320, height: 48 + d.columns.length * 32 })),
+        .map((dataset) => {
+          const size = tableSize(dataset);
+          const rows = [
+            { incoming: 'dataset:in', outgoing: 'dataset:out', y: 0, height: TABLE_HEADER_HEIGHT },
+            ...dataset.columns.map((column, index) => ({
+              incoming: 'in:' + column.name,
+              outgoing: 'out:' + column.name,
+              y: TABLE_HEADER_HEIGHT + index * TABLE_ROW_HEIGHT,
+              height: TABLE_ROW_HEIGHT,
+            })),
+          ];
+          return {
+            id: dataset.id,
+            ...size,
+            layoutOptions: { 'elk.portConstraints': 'FIXED_ORDER' },
+            // Row-sized ports fill each side, keeping FIXED_ORDER anchors at row centers.
+            ports: rows.flatMap((row, index) => [
+              {
+                id: portId(dataset.id, row.incoming),
+                x: 0,
+                y: row.y,
+                width: 0,
+                height: row.height,
+                layoutOptions: {
+                  'elk.port.side': 'WEST',
+                  'elk.port.index': String(2 * rows.length - 1 - index),
+                },
+              },
+              {
+                id: portId(dataset.id, row.outgoing),
+                x: size.width,
+                y: row.y,
+                width: 0,
+                height: row.height,
+                layoutOptions: { 'elk.port.side': 'EAST', 'elk.port.index': String(index) },
+              },
+            ]),
+          };
+        }),
     })),
-    edges: map.edges
-      .filter(
-        (e) =>
-          datasets.some((d) => d.id === e.from_dataset) &&
-          datasets.some((d) => d.id === e.to_dataset),
-      )
-      .map((e) => ({ id: e.id, sources: [e.from_dataset], targets: [e.to_dataset] })),
-  });
+    edges: buildEdges(map).map((edge) => ({
+      id: edge.id,
+      sources: [portId(edge.source, edge.sourceHandle!)],
+      targets: [portId(edge.target, edge.targetHandle!)],
+    })),
+  };
+}
+export function collectRoutes(graph: ElkNode): Record<string, XYPosition[][]> {
+  const origins = new Map<string, XYPosition>();
+  function index(node: ElkNode, parent: XYPosition) {
+    const origin =
+      node === graph
+        ? { x: 0, y: 0 }
+        : { x: parent.x + (node.x ?? 0), y: parent.y + (node.y ?? 0) };
+    origins.set(node.id, origin);
+    node.children?.forEach((child) => index(child, origin));
+  }
+  index(graph, { x: 0, y: 0 });
+  const routes: Record<string, XYPosition[][]> = {};
+  function visit(node: ElkNode) {
+    for (const edge of node.edges ?? []) {
+      // ELK may keep an edge on root.edges while naming a nested coordinate container.
+      const origin = origins.get(edge.container ?? node.id);
+      if (!origin || !edge.sections?.length) continue;
+      routes[edge.id] = edge.sections.map((section) =>
+        [section.startPoint, ...(section.bendPoints ?? []), section.endPoint].map((point) => ({
+          x: point.x + origin.x,
+          y: point.y + origin.y,
+        })),
+      );
+    }
+    node.children?.forEach(visit);
+  }
+  visit(graph);
+  return routes;
+}
+export function routedEdgePath(sections: XYPosition[][]) {
+  let label = sections[0]?.[0] ?? { x: 0, y: 0 };
+  let longest = 0;
+  const path = sections
+    .map((section) => {
+      const points = section.filter(
+        (point, index) =>
+          index === 0 || point.x !== section[index - 1].x || point.y !== section[index - 1].y,
+      );
+      if (points.length < 2) return '';
+      let path = 'M ' + points[0].x + ' ' + points[0].y;
+      for (let i = 1; i < points.length; i++) {
+        const previous = points[i - 1],
+          point = points[i],
+          next = points[i + 1];
+        const length = Math.hypot(point.x - previous.x, point.y - previous.y);
+        if (length > longest) {
+          longest = length;
+          label = { x: (previous.x + point.x) / 2, y: (previous.y + point.y) / 2 };
+        }
+        if (!next) {
+          path += ' L ' + point.x + ' ' + point.y;
+          continue;
+        }
+        const after = Math.hypot(next.x - point.x, next.y - point.y);
+        const radius = Math.min(6, length / 2, after / 2);
+        const before = {
+          x: point.x + ((previous.x - point.x) * radius) / length,
+          y: point.y + ((previous.y - point.y) * radius) / length,
+        };
+        const beyond = {
+          x: point.x + ((next.x - point.x) * radius) / after,
+          y: point.y + ((next.y - point.y) * radius) / after,
+        };
+        path +=
+          ' L ' +
+          before.x +
+          ' ' +
+          before.y +
+          ' Q ' +
+          point.x +
+          ' ' +
+          point.y +
+          ' ' +
+          beyond.x +
+          ' ' +
+          beyond.y;
+      }
+      return path;
+    })
+    .join(' ');
+  return { path, label };
+}
+export function restorePositions(nodes: MapNode[], saved: Record<string, XYPosition>): MapNode[] {
+  return nodes.map((node) =>
+    saved[node.id]
+      ? ({
+          ...node,
+          position: saved[node.id],
+          data: { ...node.data, layoutPosition: undefined },
+        } as MapNode)
+      : node,
+  );
+}
+export function routeEdges(edges: MapEdge[], nodes: MapNode[]): MapEdge[] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  function unchanged(id: string): boolean {
+    const node = byId.get(id);
+    const original = node?.data.layoutPosition;
+    return (
+      !!node &&
+      !!original &&
+      original.x === node.position.x &&
+      original.y === node.position.y &&
+      (!node.parentId || unchanged(node.parentId))
+    );
+  }
+  return edges.map((edge) => ({
+    ...edge,
+    type:
+      edge.data?.route?.length && unchanged(edge.source) && unchanged(edge.target)
+        ? 'elk'
+        : 'smoothstep',
+  }));
+}
+export async function layout(map: DataMap): Promise<{ nodes: MapNode[]; edges: MapEdge[] }> {
+  elkPromise ??= import('elkjs/lib/elk.bundled.js').then(({ default: ELK }) => new ELK());
+  const elk = await elkPromise;
+  const graph = await elk.layout(buildLayoutGraph(map));
+  const sources = map.nodes.filter((n): n is MapSource => n.type === 'source');
+  const datasets = map.nodes.filter((n): n is Dataset => n.type === 'dataset');
   const nodes: MapNode[] = [];
   for (const group of graph.children || []) {
     const source = sources.find((s) => s.id === group.id)!;
+    const position = { x: group.x ?? 0, y: group.y ?? 0 };
     nodes.push({
       id: source.id,
       type: 'source',
-      position: { x: group.x || 0, y: group.y || 0 },
-      data: { label: source.name, external: !source.connected },
-      style: { width: Math.max(group.width || 0, 380), height: Math.max(group.height || 0, 120) },
+      position,
+      data: { label: source.name, external: !source.connected, layoutPosition: position },
+      style: { width: group.width, height: group.height },
       className: source.connected ? 'source-group' : 'source-group external-group',
       connectable: false,
+      zIndex: 0,
     });
     for (const child of group.children || []) {
       const dataset = datasets.find((d) => d.id === child.id)!;
+      const position = { x: child.x ?? 64, y: child.y ?? 96 };
       nodes.push({
         id: dataset.id,
         type: 'table',
         parentId: source.id,
         extent: 'parent',
-        position: { x: child.x || 30, y: child.y || 60 },
+        position,
         data: {
           dataset,
           fk: map.edges
             .filter((e) => e.kind === 'declared_fk' && e.from_dataset === dataset.id)
             .flatMap((e) => e.from_cols),
           highlighted: false,
+          layoutPosition: position,
         },
-        style: { width: 320 },
+        style: { width: child.width, height: child.height },
+        zIndex: 1,
       });
     }
   }
-  return nodes;
+  const routes = collectRoutes(graph);
+  const edges = buildEdges(map).map((edge) => ({
+    ...edge,
+    data: { ...edge.data!, route: routes[edge.id] },
+  }));
+  return { nodes, edges: routeEdges(edges, nodes) };
 }
 
 const colors: Record<EdgeKind, string> = {
@@ -134,6 +349,8 @@ export function buildEdges(map: DataMap): MapEdge[] {
       : [{ from: undefined, to: undefined }];
     return pairs.map((pair, index): MapEdge => ({
       id: relationship.id + ':' + index,
+      type: 'smoothstep',
+      zIndex: 2,
       source: relationship.from_dataset,
       target: relationship.to_dataset,
       sourceHandle: handle(relationship.from_dataset, pair.from, 'out'),

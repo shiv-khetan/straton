@@ -3,6 +3,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   Background,
+  BaseEdge,
   Controls,
   MiniMap,
   Handle,
@@ -12,10 +13,20 @@ import {
   useNodesState,
   useReactFlow,
 } from '@xyflow/react';
-import type { Connection as FlowConnection, NodeProps } from '@xyflow/react';
+import type { Connection as FlowConnection, EdgeProps, NodeProps } from '@xyflow/react';
 import type { Api, DataMap, EdgeKind } from './api';
 import { Field } from './App';
-import { buildEdges, layout, loadPositions, persist } from './map-model';
+import {
+  buildEdges,
+  layout,
+  loadPositions,
+  persist,
+  restorePositions,
+  routeEdges,
+  routedEdgePath,
+  TABLE_HEADER_HEIGHT,
+  TABLE_ROW_HEIGHT,
+} from './map-model';
 import type { MapNode, MapEdge, TableNode, GroupNode } from './map-model';
 type Props = {
   map: DataMap;
@@ -34,14 +45,14 @@ function Table({ data }: NodeProps<TableNode>) {
         (data.highlighted ? ' highlighted' : '')
       }
     >
-      <div className="dataset-title">
+      <div className="dataset-title" style={{ height: TABLE_HEADER_HEIGHT }}>
         <Handle type="target" position={Position.Left} id="dataset:in" isConnectable={false} />
-        {data.dataset.display_name ?? data.dataset.name}
+        <span>{data.dataset.display_name ?? data.dataset.name}</span>
         <Handle type="source" position={Position.Right} id="dataset:out" isConnectable={false} />
         {data.dataset.stale && <span className="badge">Stale</span>}
       </div>
       {data.dataset.columns.map((column) => (
-        <div className="dataset-column" key={column.name}>
+        <div className="dataset-column" key={column.name} style={{ height: TABLE_ROW_HEIGHT }}>
           <Handle
             type="target"
             position={Position.Left}
@@ -76,6 +87,26 @@ function SourceGroup({ data }: NodeProps<GroupNode>) {
     </div>
   );
 }
+function RoutedEdge(props: EdgeProps<MapEdge>) {
+  const { path, label } = routedEdgePath(props.data?.route ?? []);
+  return (
+    <BaseEdge
+      id={props.id}
+      path={path}
+      style={props.style}
+      markerStart={props.markerStart}
+      markerEnd={props.markerEnd}
+      interactionWidth={props.interactionWidth}
+      label={props.label}
+      labelX={label.x}
+      labelY={label.y}
+      labelStyle={props.labelStyle}
+      labelShowBg={props.labelShowBg}
+      labelBgStyle={props.labelBgStyle}
+    />
+  );
+}
+const edgeTypes = { elk: RoutedEdge };
 const nodeTypes = { table: Table, source: SourceGroup };
 export default function DataMapView(props: Props) {
   return (
@@ -109,12 +140,12 @@ function Canvas({ map, engineUrl, client, action, busy }: Props) {
       try {
         const next = await layout(map);
         if (generation.current !== current) return;
-        const saved = restore ? loadPositions(engineUrl) : {};
-        for (const node of next) {
-          if (saved[node.id]) node.position = saved[node.id];
-        }
-        setNodes(next);
-        if (!restore) persist(engineUrl, next);
+        const positioned = restore
+          ? restorePositions(next.nodes, loadPositions(engineUrl))
+          : next.nodes;
+        setNodes(positioned);
+        setEdges(next.edges);
+        if (!restore) persist(engineUrl, positioned);
         requestAnimationFrame(() => {
           void fitView({ padding: 0.15 });
         });
@@ -125,7 +156,7 @@ function Canvas({ map, engineUrl, client, action, busy }: Props) {
         if (generation.current === current) setLayingOut(false);
       }
     },
-    [map, engineUrl, setNodes, fitView],
+    [map, engineUrl, setNodes, setEdges, fitView],
   );
   useEffect(() => {
     void arrange(true);
@@ -166,7 +197,7 @@ function Canvas({ map, engineUrl, client, action, busy }: Props) {
   );
   const visibleEdges = useMemo(
     () =>
-      edges.map((edge) => ({
+      routeEdges(edges, nodes).map((edge) => ({
         ...edge,
         label: hoveredEdge === edge.id ? edge.data?.description : undefined,
         labelStyle: { fill: 'var(--ink)' },
@@ -176,7 +207,7 @@ function Canvas({ map, engineUrl, client, action, busy }: Props) {
           !visibleIds.has(edge.source) ||
           !visibleIds.has(edge.target),
       })),
-    [edges, hoveredEdge, enabledKinds, visibleIds],
+    [edges, nodes, hoveredEdge, enabledKinds, visibleIds],
   );
   function connect(connection: FlowConnection) {
     if (!connection.sourceHandle || !connection.targetHandle) return;
@@ -312,6 +343,8 @@ function Canvas({ map, engineUrl, client, action, busy }: Props) {
           nodes={visibleNodes}
           edges={visibleEdges}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          elevateNodesOnSelect={false}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={(connection) => {

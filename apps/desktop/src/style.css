@@ -405,14 +405,23 @@ td button {
   font-weight: 400;
 }
 .dataset-node {
-  border: 1px solid var(--border);
+  position: relative;
+  width: 100%;
+  height: 100%;
   border-radius: 6px;
   background: var(--bg);
   overflow: visible;
 }
+.dataset-node::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border);
+  border-radius: inherit;
+  pointer-events: none;
+}
 .dataset-title {
   position: relative;
-  height: 48px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -421,7 +430,10 @@ td button {
   background: var(--selected);
   border-radius: 5px 5px 0 0;
   font-weight: 650;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+}
+.dataset-title > span:first-of-type {
+  flex: 1;
 }
 .dataset-column {
   position: relative;
@@ -429,9 +441,8 @@ td button {
   gap: 8px;
   align-items: center;
   padding: 0 14px;
-  height: 32px;
   font-size: 12px;
-  border-top: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 var(--border);
 }
 .column-name {
   flex: 1;
@@ -441,7 +452,7 @@ td button {
 }
 .column-type {
   color: var(--muted);
-  max-width: 100px;
+  flex-shrink: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -451,10 +462,11 @@ td button {
   gap: 3px;
   font-size: 10px;
   color: var(--primary);
-  min-width: 20px;
+  min-width: 44px;
+  flex-shrink: 0;
 }
-.dataset-node.stale {
-  border: 2px dashed var(--warning);
+.dataset-node.stale::after {
+  border: 1px dashed var(--warning);
 }
 .stale .dataset-title {
   color: var(--warning);
@@ -469,9 +481,18 @@ td button {
   background: var(--primary);
   border: 1px solid var(--bg);
 }
+.map-canvas .react-flow__handle-left {
+  left: 0;
+}
+.map-canvas .react-flow__handle-right {
+  right: 0;
+}
+.map-canvas .react-flow__edge-path {
+  filter: drop-shadow(0 0 2px var(--bg));
+}
 .react-flow__edge.selected .react-flow__edge-path {
   stroke-width: 4;
-  filter: brightness(1.3);
+  filter: drop-shadow(0 0 2px var(--bg)) brightness(1.3);
 }
 .event-log {
   font:
