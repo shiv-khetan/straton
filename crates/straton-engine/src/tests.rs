@@ -617,7 +617,7 @@ async fn sqlite_sync_and_crash_resume() {
         .unwrap();
     sqlx::raw_sql("CREATE TABLE users(id INTEGER PRIMARY KEY,name TEXT);INSERT INTO users VALUES(1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e');").execute(&input).await.unwrap();
     input.close().await;
-    sqlx::query("UPDATE sources SET kind='sqlite',config=? WHERE id='source'")
+    sqlx::query("UPDATE sources SET name='App DB',kind='sqlite',config=? WHERE id='source'")
         .bind(json!({"path":path,"batch_size":2}).to_string())
         .execute(&f.pool)
         .await
@@ -708,6 +708,20 @@ async fn sqlite_sync_and_crash_resume() {
             .unwrap(),
         1
     );
+    let map = crate::catalog::datamap(&f.pool).await.unwrap();
+    let lake = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["source_id"] == "straton-local-lake")
+        .unwrap();
+    assert_eq!(lake["name"], "source/users");
+    assert_eq!(lake["display_name"], "App DB.users");
+    let lake_id = lake["id"].clone();
+    sqlx::query("UPDATE sources SET name='Renamed App DB' WHERE id='source'")
+        .execute(&f.pool)
+        .await
+        .unwrap();
     // A full refresh replaces the prior snapshot and cleans abandoned work only.
     let queued = f.enqueue().await;
     let running = f.enqueue().await;
@@ -758,6 +772,15 @@ async fn sqlite_sync_and_crash_resume() {
         straton_connectors::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(p.unwrap().path()).unwrap()).unwrap().metadata().file_metadata().num_rows()
     ).sum::<i64>();
     assert_eq!(count, 5);
+    let map = crate::catalog::datamap(&f.pool).await.unwrap();
+    let lake = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == lake_id)
+        .unwrap();
+    assert_eq!(lake["name"], "source/users");
+    assert_eq!(lake["display_name"], "Renamed App DB.users");
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM relationships WHERE kind='lineage'")
             .fetch_one(&f.pool)

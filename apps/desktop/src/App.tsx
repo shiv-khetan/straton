@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { Component, lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { api, normalizeUrl, subscribe } from './api';
@@ -25,7 +25,32 @@ export function Field({ label, children }: { label: string; children: ReactNode 
     </label>
   );
 }
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
+  state: { error: string | null } = { error: null };
+  static getDerivedStateFromError(error: unknown) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+  render() {
+    if (this.state.error !== null) {
+      return (
+        <section className="form-section" role="alert">
+          <h2>Unable to display this screen</h2>
+          <p>{this.state.error}</p>
+          <button onClick={() => this.setState({ error: null })}>Reload</button>
+        </section>
+      );
+    }
+    return this.props.children;
+  }
+}
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+function AppContent() {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [page, setPage] = useState<Page>('Connect');
   const [error, setError] = useState('');
@@ -253,15 +278,17 @@ export default function App() {
           />
         )}
         {client && connection && page === 'Data Map' && (
-          <Suspense fallback={<p role="status">Loading Data Map…</p>}>
-            <DataMapView
-              map={map}
-              engineUrl={connection.url}
-              client={client}
-              action={action}
-              busy={busy}
-            />
-          </Suspense>
+          <ErrorBoundary>
+            <Suspense fallback={<p role="status">Loading Data Map…</p>}>
+              <DataMapView
+                map={map}
+                engineUrl={connection.url}
+                client={client}
+                action={action}
+                busy={busy}
+              />
+            </Suspense>
+          </ErrorBoundary>
         )}
       </main>
     </div>

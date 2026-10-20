@@ -28,6 +28,7 @@ export interface MapSource {
 }
 export interface Dataset {
   type: 'dataset';
+  display_name?: string;
   id: string;
   source_id: string;
   name: string;

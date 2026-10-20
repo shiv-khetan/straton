@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -11,12 +11,11 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
-  MarkerType,
 } from '@xyflow/react';
 import type { Connection as FlowConnection, NodeProps } from '@xyflow/react';
 import type { Api, DataMap, EdgeKind } from './api';
 import { Field } from './App';
-import { layout, loadPositions, persist } from './map-model';
+import { buildEdges, layout, loadPositions, persist } from './map-model';
 import type { MapNode, MapEdge, TableNode, GroupNode } from './map-model';
 type Props = {
   map: DataMap;
@@ -26,12 +25,6 @@ type Props = {
   busy: boolean;
 };
 const kinds: EdgeKind[] = ['declared_fk', 'inferred', 'lineage', 'manual'];
-const colors: Record<EdgeKind, string> = {
-  declared_fk: 'var(--edge-fk)',
-  inferred: 'var(--edge-inferred)',
-  lineage: 'var(--edge-lineage)',
-  manual: 'var(--edge-manual)',
-};
 function Table({ data }: NodeProps<TableNode>) {
   return (
     <article
@@ -43,7 +36,7 @@ function Table({ data }: NodeProps<TableNode>) {
     >
       <div className="dataset-title">
         <Handle type="target" position={Position.Left} id="dataset:in" isConnectable={false} />
-        {data.dataset.name}
+        {data.dataset.display_name ?? data.dataset.name}
         <Handle type="source" position={Position.Right} id="dataset:out" isConnectable={false} />
         {data.dataset.stale && <span className="badge">Stale</span>}
       </div>
@@ -101,8 +94,12 @@ function Canvas({ map, engineUrl, client, action, busy }: Props) {
   const [hoveredEdge, setHoveredEdge] = useState('');
   const [layoutError, setLayoutError] = useState('');
   const [layingOut, setLayingOut] = useState(false);
-  const [selected, setSelected] = useState<string[]>([]);
-  const flow = useReactFlow<MapNode, MapEdge>();
+  // Read Flow selection directly so its selection effect cannot feed back into local state.
+  const selected = useMemo(
+    () => edges.filter((edge) => edge.selected).map((edge) => edge.id),
+    [edges],
+  );
+  const { fitView } = useReactFlow<MapNode, MapEdge>();
   const generation = useRef(0);
   const arrange = useCallback(
     async (restore: boolean) => {
@@ -119,7 +116,7 @@ function Canvas({ map, engineUrl, client, action, busy }: Props) {
         setNodes(next);
         if (!restore) persist(engineUrl, next);
         requestAnimationFrame(() => {
-          void flow.fitView({ padding: 0.15 });
+          void fitView({ padding: 0.15 });
         });
       } catch {
         if (generation.current === current)
@@ -128,7 +125,7 @@ function Canvas({ map, engineUrl, client, action, busy }: Props) {
         if (generation.current === current) setLayingOut(false);
       }
     },
-    [map, engineUrl, setNodes, flow],
+    [map, engineUrl, setNodes, fitView],
   );
   useEffect(() => {
     void arrange(true);
@@ -137,68 +134,50 @@ function Canvas({ map, engineUrl, client, action, busy }: Props) {
     };
   }, [arrange]);
   useEffect(() => {
-    setEdges(
-      map.edges.flatMap((relationship) => {
-        const pairs = relationship.from_cols.length
-          ? relationship.from_cols.map((from, index) => ({ from, to: relationship.to_cols[index] }))
-          : [{ from: undefined, to: undefined }];
-        return pairs.map((pair, index): MapEdge => ({
-          id: relationship.id + ':' + index,
-          source: relationship.from_dataset,
-          target: relationship.to_dataset,
-          sourceHandle: pair.from === undefined ? 'dataset:out' : 'out:' + pair.from,
-          targetHandle: pair.to === undefined ? 'dataset:in' : 'in:' + pair.to,
-          animated: relationship.kind === 'lineage',
-          deletable: false,
-          ariaLabel: relationship.kind.replaceAll('_', ' ') + ' relationship',
-          data: {
-            relationshipId: relationship.id,
-            kind: relationship.kind,
-            description:
-              relationship.kind.replaceAll('_', ' ') +
-              (relationship.confidence === null
-                ? ''
-                : ' · ' + Math.round(relationship.confidence * 100) + '% confidence'),
-          },
-          style: {
-            stroke: colors[relationship.kind],
-            strokeWidth: relationship.kind === 'manual' ? 3 : 2,
-            strokeDasharray: relationship.kind === 'inferred' ? '6 5' : undefined,
-          },
-          markerEnd: { type: MarkerType.ArrowClosed, color: colors[relationship.kind] },
-        }));
-      }),
-    );
-    setSelected([]);
+    setEdges(buildEdges(map));
   }, [map, setEdges]);
-  const visibleNodes = nodes.map(
-    (node) =>
-      ({
-        ...node,
-        hidden:
-          !!sourceFilter &&
-          (node.type === 'source' ? node.id !== sourceFilter : node.parentId !== sourceFilter),
-        data:
-          node.type === 'table'
-            ? {
-                ...node.data,
-                highlighted:
-                  !!search && node.data.dataset.name.toLowerCase().includes(search.toLowerCase()),
-              }
-            : node.data,
-      }) as MapNode,
+  const visibleNodes = useMemo(
+    () =>
+      nodes.map(
+        (node) =>
+          ({
+            ...node,
+            hidden:
+              !!sourceFilter &&
+              (node.type === 'source' ? node.id !== sourceFilter : node.parentId !== sourceFilter),
+            data:
+              node.type === 'table'
+                ? {
+                    ...node.data,
+                    highlighted:
+                      !!search &&
+                      (node.data.dataset.display_name ?? node.data.dataset.name)
+                        .toLowerCase()
+                        .includes(search.toLowerCase()),
+                  }
+                : node.data,
+          }) as MapNode,
+      ),
+    [nodes, sourceFilter, search],
   );
-  const visibleIds = new Set(visibleNodes.filter((n) => !n.hidden).map((n) => n.id));
-  const visibleEdges = edges.map((edge) => ({
-    ...edge,
-    label: hoveredEdge === edge.id ? edge.data?.description : undefined,
-    labelStyle: { fill: 'var(--ink)' },
-    labelBgStyle: { fill: 'var(--bg)' },
-    hidden:
-      !enabledKinds.includes(edge.data!.kind) ||
-      !visibleIds.has(edge.source) ||
-      !visibleIds.has(edge.target),
-  }));
+  const visibleIds = useMemo(
+    () => new Set(visibleNodes.filter((n) => !n.hidden).map((n) => n.id)),
+    [visibleNodes],
+  );
+  const visibleEdges = useMemo(
+    () =>
+      edges.map((edge) => ({
+        ...edge,
+        label: hoveredEdge === edge.id ? edge.data?.description : undefined,
+        labelStyle: { fill: 'var(--ink)' },
+        labelBgStyle: { fill: 'var(--bg)' },
+        hidden:
+          !enabledKinds.includes(edge.data!.kind) ||
+          !visibleIds.has(edge.source) ||
+          !visibleIds.has(edge.target),
+      })),
+    [edges, hoveredEdge, enabledKinds, visibleIds],
+  );
   function connect(connection: FlowConnection) {
     if (!connection.sourceHandle || !connection.targetHandle) return;
     const forward = connection.sourceHandle.startsWith('out:');
@@ -237,7 +216,7 @@ function Canvas({ map, engineUrl, client, action, busy }: Props) {
       (n) => n.type === 'table' && n.data.highlighted && !n.hidden,
     );
     if (matches.length)
-      void flow.fitView({
+      void fitView({
         nodes: matches,
         padding: 0.4,
         maxZoom: 1.2,
@@ -350,7 +329,6 @@ function Canvas({ map, engineUrl, client, action, busy }: Props) {
             );
             persist(engineUrl, next);
           }}
-          onSelectionChange={({ edges: chosen }) => setSelected(chosen.map((e) => e.id))}
           onEdgeMouseEnter={(_, edge) => {
             setHover(edge.data?.description || '');
             setHoveredEdge(edge.id);

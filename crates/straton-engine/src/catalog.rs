@@ -203,8 +203,21 @@ pub async fn datamap(pool: &SqlitePool) -> Result<Value> {
     let mut nodes:Vec<Value>=sources.iter().map(|r|json!({"type":"source","id":r.get::<String,_>("id"),"name":r.get::<String,_>("name"),"kind":r.get::<String,_>("kind"),"connected":r.get::<&str,_>("kind")!="external"})).collect();
     for d in datasets {
         let id: &str = d.get("id");
+        let name: &str = d.get("name");
+        // Lake names are stable storage keys; resolve their labels from the current source name.
+        let display_name = if d.get::<&str, _>("source_id") == "straton-local-lake" {
+            name.split_once('/').and_then(|(source, dataset)| {
+                sources
+                    .iter()
+                    .find(|s| s.get::<&str, _>("id") == source)
+                    .map(|s| format!("{}.{dataset}", s.get::<&str, _>("name")))
+            })
+        } else {
+            None
+        }
+        .unwrap_or_else(|| name.to_owned());
         let columns:Vec<_>=cols.iter().filter(|c|c.get::<&str,_>("dataset_id")==id).map(|c|json!({"name":c.get::<String,_>("name"),"type":c.get::<String,_>("data_type"),"nullable":c.get::<bool,_>("nullable"),"pk":c.get::<bool,_>("primary_key")})).collect();
-        nodes.push(json!({"type":"dataset","id":id,"source_id":d.get::<String,_>("source_id"),"name":d.get::<String,_>("name"),"stale":d.get::<bool,_>("stale"),"columns":columns}));
+        nodes.push(json!({"type":"dataset","id":id,"source_id":d.get::<String,_>("source_id"),"name":name,"display_name":display_name,"stale":d.get::<bool,_>("stale"),"columns":columns}));
     }
     let edges:Result<Vec<_>>=edges.iter().map(|r|Ok(json!({"id":r.get::<String,_>("id"),"kind":r.get::<String,_>("kind"),"from_dataset":r.get::<String,_>("from_dataset"),"from_cols":serde_json::from_str::<Value>(r.get("from_cols"))?,"to_dataset":r.get::<String,_>("to_dataset"),"to_cols":serde_json::from_str::<Value>(r.get("to_cols"))?,"confidence":r.get::<Option<f64>,_>("confidence")}))).collect();
     tx.commit().await?;

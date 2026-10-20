@@ -108,3 +108,54 @@ export async function layout(map: DataMap): Promise<MapNode[]> {
   }
   return nodes;
 }
+
+const colors: Record<EdgeKind, string> = {
+  declared_fk: 'var(--edge-fk)',
+  inferred: 'var(--edge-inferred)',
+  lineage: 'var(--edge-lineage)',
+  manual: 'var(--edge-manual)',
+};
+export function buildEdges(map: DataMap): MapEdge[] {
+  const datasets = new Map(
+    map.nodes
+      .filter((node): node is Dataset => node.type === 'dataset')
+      .map((node) => [node.id, node]),
+  );
+  function handle(datasetId: string, column: string | undefined, direction: 'in' | 'out') {
+    return column !== undefined && datasets.get(datasetId)?.columns.some((c) => c.name === column)
+      ? direction + ':' + column
+      : 'dataset:' + direction;
+  }
+  return map.edges.flatMap((relationship) => {
+    if (!datasets.has(relationship.from_dataset) || !datasets.has(relationship.to_dataset))
+      return [];
+    const pairs = relationship.from_cols.length
+      ? relationship.from_cols.map((from, index) => ({ from, to: relationship.to_cols[index] }))
+      : [{ from: undefined, to: undefined }];
+    return pairs.map((pair, index): MapEdge => ({
+      id: relationship.id + ':' + index,
+      source: relationship.from_dataset,
+      target: relationship.to_dataset,
+      sourceHandle: handle(relationship.from_dataset, pair.from, 'out'),
+      targetHandle: handle(relationship.to_dataset, pair.to, 'in'),
+      animated: relationship.kind === 'lineage',
+      deletable: false,
+      ariaLabel: relationship.kind.replaceAll('_', ' ') + ' relationship',
+      data: {
+        relationshipId: relationship.id,
+        kind: relationship.kind,
+        description:
+          relationship.kind.replaceAll('_', ' ') +
+          (relationship.confidence === null
+            ? ''
+            : ' · ' + Math.round(relationship.confidence * 100) + '% confidence'),
+      },
+      style: {
+        stroke: colors[relationship.kind],
+        strokeWidth: relationship.kind === 'manual' ? 3 : 2,
+        strokeDasharray: relationship.kind === 'inferred' ? '6 5' : undefined,
+      },
+      markerEnd: { type: 'arrowclosed', color: colors[relationship.kind] },
+    }));
+  });
+}
