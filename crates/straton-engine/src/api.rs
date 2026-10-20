@@ -3,6 +3,7 @@ use crate::{
     runner::{self, Events},
     store,
 };
+use crate::{catalog, credentials};
 use axum::{
     Json, Router,
     extract::{Path, Query, State, WebSocketUpgrade},
@@ -16,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::{Row, SqlitePool};
 use std::{sync::Arc, time::Instant};
-use straton_core::{Job, Source, SourceKind};
+use straton_core::{Job, SourceKind};
 use subtle::ConstantTimeEq;
 
 #[derive(Clone)]
@@ -34,6 +35,15 @@ pub fn router(app: App) -> Router {
         .route(
             "/v1/sources/{id}",
             get(source).put(update_source).delete(delete_source),
+        )
+        .route("/v1/sources/{id}/check", post(check_source))
+        .route("/v1/sources/{id}/discover", post(discover_source))
+        .route("/v1/sources/{id}/datasets", post(manual_dataset))
+        .route("/v1/datamap", get(datamap))
+        .route("/v1/relationships", post(manual_relationship))
+        .route(
+            "/v1/relationships/{id}",
+            axum::routing::delete(delete_relationship),
         )
         .route("/v1/jobs", get(jobs).post(create_job))
         .route("/v1/jobs/{id}", get(job).put(update_job).delete(delete_job))
@@ -112,7 +122,7 @@ async fn status(State(a): State<App>) -> ApiResult<Json<Value>> {
     ))
 }
 fn source_json(row: sqlx::sqlite::SqliteRow) -> Value {
-    json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"kind":row.get::<String,_>("kind"),"credential_id":row.get::<Option<String>,_>("credential_id")})
+    json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"kind":row.get::<String,_>("kind"),"credential_id":row.get::<Option<String>,_>("credential_id"),"config":serde_json::from_str::<Value>(row.get("config")).unwrap_or(json!({}))})
 }
 async fn sources(State(a): State<App>) -> ApiResult<Json<Value>> {
     Ok(Json(Value::Array(
@@ -133,7 +143,7 @@ async fn source(State(a): State<App>, Path(id): Path<String>) -> ApiResult<Json<
         ApiError(StatusCode::NOT_FOUND, "not found".into())
     })?)))
 }
-async fn save_source(a: App, mut s: Source, update: bool) -> ApiResult<Json<Value>> {
+async fn save_source(a: App, mut s: SourceInput, update: bool) -> ApiResult<Json<Value>> {
     if s.name.trim().is_empty() {
         return Err(bad("name is required"));
     }
@@ -146,19 +156,34 @@ async fn save_source(a: App, mut s: Source, update: bool) -> ApiResult<Json<Valu
         SourceKind::Csv => "csv",
         SourceKind::External => "external",
         SourceKind::Noop => "noop",
+        SourceKind::Parquet => return Err(bad("parquet sources are managed by sync")),
     };
+    if s.id == "straton-local-lake" {
+        return Err(bad("local lake source id is reserved"));
+    }
+    if s.credential_id.as_deref().is_some_and(|id| id != s.id) {
+        return Err(bad("credential_id must equal source id"));
+    }
+    validate_config(kind, &s.config)?;
+    catalog::path_component(&s.id).map_err(|_| bad("invalid source id"))?;
     let mut tx = a.pool.begin().await?;
     let query = if update {
-        "UPDATE sources SET name=?2,kind=?3,credential_id=?4 WHERE id=?1"
+        "UPDATE sources SET name=?2,kind=?3,credential_id=COALESCE(?4,credential_id),config=?5 WHERE id=?1"
     } else {
-        "INSERT INTO sources(id,name,kind,credential_id) VALUES(?1,?2,?3,?4)"
+        "INSERT INTO sources(id,name,kind,credential_id,config) VALUES(?1,?2,?3,?4,?5)"
     };
     found(
         sqlx::query(query)
             .bind(&s.id)
             .bind(&s.name)
             .bind(kind)
-            .bind(&s.credential_id)
+            .bind(
+                s.secret
+                    .as_ref()
+                    .map(|_| s.id.as_str())
+                    .or(s.credential_id.as_deref()),
+            )
+            .bind(s.config.to_string())
             .execute(&mut *tx)
             .await?
             .rows_affected(),
@@ -174,19 +199,22 @@ async fn save_source(a: App, mut s: Source, update: bool) -> ApiResult<Json<Valu
         "",
     )
     .await?;
+    if let Some(secret) = s.secret.take() {
+        credentials::set(&s.id, &secret)?;
+    }
     tx.commit().await?;
-    Ok(Json(json!(s)))
+    source(State(a), Path(s.id)).await
 }
 async fn create_source(
     State(a): State<App>,
-    Json(s): Json<Source>,
+    Json(s): Json<SourceInput>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     Ok((StatusCode::CREATED, save_source(a, s, false).await?))
 }
 async fn update_source(
     State(a): State<App>,
     Path(id): Path<String>,
-    Json(mut s): Json<Source>,
+    Json(mut s): Json<SourceInput>,
 ) -> ApiResult<Json<Value>> {
     s.id = id;
     save_source(a, s, true).await
@@ -201,6 +229,7 @@ async fn delete_source(State(a): State<App>, Path(id): Path<String>) -> ApiResul
             .rows_affected(),
     )?;
     store::audit(&mut tx, "source.deleted", &id, "").await?;
+    credentials::delete(&id)?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -378,4 +407,195 @@ async fn events(State(a): State<App>, ws: WebSocketUpgrade) -> Response {
             }
         }
     })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceInput {
+    #[serde(default)]
+    id: String,
+    name: String,
+    kind: SourceKind,
+    #[serde(default)]
+    credential_id: Option<String>,
+    #[serde(default = "empty_config")]
+    config: Value,
+    #[serde(default, deserialize_with = "read_secret")]
+    secret: Option<SecretString>,
+}
+fn empty_config() -> Value {
+    json!({})
+}
+fn read_secret<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<SecretString>, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.map(Into::into))
+}
+fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
+    let obj = config
+        .as_object()
+        .ok_or_else(|| bad("config must be an object"))?;
+    let allowed: &[&str] = match kind {
+        "postgres" => &["host", "port", "database", "username", "batch_size"],
+        "sqlite" => &["path", "batch_size"],
+        "csv" => &["path", "batch_size", "sample_size"],
+        _ => &[],
+    };
+    if obj.keys().any(|k| !allowed.contains(&k.as_str())) {
+        return Err(bad(
+            "unsupported config field; supply credentials only in secret",
+        ));
+    }
+    for (k, v) in obj {
+        if ["port", "batch_size", "sample_size"].contains(&k.as_str()) {
+            if v.as_u64().is_none_or(|v| v == 0 || v > i32::MAX as u64) {
+                return Err(bad("invalid numeric config field"));
+            }
+        } else if !v.is_string() {
+            return Err(bad("config field must be a string"));
+        }
+    }
+    if kind != "external" {
+        straton_connectors::build(kind, config, None)
+            .map_err(|_| bad("invalid connector configuration"))?;
+    }
+    Ok(())
+}
+fn changed(a: &App) {
+    let _ = a.events.send(json!({"type":"catalog.changed"}));
+}
+async fn check_source(State(a): State<App>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    catalog::connector(&a.pool, &id)
+        .await?
+        .check()
+        .await
+        .map_err(anyhow::Error::from)?;
+    Ok(Json(json!({"ok":true})))
+}
+async fn discover_source(State(a): State<App>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    catalog::discover(&a.pool, &id).await?;
+    changed(&a);
+    Ok(Json(json!({"ok":true})))
+}
+async fn datamap(State(a): State<App>) -> ApiResult<Json<Value>> {
+    Ok(Json(catalog::datamap(&a.pool).await?))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManualDataset {
+    name: String,
+    columns: Vec<ManualColumn>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManualColumn {
+    name: String,
+    #[serde(rename = "type", alias = "data_type")]
+    data_type: String,
+    nullable: bool,
+    #[serde(default, alias = "primary_key")]
+    pk: bool,
+}
+async fn manual_dataset(
+    State(a): State<App>,
+    Path(id): Path<String>,
+    Json(d): Json<ManualDataset>,
+) -> ApiResult<(StatusCode, Json<Value>)> {
+    if d.name.trim().is_empty() || d.columns.is_empty() {
+        return Err(bad("name and columns required"));
+    }
+    let mut names = std::collections::HashSet::new();
+    for c in &d.columns {
+        if c.name.trim().is_empty() || c.data_type.trim().is_empty() || !names.insert(&c.name) {
+            return Err(bad("invalid or duplicate column"));
+        }
+    }
+    let mut tx = a.pool.begin().await?;
+    let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM sources WHERE id=?")
+        .bind(&id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if kind.as_deref() != Some("external") {
+        return Err(bad("manual datasets require an external source"));
+    }
+    let did = store::id();
+    sqlx::query("INSERT INTO datasets(id,source_id,name) VALUES(?,?,?)")
+        .bind(&did)
+        .bind(&id)
+        .bind(&d.name)
+        .execute(&mut *tx)
+        .await?;
+    for c in d.columns {
+        sqlx::query("INSERT INTO columns(id,dataset_id,name,data_type,nullable,primary_key) VALUES(?,?,?,?,?,?)").bind(store::id()).bind(&did).bind(c.name).bind(c.data_type).bind(c.nullable).bind(c.pk).execute(&mut *tx).await?;
+    }
+    store::audit(&mut tx, "dataset.created", &did, "").await?;
+    tx.commit().await?;
+    changed(&a);
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"id":did,"source_id":id,"name":d.name})),
+    ))
+}
+async fn manual_relationship(
+    State(a): State<App>,
+    Json(mut r): Json<straton_core::Relationship>,
+) -> ApiResult<(StatusCode, Json<Value>)> {
+    if !matches!(r.kind, straton_core::RelationshipKind::Manual) {
+        return Err(bad("only manual relationships can be created"));
+    }
+    if r.from_cols.is_empty() || r.from_cols.len() != r.to_cols.len() {
+        return Err(bad("matching nonempty column lists required"));
+    }
+    r.id = store::id();
+    r.confidence = None;
+    let mut tx = a.pool.begin().await?;
+    for (id, cols) in [(&r.from_dataset, &r.from_cols), (&r.to_dataset, &r.to_cols)] {
+        let mut names = std::collections::HashSet::new();
+        for col in cols {
+            if !names.insert(col) {
+                return Err(bad("duplicate column"));
+            }
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM columns WHERE dataset_id=? AND name=?)",
+            )
+            .bind(id)
+            .bind(col)
+            .fetch_one(&mut *tx)
+            .await?;
+            if !exists {
+                return Err(bad("unknown dataset column"));
+            }
+        }
+    }
+    catalog::edge(&mut tx, &r).await?;
+    store::audit(&mut tx, "relationship.created", &r.id, "").await?;
+    tx.commit().await?;
+    changed(&a);
+    Ok((StatusCode::CREATED, Json(json!(r))))
+}
+async fn delete_relationship(
+    State(a): State<App>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let mut tx = a.pool.begin().await?;
+    let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM relationships WHERE id=?")
+        .bind(&id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    match kind.as_deref() {
+        None => return Err(ApiError(StatusCode::NOT_FOUND, "not found".into())),
+        Some("manual") => {}
+        _ => {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "only manual relationships can be deleted".into(),
+            ));
+        }
+    }
+    sqlx::query("DELETE FROM relationships WHERE id=? AND kind='manual'")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+    store::audit(&mut tx, "relationship.deleted", &id, "").await?;
+    tx.commit().await?;
+    changed(&a);
+    Ok(StatusCode::NO_CONTENT)
 }

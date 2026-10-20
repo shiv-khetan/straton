@@ -27,6 +27,7 @@ uuid = { version = "1", features = ["v4"] }
 rand = "0.9"
 subtle = "2"
 fs2 = "0.4"
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

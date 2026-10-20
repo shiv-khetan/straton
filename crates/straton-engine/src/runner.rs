@@ -3,8 +3,8 @@ use anyhow::{Result, ensure};
 use futures::StreamExt;
 use serde_json::{Value, json};
 use sqlx::{Row, SqlitePool};
-use std::{future::Future, sync::Arc, time::Duration};
-use straton_core::Connector;
+use std::{future::Future, io::Write, path::Path, sync::Arc, time::Duration};
+
 use tokio::{
     sync::{Semaphore, broadcast},
     task::JoinSet,
@@ -104,34 +104,92 @@ async fn cancelled(pool: &SqlitePool, id: &str) -> Result<bool> {
             .await?,
     )
 }
-async fn execute(pool: &SqlitePool, backups: &Backups, id: &str) -> Result<()> {
+pub(crate) async fn execute(
+    pool: &SqlitePool,
+    backups: &Backups,
+    id: &str,
+    events: &Events,
+) -> Result<()> {
     if cancelled(pool, id).await? {
         return Ok(());
     }
-    let row = sqlx::query("SELECT j.builtin,j.dataset,s.kind FROM runs r JOIN jobs j ON j.id=r.job_id LEFT JOIN sources s ON s.id=j.source_id WHERE r.id=?")
+    let row = sqlx::query("SELECT j.builtin,j.dataset,j.source_id,s.kind FROM runs r JOIN jobs j ON j.id=r.job_id LEFT JOIN sources s ON s.id=j.source_id WHERE r.id=?")
         .bind(id).fetch_one(pool).await?;
     if row.get::<bool, _>("builtin") {
         backups.create(pool).await?;
     } else {
-        ensure!(
-            row.get::<Option<String>, _>("kind").as_deref() == Some("noop"),
-            "connector is not available in Phase 1"
-        );
-        let cursor: Option<String> =
-            sqlx::query_scalar("SELECT cursor FROM run_checkpoints WHERE run_id=?")
+        let source: String = row.get("source_id");
+        let dataset: String = row.get("dataset");
+        let noop = row.get::<Option<String>, _>("kind").as_deref() == Some("noop");
+        crate::catalog::path_component(&source)?;
+        crate::catalog::path_component(&dataset)?;
+        crate::catalog::path_component(id)?;
+        let output = backups.data_dir().join("data").join(&source).join(&dataset);
+        let staging = output.join(format!(".staging-{id}"));
+        // A crash after the directory rename must resume publication, not reread checkpointed data.
+        if !noop && output.join(id).is_dir() {
+            publish_snapshot(pool, events, &output, id).await?;
+            return Ok(());
+        }
+        let connector = crate::catalog::connector(pool, &source).await?;
+        if !noop {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM datasets WHERE source_id=? AND name=?)",
+            )
+            .bind(&source)
+            .bind(&dataset)
+            .fetch_one(pool)
+            .await?;
+            if !exists {
+                crate::catalog::discover(pool, &source).await?;
+                let _ = events.send(json!({"type":"catalog.changed"}));
+            }
+        }
+        let checkpoint_row =
+            sqlx::query("SELECT cursor,batch_number FROM run_checkpoints WHERE run_id=?")
                 .bind(id)
                 .fetch_optional(pool)
                 .await?;
-        let cursor = cursor.map(|s| serde_json::from_str(&s)).transpose()?;
-        let connector = straton_connectors::Noop;
-        let mut batches = connector.read(row.get("dataset"), cursor).await?;
+        let cursor = checkpoint_row
+            .as_ref()
+            .map(|r| serde_json::from_str::<Value>(r.get("cursor")))
+            .transpose()?;
+        let mut number = checkpoint_row
+            .as_ref()
+            .map(|r| r.get::<i64, _>("batch_number"))
+            .unwrap_or(0);
+        if !noop {
+            ensure!(
+                number == 0 || staging.is_dir(),
+                "checkpoint staging directory is missing"
+            );
+            std::fs::create_dir_all(&staging)?;
+        }
+        let mut batches = connector.read(&dataset, cursor).await?;
+        let mut linked = false;
         while let Some(batch) = batches.next().await {
             if cancelled(pool, id).await? {
                 break;
             }
-            let (_batch, cursor) = batch?;
-            // Phase 1 commits a batch marker; Parquet output belongs to Phase 2.
+            let (batch, cursor) = batch?;
+            if !noop {
+                let path = staging.join(format!("part-{number:06}.parquet"));
+                straton_connectors::write_parquet(&path, &batch)?;
+                if !linked {
+                    lineage(pool, &source, &dataset).await?;
+                    linked = true;
+                    let _ = events.send(json!({"type":"catalog.changed"}));
+                }
+            }
             checkpoint(pool, id, &cursor).await?;
+            number += 1;
+        }
+        if !noop && !cancelled(pool, id).await? {
+            if !linked {
+                lineage(pool, &source, &dataset).await?;
+                let _ = events.send(json!({"type":"catalog.changed"}));
+            }
+            publish_snapshot(pool, events, &output, id).await?;
         }
     }
     Ok(())
@@ -144,6 +202,15 @@ where
     let mut worker = JoinSet::new();
     worker.spawn(work);
     let result = worker.join_next().await.expect("one worker was spawned");
+    if matches!(&result, Ok(Ok(()))) {
+        let published: bool = sqlx::query_scalar("SELECT state='succeeded' FROM runs WHERE id=?")
+            .bind(&id)
+            .fetch_one(&pool)
+            .await?;
+        if published {
+            return Ok(());
+        }
+    }
     let (next, error) = match result {
         Err(e) if e.is_panic() => ("failed", Some("worker panicked".to_string())),
         Err(_) => ("interrupted", Some("worker aborted".to_string())),
@@ -205,8 +272,9 @@ impl Runner {
                 let _permit = permit;
                 let worker_pool = pool.clone();
                 let worker_id = id.clone();
+                let worker_events = events.clone();
                 if let Err(e) = supervise(pool, events, id, async move {
-                    execute(&worker_pool, &backups, &worker_id).await
+                    execute(&worker_pool, &backups, &worker_id, &worker_events).await
                 })
                 .await
                 {
@@ -227,4 +295,125 @@ impl Runner {
             tracing::warn!("30s drain expired; remaining runs will recover on restart");
         }
     }
+}
+
+async fn lineage(pool: &SqlitePool, source: &str, dataset: &str) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("INSERT INTO sources(id,name,kind) VALUES('straton-local-lake','Local lake','parquet') ON CONFLICT(id) DO NOTHING").execute(&mut *tx).await?;
+    let kind: String = sqlx::query_scalar("SELECT kind FROM sources WHERE id='straton-local-lake'")
+        .fetch_one(&mut *tx)
+        .await?;
+    ensure!(kind == "parquet", "local lake source id is reserved");
+    let from: String = sqlx::query_scalar("SELECT id FROM datasets WHERE source_id=? AND name=?")
+        .bind(source)
+        .bind(dataset)
+        .fetch_one(&mut *tx)
+        .await?;
+    let to:String=sqlx::query_scalar("INSERT INTO datasets(id,source_id,name) VALUES(?,'straton-local-lake',?) ON CONFLICT(source_id,name) DO UPDATE SET name=excluded.name RETURNING id").bind(store::id()).bind(format!("{source}/{dataset}")).fetch_one(&mut *tx).await?;
+    let cols = sqlx::query("SELECT * FROM columns WHERE dataset_id=?")
+        .bind(&from)
+        .fetch_all(&mut *tx)
+        .await?;
+    for c in cols {
+        sqlx::query("INSERT INTO columns(id,dataset_id,name,data_type,nullable,primary_key) VALUES(?,?,?,?,?,?) ON CONFLICT(dataset_id,name) DO UPDATE SET data_type=excluded.data_type,nullable=excluded.nullable,primary_key=excluded.primary_key").bind(store::id()).bind(&to).bind(c.get::<String,_>("name")).bind(c.get::<String,_>("data_type")).bind(c.get::<bool,_>("nullable")).bind(c.get::<bool,_>("primary_key")).execute(&mut *tx).await?;
+    }
+    sqlx::query("DELETE FROM columns WHERE dataset_id=? AND name NOT IN(SELECT name FROM columns WHERE dataset_id=?)").bind(&to).bind(&from).execute(&mut *tx).await?;
+    let exists:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM relationships WHERE from_dataset=? AND to_dataset=? AND kind='lineage')").bind(&from).bind(&to).fetch_one(&mut *tx).await?;
+    if !exists {
+        crate::catalog::edge(
+            &mut tx,
+            &straton_core::Relationship {
+                id: String::new(),
+                from_dataset: from,
+                from_cols: vec![],
+                to_dataset: to,
+                to_cols: vec![],
+                kind: straton_core::RelationshipKind::Lineage,
+                confidence: None,
+            },
+        )
+        .await?;
+        store::audit(&mut tx, "lineage.created", source, "").await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn publish_snapshot(
+    pool: &SqlitePool,
+    events: &Events,
+    output: &Path,
+    id: &str,
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    // Serialize publishers and cancellation: once _current changes this run is successful.
+    let updated = sqlx::query("UPDATE runs SET state='succeeded',updated_at=? WHERE id=? AND state='running' AND cancel_requested=0")
+        .bind(store::now()).bind(id).execute(&mut *tx).await?.rows_affected();
+    if updated == 0 {
+        return Ok(());
+    }
+    store::audit(&mut tx, "run.succeeded", id, "snapshot published").await?;
+    let active: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM runs WHERE state IN ('queued','running')")
+            .fetch_all(&mut *tx)
+            .await?;
+    let snapshot = output.join(id);
+    if !snapshot.is_dir() {
+        std::fs::rename(output.join(format!(".staging-{id}")), &snapshot)?;
+    }
+    let temporary = output.join("_current.partial");
+    let mut file = std::fs::File::create(&temporary)?;
+    file.write_all(id.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    #[cfg(unix)]
+    std::fs::File::open(output)?.sync_all()?;
+    std::fs::rename(temporary, output.join("_current"))?;
+    // Make the pointer durable before removing the snapshot it replaced.
+    #[cfg(unix)]
+    let durable = match std::fs::File::open(output).and_then(|f| f.sync_all()) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(%error, "snapshot directory flush failed; cleanup deferred");
+            false
+        }
+    };
+    #[cfg(not(unix))]
+    let durable = true;
+    // Publication is complete; garbage collection must not turn it into a failed run.
+    if durable && let Err(error) = clean_snapshots(output, id, &active) {
+        tracing::warn!(%error, "snapshot cleanup deferred");
+    }
+    tx.commit().await?;
+    event(events, id, "succeeded");
+    Ok(())
+}
+fn clean_snapshots(output: &Path, current: &str, active: &[String]) -> Result<()> {
+    let output = output.canonicalize()?;
+    for entry in std::fs::read_dir(&output)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let run = if let Some(run) = name.strip_prefix(".staging-") {
+            run
+        } else {
+            if uuid::Uuid::try_parse(&name).is_err() {
+                continue;
+            }
+            &name
+        };
+        if name == current || active.iter().any(|id| id == run) {
+            continue;
+        }
+        let path = entry.path().canonicalize()?;
+        ensure!(
+            path.parent() == Some(output.as_path()),
+            "snapshot path escapes dataset directory"
+        );
+        std::fs::remove_dir_all(path)?;
+    }
+    Ok(())
 }

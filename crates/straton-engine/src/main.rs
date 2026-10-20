@@ -1,6 +1,8 @@
 mod api;
 mod backup;
+mod catalog;
 mod config;
+mod credentials;
 mod runner;
 mod scheduler;
 mod security;

@@ -19,6 +19,9 @@ impl Backups {
             gate: Arc::new(Mutex::new(())),
         }
     }
+    pub fn data_dir(&self) -> &Path {
+        &self.config.data_dir
+    }
     pub async fn list(&self) -> Result<Vec<PathBuf>> {
         let dir = &self.config.backup.dir;
         tokio::fs::create_dir_all(dir).await?;

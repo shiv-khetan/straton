@@ -20,6 +20,7 @@ pub enum SourceKind {
     Sqlite,
     Csv,
     External,
+    Parquet,
     Noop,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +31,8 @@ pub struct Source {
     pub name: String,
     pub kind: SourceKind,
     pub credential_id: Option<String>,
+    #[serde(default)]
+    pub config: serde_json::Value,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Dataset {
@@ -105,14 +108,15 @@ pub struct Run {
     pub error: Option<String>,
 }
 
+pub type Batches<'a> = BoxStream<'a, Result<(RecordBatch, Cursor)>>;
+
 /// Connector errors must never embed credentials.
-#[allow(async_fn_in_trait)]
 pub trait Connector: Send + Sync {
-    async fn check(&self) -> Result<()>;
-    async fn discover(&self) -> Result<Vec<DatasetSchema>>;
-    async fn read(
-        &self,
-        dataset: &str,
+    fn check(&self) -> futures::future::BoxFuture<'_, Result<()>>;
+    fn discover(&self) -> futures::future::BoxFuture<'_, Result<Vec<DatasetSchema>>>;
+    fn read<'a>(
+        &'a self,
+        dataset: &'a str,
         cursor: Option<Cursor>,
-    ) -> Result<BoxStream<'_, Result<(RecordBatch, Cursor)>>>;
+    ) -> futures::future::BoxFuture<'a, Result<Batches<'a>>>;
 }
