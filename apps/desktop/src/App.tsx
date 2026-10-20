@@ -28,7 +28,7 @@ import {
   stateTone,
 } from './ui';
 import type { IconName } from './ui';
-import { backupTime, isLoopback, relativeTime } from './view-model';
+import { backupTime, datasetLabel, isLoopback, relativeTime } from './view-model';
 import { tableReference } from './sql-model';
 const DataMapView = lazy(() => import('./DataMap'));
 const emptyMap: DataMap = { nodes: [], edges: [] };
@@ -902,12 +902,12 @@ function Jobs({
   onClose: () => void;
   seed: Dataset | null;
 }) {
-  const [name, setName] = useState(seed ? 'Sync ' + seed.name : '');
+  const [name, setName] = useState(seed ? 'Sync ' + datasetLabel(seed) : '');
   const [source, setSource] = useState(seed?.source_id ?? '');
   const [dataset, setDataset] = useState(seed?.name ?? '');
   useEffect(() => {
     if (open) {
-      setName(seed ? 'Sync ' + seed.name : '');
+      setName(seed ? 'Sync ' + datasetLabel(seed) : '');
       setSource(seed?.source_id ?? '');
       setDataset(seed?.name ?? '');
     }
@@ -945,7 +945,13 @@ function Jobs({
                     </Pill>
                   </small>
                 </td>
-                <td>{job.dataset}</td>
+                <td>
+                  {datasetLabel(
+                    datasets.find(
+                      (d) => d.source_id === job.source_id && d.name === job.dataset,
+                    ) ?? { name: job.dataset },
+                  )}
+                </td>
                 <td>
                   <code>{job.cron || 'Manual'}</code>
                 </td>
@@ -1033,7 +1039,7 @@ function Jobs({
                   .filter((d) => d.source_id === source && !d.stale)
                   .map((d) => (
                     <option key={d.id} value={d.name}>
-                      {d.name}
+                      {datasetLabel(d)}
                     </option>
                   ))}
               </select>

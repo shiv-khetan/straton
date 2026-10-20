@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { relativeTime, backupTime, bucketRuns, isLoopback } from '../src/view-model.ts';
+import { datasetLabel, relativeTime, backupTime, bucketRuns, isLoopback } from '../src/view-model.ts';
 const now = Date.UTC(2026, 9, 20, 12);
 assert.equal(relativeTime(null, now), 'Never');
 assert.equal(relativeTime('bad', now), 'Unknown');
@@ -45,3 +45,24 @@ assert.equal(light.warning.toUpperCase(),'#F39C12');
 assert.equal(light.danger.toUpperCase(),'#E74C3C');
 assert.equal(light.info.toUpperCase(),'#F1C40F');
 console.log('Mandatory palette and light/dark text contrast checks passed (18 pairs).');
+
+// Local lake keeps its source-qualified storage key but presents a friendly name.
+const lakeDataset = {
+  type: 'dataset',
+  id: 'lake-customers',
+  source_id: 'straton-local-lake',
+  name: '3562a8e7-f19a-436b-831b-341543010d09/customers',
+  display_name: 'customers',
+  stale: false,
+  row_count: 12,
+  last_synced_at: null,
+  sql_schema: 'lake',
+  sql_table: 'customers',
+  columns: [{ name: 'id', type: 'Int64', nullable: false, pk: true }],
+};
+assert.equal(datasetLabel(lakeDataset), 'customers');
+assert.equal(datasetLabel({ ...lakeDataset, display_name: undefined }), lakeDataset.name);
+assert.equal(datasetLabel({ ...lakeDataset, display_name: null }), lakeDataset.name);
+assert.equal(datasetLabel({ ...lakeDataset, display_name: '' }), '');
+assert.equal(datasetLabel(undefined), '');
+console.log('Lake dataset labels prefer display_name and preserve the nullish name fallback.');

@@ -1,4 +1,7 @@
-import type { Run } from './api';
+import type { Dataset, Run } from './api';
+export function datasetLabel(dataset: Pick<Dataset, 'display_name' | 'name'> | undefined): string {
+  return dataset?.display_name ?? dataset?.name ?? '';
+}
 export function relativeTime(value: string | number | null | undefined, now = Date.now()): string {
   if (value == null) return 'Never';
   const time = typeof value === 'number' ? value : Date.parse(value);

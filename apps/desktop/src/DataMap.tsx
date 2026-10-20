@@ -17,7 +17,7 @@ import {
 import type { Connection as FlowConnection, EdgeProps, NodeProps } from '@xyflow/react';
 import type { Api, DataMap, Dataset, EdgeKind, MapSource } from './api';
 import { Button, Icon, Pill, SchemaTree, Table as UiTable } from './ui';
-import { relativeTime } from './view-model';
+import { datasetLabel, relativeTime } from './view-model';
 import { Field } from './App';
 import {
   buildEdges,
@@ -64,7 +64,7 @@ function Table({ data }: NodeProps<TableNode>) {
           <Icon name="table" />
         </span>
         <div className="dataset-heading">
-          <strong>{data.dataset.display_name ?? data.dataset.name}</strong>
+          <strong>{datasetLabel(data.dataset)}</strong>
           <small>
             {data.dataset.columns.length} columns ·{' '}
             {data.dataset.row_count?.toLocaleString() ?? '—'} rows
@@ -169,6 +169,7 @@ function Canvas({
   const [sourceFilter, setSourceFilter] = useState('');
   const [enabledKinds, setEnabledKinds] = useState<EdgeKind[]>(kinds);
   const [search, setSearch] = useState('');
+  const query = search.trim().toLowerCase();
   const [hover, setHover] = useState('');
   const [hoveredEdge, setHoveredEdge] = useState('');
   const [layoutError, setLayoutError] = useState('');
@@ -186,9 +187,11 @@ function Canvas({
   );
   useEffect(() => {
     onSelection(
-      selectedDataset?.display_name ??
-        selectedDataset?.name ??
-        (selectedEdge ? selectedEdge.kind.replaceAll('_', ' ') : ''),
+      selectedDataset
+        ? datasetLabel(selectedDataset)
+        : selectedEdge
+          ? selectedEdge.kind.replaceAll('_', ' ')
+          : '',
     );
   }, [selectedDataset, selectedEdge, onSelection]);
   const { fitView, zoomIn, zoomOut } = useReactFlow<MapNode, MapEdge>();
@@ -246,15 +249,12 @@ function Canvas({
                 ? {
                     ...node.data,
                     highlighted:
-                      !!search &&
-                      (node.data.dataset.display_name ?? node.data.dataset.name)
-                        .toLowerCase()
-                        .includes(search.toLowerCase()),
+                      !!query && datasetLabel(node.data.dataset).toLowerCase().includes(query),
                   }
                 : node.data,
           }) as MapNode,
       ),
-    [nodes, sourceFilter, search, excluded],
+    [nodes, sourceFilter, query, excluded],
   );
   const visibleIds = useMemo(
     () => new Set(visibleNodes.filter((n) => !n.hidden).map((n) => n.id)),
@@ -334,17 +334,33 @@ function Canvas({
         for (const id of ids) await client.deleteRelationship(id);
       }, 'Manual relationship deleted');
   }
-  function zoomSearch() {
-    const matches = visibleNodes.filter(
-      (n) => n.type === 'table' && n.data.highlighted && !n.hidden,
+  function selectDataset(id: string) {
+    const dataset = map.nodes.find((n): n is Dataset => n.type === 'dataset' && n.id === id);
+    if (!dataset) return;
+    setExcluded((previous) =>
+      previous.filter((value) => value !== id && value !== dataset.source_id),
     );
-    if (matches.length)
+    if (sourceFilter && sourceFilter !== dataset.source_id) setSourceFilter('');
+    setNodes((previous) => previous.map((node) => ({ ...node, selected: node.id === id })));
+    setEdges((previous) => previous.map((edge) => ({ ...edge, selected: false })));
+    requestAnimationFrame(() => {
       void fitView({
-        nodes: matches,
+        nodes: [{ id }],
         padding: 0.4,
         maxZoom: 1.2,
         duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 250,
       });
+    });
+  }
+  function zoomSearch() {
+    if (!query) return;
+    const match = nodes.find(
+      (node) =>
+        node.type === 'table' &&
+        (!sourceFilter || node.parentId === sourceFilter) &&
+        datasetLabel(node.data.dataset).toLowerCase().includes(query),
+    );
+    if (match) selectDataset(match.id);
   }
   return (
     <section className="map-section">
@@ -367,16 +383,17 @@ function Canvas({
                   type="search"
                   value={search}
                   placeholder="Search datasets…"
+                  aria-describedby="dataset-search-help"
                   onChange={(e) => setSearch(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') zoomSearch();
                   }}
                 />
               </Field>
-              <Button onClick={zoomSearch} disabled={!search}>
-                <Icon name="search" />
-                Find on canvas
-              </Button>
+              <p id="dataset-search-help" className="hint">
+                Filters the catalog and highlights canvas matches. Press Enter to select the first
+                match.
+              </p>
               <Field label="Source">
                 <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
                   <option value="">All sources</option>
@@ -393,15 +410,14 @@ function Canvas({
             <SchemaTree
               groups={map.nodes
                 .filter((n): n is MapSource => n.type === 'source')
+                .filter((source) => !sourceFilter || source.id === sourceFilter)
                 .map((source) => ({
                   id: source.id,
                   label: source.name,
                   items: map.nodes
                     .filter((n): n is Dataset => n.type === 'dataset' && n.source_id === source.id)
-                    .filter((d) =>
-                      (d.display_name ?? d.name).toLowerCase().includes(search.toLowerCase()),
-                    )
-                    .map((d) => ({ id: d.id, label: d.display_name ?? d.name })),
+                    .filter((d) => datasetLabel(d).toLowerCase().includes(query))
+                    .map((d) => ({ id: d.id, label: datasetLabel(d) })),
                 }))}
               hidden={excluded}
               onToggle={(id) =>
@@ -409,10 +425,7 @@ function Canvas({
                   previous.includes(id) ? previous.filter((v) => v !== id) : [...previous, id],
                 )
               }
-              onSelect={(id) => {
-                setNodes((previous) => previous.map((n) => ({ ...n, selected: n.id === id })));
-                void fitView({ nodes: [{ id }], padding: 0.4, maxZoom: 1.2 });
-              }}
+              onSelect={selectDataset}
               selected={selectedDataset?.id}
             />
             <fieldset className="edge-filters">
@@ -567,7 +580,7 @@ function Canvas({
                 <span className="icon-tile tone-primary">
                   <Icon name="table" />
                 </span>
-                <h2 className="mono">{selectedDataset.display_name ?? selectedDataset.name}</h2>
+                <h2 className="mono">{datasetLabel(selectedDataset)}</h2>
                 <Pill tone={selectedDataset.stale ? 'warning' : 'neutral'}>
                   {selectedDataset.stale ? 'Stale data' : 'Dataset'}
                 </Pill>
@@ -642,13 +655,14 @@ function Canvas({
                         >
                           <Icon name="link" />
                           <span>
-                            {
+                            {datasetLabel(
                               map.nodes.find(
                                 (n) =>
+                                  n.type === 'dataset' &&
                                   n.id ===
-                                  (direction === 'Incoming' ? e.from_dataset : e.to_dataset),
-                              )?.name
-                            }
+                                    (direction === 'Incoming' ? e.from_dataset : e.to_dataset),
+                              ),
+                            )}
                             <small>{e.kind.replaceAll('_', ' ')}</small>
                           </span>
                         </button>
@@ -696,13 +710,21 @@ function Canvas({
                     </dd>
                     <dt>From</dt>
                     <dd className="mono">
-                      {map.nodes.find((n) => n.id === selectedEdge.from_dataset)?.name} (
-                      {selectedEdge.from_cols.join(', ') || 'dataset'})
+                      {datasetLabel(
+                        map.nodes.find(
+                          (n) => n.type === 'dataset' && n.id === selectedEdge.from_dataset,
+                        ),
+                      )}{' '}
+                      ({selectedEdge.from_cols.join(', ') || 'dataset'})
                     </dd>
                     <dt>To</dt>
                     <dd className="mono">
-                      {map.nodes.find((n) => n.id === selectedEdge.to_dataset)?.name} (
-                      {selectedEdge.to_cols.join(', ') || 'dataset'})
+                      {datasetLabel(
+                        map.nodes.find(
+                          (n) => n.type === 'dataset' && n.id === selectedEdge.to_dataset,
+                        ),
+                      )}{' '}
+                      ({selectedEdge.to_cols.join(', ') || 'dataset'})
                     </dd>
                   </dl>
                   {selectedEdge.kind === 'manual' && (

@@ -1,3 +1,4 @@
+import { datasetLabel } from './view-model.ts';
 import type { Edge, Node, XYPosition } from '@xyflow/react';
 import type { ELK, ElkNode, LayoutOptions } from 'elkjs/lib/elk-api';
 import type { DataMap, Dataset, EdgeKind, MapSource } from './api';
@@ -70,7 +71,7 @@ export function tableSize(dataset: Dataset) {
     width: Math.ceil(
       Math.max(
         320,
-        textWidth(dataset.display_name ?? dataset.name, true) + 84 + (dataset.stale ? 60 : 0),
+        textWidth(datasetLabel(dataset), true) + 84 + (dataset.stale ? 60 : 0),
         ...dataset.columns.map(
           (column) =>
             textWidth(column.name) + textWidth(column.type + (column.nullable ? '?' : '')) + 88,
