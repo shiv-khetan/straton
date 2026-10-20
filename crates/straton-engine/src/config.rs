@@ -12,6 +12,7 @@ pub struct Config {
     pub tls_cert: Option<PathBuf>,
     pub tls_key: Option<PathBuf>,
     pub backup: Backup,
+    pub sql: Sql,
 }
 #[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -39,6 +40,7 @@ impl Default for Config {
             tls_cert: None,
             tls_key: None,
             backup: Backup::default(),
+            sql: Sql::default(),
         }
     }
 }
@@ -60,6 +62,11 @@ impl Config {
                 "STRATON_BACKUP_CRON" => c.backup.cron = value,
                 "STRATON_BACKUP_DIR" => c.backup.dir = value.into(),
                 "STRATON_BACKUP_KEEP" => c.backup.keep = value.parse()?,
+                "STRATON_SQL_ENABLED" => c.sql.enabled = value.parse()?,
+                "STRATON_SQL_BIND" => c.sql.bind = value.parse()?,
+                "STRATON_SQL_QUERY_TIMEOUT_SECS" => c.sql.query_timeout_secs = value.parse()?,
+                "STRATON_SQL_MAX_ROWS" => c.sql.max_rows = value.parse()?,
+                "STRATON_SQL_MEMORY_LIMIT_MB" => c.sql.memory_limit_mb = value.parse()?,
                 _ => anyhow::bail!("unknown environment setting {key}"),
             }
         }
@@ -81,10 +88,46 @@ impl Config {
             self.bind.ip().is_loopback() || self.tls_cert.is_some(),
             "non-loopback bind requires TLS"
         );
+        ensure!(
+            !self.sql.enabled || self.sql.bind.ip().is_loopback() || self.tls_cert.is_some(),
+            "non-loopback SQL bind requires TLS"
+        );
+        ensure!(
+            self.sql.query_timeout_secs > 0.0
+                && std::time::Duration::try_from_secs_f64(self.sql.query_timeout_secs).is_ok(),
+            "sql.query_timeout_secs must be positive and fit in a duration"
+        );
+        ensure!(self.sql.max_rows > 0, "sql.max_rows must be positive");
+        ensure!(
+            self.sql.memory_limit_mb > 0
+                && self.sql.memory_limit_mb.checked_mul(1024 * 1024).is_some(),
+            "sql.memory_limit_mb must be positive and fit in memory size"
+        );
         self.backup
             .cron
             .parse::<cron::Schedule>()
             .context("backup.cron")?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Sql {
+    pub enabled: bool,
+    pub bind: SocketAddr,
+    pub query_timeout_secs: f64,
+    pub max_rows: usize,
+    pub memory_limit_mb: usize,
+}
+impl Default for Sql {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bind: "127.0.0.1:5433".parse().unwrap(),
+            query_timeout_secs: 60.0,
+            max_rows: 100_000,
+            memory_limit_mb: 1024,
+        }
     }
 }

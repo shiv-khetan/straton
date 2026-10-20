@@ -589,3 +589,96 @@ code {
     scroll-behavior: auto !important;
   }
 }
+
+.sql-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 28px;
+  align-items: start;
+}
+.sql-workspace {
+  min-width: 0;
+}
+.sql-workspace textarea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--ink);
+  font:
+    14px/1.6 Consolas,
+    monospace;
+  tab-size: 2;
+}
+.sql-results {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+}
+.sql-results th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.sql-results th,
+.sql-results td {
+  white-space: pre;
+  max-width: none;
+  font-family: Consolas, monospace;
+}
+.sql-null {
+  color: var(--muted);
+  font-style: italic;
+}
+.sql-tables {
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  padding-left: 20px;
+}
+.sql-tables h2 {
+  margin-top: 0;
+}
+.sql-tables button {
+  width: 100%;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.sql-tables button small {
+  margin: 0 0 4px;
+}
+.sql-tables details {
+  margin: 8px 0 20px;
+}
+.sql-tables summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.sql-tables ul {
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+.sql-tables li {
+  margin-bottom: 8px;
+}
+.sql-plans pre {
+  overflow: auto;
+  padding: 16px;
+  background: var(--surface);
+  font:
+    12px/1.7 Consolas,
+    monospace;
+}
+@media (max-width: 1000px) {
+  .sql-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sql-tables {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    padding: 20px 0 0;
+  }
+}

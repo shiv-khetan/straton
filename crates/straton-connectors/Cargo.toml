@@ -6,11 +6,11 @@ license.workspace = true
 
 [dependencies]
 straton-core = { path = "../straton-core" }
-arrow = { version = "58", default-features = false, features = ["csv"] }
+arrow = { version = "59", default-features = false, features = ["csv"] }
 futures.workspace = true
 serde_json.workspace = true
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "sqlite", "chrono", "json", "macros"] }
-parquet = { version = "58", default-features = false, features = ["arrow", "snap"] }
+parquet = { version = "59", default-features = false, features = ["arrow", "snap"] }
 tokio = { version = "1", features = ["fs", "rt"] }
 async-trait = "0.1.92"
 chrono.workspace = true

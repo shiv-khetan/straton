@@ -23,6 +23,7 @@ use subtle::ConstantTimeEq;
 #[derive(Clone)]
 pub struct App {
     pub pool: SqlitePool,
+    pub sql: crate::sql::Sql,
     pub token: Arc<SecretString>,
     pub events: Events,
     pub backups: Backups,
@@ -31,6 +32,9 @@ pub struct App {
 pub fn router(app: App) -> Router {
     Router::new()
         .route("/v1/status", get(status))
+        .route("/v1/sql", post(sql_query))
+        .route("/v1/sql/explain", post(sql_explain))
+        .route("/v1/sql/tables", get(sql_tables))
         .route("/v1/sources", get(sources).post(create_source))
         .route(
             "/v1/sources/{id}",
@@ -598,4 +602,47 @@ async fn delete_relationship(
     tx.commit().await?;
     changed(&a);
     Ok(StatusCode::NO_CONTENT)
+}
+
+impl From<crate::sql::Error> for ApiError {
+    fn from(e: crate::sql::Error) -> Self {
+        let status = match e.class {
+            "timeout" => StatusCode::REQUEST_TIMEOUT,
+            "disabled" => StatusCode::SERVICE_UNAVAILABLE,
+            "internal" => StatusCode::INTERNAL_SERVER_ERROR,
+            _ => StatusCode::BAD_REQUEST,
+        };
+        Self(status, e.message)
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SqlQuery {
+    query: String,
+    limit: Option<usize>,
+}
+async fn sql_query(State(a): State<App>, Json(q): Json<SqlQuery>) -> ApiResult<Json<Value>> {
+    let limit = q.limit.unwrap_or(1000);
+    if limit > 1000 {
+        a.sql
+            .audit(&q.query, &Default::default(), Err("rejected"))
+            .await?;
+        return Err(bad("SQL preview limit must be at most 1000"));
+    }
+    let result = a.sql.query(&q.query).await?;
+    Ok(Json(crate::sql::preview(&result, limit)?))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExplainQuery {
+    query: String,
+}
+async fn sql_explain(State(a): State<App>, Json(q): Json<ExplainQuery>) -> ApiResult<Json<Value>> {
+    let result = a.sql.explain(&q.query).await?;
+    Ok(Json(
+        json!({"logical":result.logical,"physical":result.physical}),
+    ))
+}
+async fn sql_tables(State(a): State<App>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"tables":a.sql.tables().await?})))
 }

@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { tableReference, cellText } from '../src/sql-model.ts';
+assert.equal(tableReference('app_db', 'public.users'), '"app_db"."public.users"');
+assert.equal(tableReference('select', 'a"b'), '"select"."a""b"');
+assert.equal(tableReference('local_lake', 'source/users'), '"local_lake"."source/users"');
+assert.equal(cellText(null), 'NULL');
+assert.equal(cellText(false), 'false');
+assert.equal(cellText(0), '0');
+assert.equal(cellText(''), '');
+assert.equal(cellText('<script>'), '<script>');
+console.log('SQL identifier quoting and result formatting checks passed (8 cases).');

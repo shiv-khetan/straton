@@ -14,9 +14,10 @@ import type {
   SourceKind,
   Status,
 } from './api';
+import SqlView from './Sql';
 const DataMapView = lazy(() => import('./DataMap'));
 const emptyMap: DataMap = { nodes: [], edges: [] };
-type Page = 'Dashboard' | 'Sources' | 'Jobs' | 'Data Map' | 'Connect';
+type Page = 'Dashboard' | 'Sources' | 'Jobs' | 'Data Map' | 'SQL' | 'Connect';
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="field">
@@ -145,16 +146,18 @@ function AppContent() {
         <div className="brand">◈ Straton</div>
         <p className="sidebar-caption">Engine workspace</p>
         <nav aria-label="Main navigation">
-          {(['Dashboard', 'Sources', 'Jobs', 'Data Map', 'Connect'] as Page[]).map((item) => (
-            <button
-              key={item}
-              aria-current={page === item ? 'page' : undefined}
-              disabled={!connection && item !== 'Connect'}
-              onClick={() => setPage(item)}
-            >
-              {item}
-            </button>
-          ))}
+          {(['Dashboard', 'Sources', 'Jobs', 'Data Map', 'SQL', 'Connect'] as Page[]).map(
+            (item) => (
+              <button
+                key={item}
+                aria-current={page === item ? 'page' : undefined}
+                disabled={!connection && item !== 'Connect'}
+                onClick={() => setPage(item)}
+              >
+                {item}
+              </button>
+            ),
+          )}
         </nav>
         <div className="connection-state">
           <span className={live === 'Live' ? 'live-dot' : ''}>●</span> {live}
@@ -277,6 +280,7 @@ function AppContent() {
             busy={busy}
           />
         )}
+        {client && page === 'SQL' && <SqlView client={client} revision={revision} />}
         {client && connection && page === 'Data Map' && (
           <ErrorBoundary>
             <Suspense fallback={<p role="status">Loading Data Map…</p>}>

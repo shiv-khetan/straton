@@ -241,6 +241,7 @@ async fn auth_and_crud_and_cancellation() {
     let f = Fixture::new().await;
     let app = api::router(api::App {
         pool: f.pool.clone(),
+        sql: crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap(),
         token: Arc::new("good-token".to_string().into()),
         events: f.events.clone(),
         backups: backup::Backups::new(f.config.clone()),
@@ -361,6 +362,7 @@ fn config_rejects_insecure_bind_and_zero_limits() {
 fn app(f: &Fixture) -> axum::Router {
     api::router(api::App {
         pool: f.pool.clone(),
+        sql: crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap(),
         token: Arc::new("good-token".to_string().into()),
         events: f.events.clone(),
         backups: backup::Backups::new(f.config.clone()),
@@ -1095,4 +1097,442 @@ async fn snapshot_publication_failure_cancellation_and_recovery() {
         1
     );
     f.close().await;
+}
+
+async fn sql_fixture() -> Fixture {
+    let f = Fixture::new().await;
+    let path = f.dir.join("sql-input.db");
+    let input = sqlx::sqlite::SqlitePoolOptions::new()
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    sqlx::raw_sql("CREATE TABLE users(id INTEGER PRIMARY KEY,name TEXT); INSERT INTO users VALUES(1,'Alice'),(2,'Bob'); CREATE TABLE unpublished(id INTEGER);")
+        .execute(&input).await.unwrap();
+    input.close().await;
+    sqlx::query("UPDATE sources SET name='App DB',kind='sqlite',config=? WHERE id='source'")
+        .bind(json!({"path":path,"batch_size":1}).to_string())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE jobs SET dataset='users'")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    crate::catalog::discover(&f.pool, "source").await.unwrap();
+    f
+}
+async fn sql_sync(f: &Fixture) -> String {
+    let id = f.enqueue().await;
+    runner::state(&f.pool, &f.events, &id, "running", None)
+        .await
+        .unwrap();
+    runner::execute(
+        &f.pool,
+        &backup::Backups::new(f.config.clone()),
+        &id,
+        &f.events,
+    )
+    .await
+    .unwrap();
+    id
+}
+#[tokio::test]
+async fn sql_rest_current_snapshot_preview_explain_and_audit() {
+    use sha2::{Digest, Sha256};
+    let f = sql_fixture().await;
+    let a = app(&f);
+    let (_, tables) = request(&a, "GET", "/v1/sql/tables", json!(null)).await;
+    assert_eq!(tables["tables"], json!([]));
+    let first = sql_sync(&f).await;
+    let query = "SELECT id,name FROM app_db.users ORDER BY id";
+    let (status, result) = request(&a, "POST", "/v1/sql", json!({"query":query})).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["rows"], json!([[1, "Alice"], [2, "Bob"]]));
+    assert_eq!(
+        result["columns"],
+        json!([{"name":"id","type":"Int64"},{"name":"name","type":"Utf8"}])
+    );
+    assert_eq!(result["row_count"], 2);
+    assert_eq!(result["truncated_preview"], false);
+    let (_, preview) = request(&a, "POST", "/v1/sql", json!({"query":query,"limit":1})).await;
+    assert_eq!(preview["rows"], json!([[1, "Alice"]]));
+    assert_eq!(preview["row_count"], 2);
+    assert_eq!(preview["truncated_preview"], true);
+    assert_eq!(
+        request(&a, "POST", "/v1/sql", json!({"query":query,"limit":1001}))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (_, tables) = request(&a, "GET", "/v1/sql/tables", json!(null)).await;
+    let tables = tables["tables"].as_array().unwrap();
+    assert_eq!(tables.len(), 2);
+    assert!(
+        tables
+            .iter()
+            .any(|t| t["schema"] == "app_db" && t["name"] == "users")
+    );
+    assert!(
+        tables
+            .iter()
+            .any(|t| t["schema"] == "local_lake" && t["name"] == "source/users")
+    );
+    let (status, lake) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT id,name FROM local_lake.\"source/users\" ORDER BY id"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{lake}");
+    assert_eq!(lake["rows"], result["rows"]);
+    let (status, plans) = request(&a, "POST", "/v1/sql/explain", json!({"query":query})).await;
+    assert_eq!(status, StatusCode::OK, "{plans}");
+    assert!(plans["logical"].as_str().unwrap().contains("TableScan"));
+    assert!(!plans["physical"].as_str().unwrap().is_empty());
+
+    let detail: String = sqlx::query_scalar(
+        "SELECT detail FROM audit_log WHERE action='sql.query' ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert!(!detail.contains(query));
+    assert!(!detail.contains("SELECT"));
+    let detail: serde_json::Value = serde_json::from_str(&detail).unwrap();
+    assert_eq!(detail["query_hash"], format!("{:x}", Sha256::digest(query)));
+    assert_eq!(detail["principal"], "engine-token");
+    assert_eq!(detail["row_count"], 2);
+    assert!(
+        detail["datasets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d.as_str().unwrap().contains("app_db.users"))
+    );
+
+    // Stray older and staging snapshots must never become query inputs.
+    let output = f.dir.join("data/source/users");
+    let ignored = output.join(format!(".staging-{}", store::id()));
+    std::fs::create_dir_all(&ignored).unwrap();
+    std::fs::copy(
+        output.join(&first).join("part-000000.parquet"),
+        ignored.join("extra.parquet"),
+    )
+    .unwrap();
+    let old = output.join(store::id());
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::copy(
+        output.join(&first).join("part-000001.parquet"),
+        old.join("old.parquet"),
+    )
+    .unwrap();
+    let (_, unchanged) = request(&a, "POST", "/v1/sql", json!({"query":query})).await;
+    assert_eq!(unchanged["rows"], result["rows"]);
+    let input =
+        sqlx::SqlitePool::connect(&format!("sqlite:{}", f.dir.join("sql-input.db").display()))
+            .await
+            .unwrap();
+    sqlx::raw_sql("DELETE FROM users; INSERT INTO users VALUES(3,'Cara');")
+        .execute(&input)
+        .await
+        .unwrap();
+    input.close().await;
+    let second = sql_sync(&f).await;
+    assert_ne!(first, second);
+    let (status, updated) = request(&a, "POST", "/v1/sql", json!({"query":query})).await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["rows"], json!([[3, "Cara"]]));
+    assert_eq!(updated["row_count"], 1);
+    let input =
+        sqlx::SqlitePool::connect(&format!("sqlite:{}", f.dir.join("sql-input.db").display()))
+            .await
+            .unwrap();
+    sqlx::query("DELETE FROM users")
+        .execute(&input)
+        .await
+        .unwrap();
+    input.close().await;
+    sql_sync(&f).await;
+    let (status, empty) = request(&a, "POST", "/v1/sql", json!({"query":query})).await;
+    assert_eq!(status, StatusCode::OK, "{empty}");
+    assert_eq!(empty["rows"], json!([]));
+    assert_eq!(empty["columns"], result["columns"]);
+    drop(a);
+    f.close().await;
+}
+#[tokio::test]
+async fn sql_rejects_writes_and_enforces_limits_auth_and_timeout() {
+    use sha2::{Digest, Sha256};
+    let mut f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let queries = [
+        "CREATE TABLE secret (x INT)",
+        "INSERT INTO app_db.users VALUES(3,'forbidden')",
+        "DELETE FROM app_db.users",
+        "COPY (SELECT * FROM app_db.users) TO 'forbidden.parquet'",
+        "SET datafusion.execution.batch_size = 1",
+        "SELECT 1; CREATE TABLE x (id INT)",
+        "EXPLAIN CREATE TABLE x (id INT)",
+        "SELECT 1 INTO secret",
+        "EXPLAIN ANALYZE SELECT * FROM app_db.users",
+    ];
+    for query in queries {
+        let (status, error) = request(&a, "POST", "/v1/sql", json!({"query":query})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {error}");
+        let detail: String = sqlx::query_scalar(
+            "SELECT detail FROM audit_log WHERE action='sql.rejected' ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+        assert!(!detail.contains(query));
+        let detail: serde_json::Value = serde_json::from_str(&detail).unwrap();
+        assert_eq!(detail["query_hash"], format!("{:x}", Sha256::digest(query)));
+        assert_eq!(detail["error_class"], "rejected");
+    }
+    let response = a
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/sql")
+                .header("authorization", "Bearer bad-token")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"query":"SELECT 1"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    drop(a);
+    f.config.sql.max_rows = 1;
+    let a = app(&f);
+    let (status, error) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT * FROM app_db.users","limit":1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(error["error"].as_str().unwrap().contains("max_rows"));
+    drop(a);
+    f.config.sql.max_rows = 100_000;
+    f.config.sql.query_timeout_secs = 0.001;
+    let a = app(&f);
+    let guard = crate::sql::SNAPSHOTS.write().await;
+    let (status, error) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT * FROM app_db.users"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::REQUEST_TIMEOUT, "{error}");
+    drop(guard);
+    let (running_status, running_error) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT sum(value) FROM generate_series(1, 1000000000000)"}),
+    )
+    .await;
+    assert_eq!(
+        running_status,
+        StatusCode::REQUEST_TIMEOUT,
+        "{running_error}"
+    );
+    let released = tokio::time::timeout(Duration::from_secs(5), crate::sql::SNAPSHOTS.write())
+        .await
+        .unwrap();
+    drop(released);
+    assert!(error["error"].as_str().unwrap().contains("timed out"));
+    let detail: String = sqlx::query_scalar(
+        "SELECT detail FROM audit_log WHERE action='sql.query' ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&detail).unwrap()["error_class"],
+        "timeout"
+    );
+    drop(a);
+    f.config.sql.enabled = false;
+    assert_eq!(
+        request(&app(&f), "POST", "/v1/sql", json!({"query":"SELECT 1"}))
+            .await
+            .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    f.close().await;
+}
+#[tokio::test]
+async fn sql_memory_limit_and_schema_collisions() {
+    let mut f = sql_fixture().await;
+    sql_sync(&f).await;
+    sqlx::query("INSERT INTO sources(id,name,kind) VALUES('aaa','App-DB','external'),('aab','app_db_2','external'),('aac','123','external')")
+        .execute(&f.pool).await.unwrap();
+    let a = app(&f);
+    let (_, tables) = request(&a, "GET", "/v1/sql/tables", json!(null)).await;
+    assert!(
+        tables["tables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["schema"] == "app_db_3")
+    );
+    drop(a);
+    f.config.sql.memory_limit_mb = 1;
+    f.config.sql.max_rows = 1_000_000;
+    let a = app(&f);
+    let (status, error) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT * FROM generate_series(1, 1000000)"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    let detail: String = sqlx::query_scalar(
+        "SELECT detail FROM audit_log WHERE action='sql.query' ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&detail).unwrap()["error_class"],
+        "memory_limit",
+        "{error}"
+    );
+    drop(a);
+    f.close().await;
+}
+#[tokio::test]
+async fn sql_pgwire_simple_extended_auth_and_refresh() {
+    use sqlx::{
+        Connection, Executor, PgConnection,
+        postgres::{PgConnectOptions, PgSslMode},
+    };
+    let mut f = sql_fixture().await;
+    sql_sync(&f).await;
+    f.config.sql.bind = "127.0.0.1:0".parse().unwrap();
+    let service = crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap();
+    let mut server = crate::sql::wire::Server::start(
+        service,
+        Arc::new("good-token".to_owned().into()),
+        &f.config,
+    )
+    .await
+    .unwrap();
+    let options = PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(server.address.unwrap().port())
+        .username("any-user")
+        .database("straton")
+        .password("good-token")
+        .ssl_mode(PgSslMode::Disable);
+    let mut conn = PgConnection::connect_with(&options).await.unwrap();
+    let rows = conn
+        .fetch_all("SELECT id,name FROM app_db.users ORDER BY id")
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get::<i64, _>(0), 1);
+    assert_eq!(rows[1].get::<String, _>(1), "Bob");
+    let prepared = conn
+        .prepare("SELECT name FROM app_db.users WHERE id=$1")
+        .await
+        .unwrap();
+    drop(prepared);
+    let row = sqlx::query("SELECT name FROM app_db.users WHERE id=$1")
+        .bind(2_i64)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(row.get::<String, _>(0), "Bob");
+    let row = sqlx::query("SELECT $1 AS n, $2 AS s, $3 AS b, $4 AS f")
+        .bind(7_i32)
+        .bind("O'Reilly; DROP TABLE x")
+        .bind(true)
+        .bind(1.25_f64)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(row.get::<i32, _>(0), 7);
+    assert_eq!(row.get::<String, _>(1), "O'Reilly; DROP TABLE x");
+    assert!(row.get::<bool, _>(2));
+    assert_eq!(row.get::<f64, _>(3), 1.25);
+    let row=sqlx::query("SELECT CAST(1 AS SMALLINT) AS a, CAST(2 AS REAL) AS b, DATE '2026-10-20' AS d, TIMESTAMP '2026-10-20 12:34:56' AS t")
+        .fetch_one(&mut conn).await.unwrap();
+    assert_eq!(row.get::<i16, _>(0), 1);
+    assert_eq!(row.get::<f32, _>(1), 2.0);
+    assert_eq!(
+        row.get::<chrono::NaiveDate, _>(2),
+        chrono::NaiveDate::from_ymd_opt(2026, 10, 20).unwrap()
+    );
+    assert_eq!(
+        row.get::<chrono::NaiveDateTime, _>(3).to_string(),
+        "2026-10-20 12:34:56"
+    );
+    assert_eq!(
+        conn.fetch_one("SHOW transaction_read_only")
+            .await
+            .unwrap()
+            .get::<String, _>(0),
+        "on"
+    );
+    assert_eq!(
+        conn.fetch_one("SELECT current_schema()")
+            .await
+            .unwrap()
+            .get::<String, _>(0),
+        "public"
+    );
+    assert!(
+        conn.fetch_one("SELECT version()")
+            .await
+            .unwrap()
+            .get::<String, _>(0)
+            .contains("Straton")
+    );
+    conn.execute("SET extra_float_digits = 3").await.unwrap();
+    assert!(
+        sqlx::query("COPY (SELECT 1) TO 'no.parquet'")
+            .execute(&mut conn)
+            .await
+            .is_err()
+    );
+    assert!(conn.execute("CREATE TABLE no (id INT)").await.is_err());
+    assert_eq!(
+        conn.fetch_one("SELECT 1").await.unwrap().get::<i64, _>(0),
+        1
+    );
+    let bad = PgConnection::connect_with(&options.clone().password("wrong-token")).await;
+    assert!(bad.is_err());
+    conn.close().await.unwrap();
+    server.shutdown().await;
+    f.close().await;
+}
+#[test]
+fn sql_config_defaults_and_remote_tls_rule() {
+    let mut c = Config::default();
+    assert!(c.sql.enabled);
+    assert_eq!(c.sql.max_rows, 100_000);
+    assert_eq!(c.sql.query_timeout_secs, 60.0);
+    assert_eq!(c.sql.memory_limit_mb, 1024);
+    assert!(c.validate().is_ok());
+    c.sql.bind = "0.0.0.0:5433".parse().unwrap();
+    assert!(c.validate().is_err());
+    c.tls_cert = Some("cert.pem".into());
+    c.tls_key = Some("key.pem".into());
+    assert!(c.validate().is_ok());
+    c.sql.query_timeout_secs = f64::NAN;
+    assert!(c.validate().is_err());
 }

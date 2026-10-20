@@ -6,6 +6,7 @@ mod credentials;
 mod runner;
 mod scheduler;
 mod security;
+mod sql;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -79,8 +80,11 @@ async fn run(config: config::Config) -> Result<()> {
         backups.clone(),
         config.max_concurrent_runs,
     );
+    let sql = sql::Sql::new(pool.clone(), &config)?;
+    let mut sql_server = sql::wire::Server::start(sql.clone(), token.clone(), &config).await?;
     let router = api::router(api::App {
         pool: pool.clone(),
+        sql,
         token,
         events: events.clone(),
         backups,
@@ -116,6 +120,7 @@ async fn run(config: config::Config) -> Result<()> {
     let result = loop {
         tokio::select! {
             signal = &mut signal => { break signal; },
+            result = &mut sql_server.task => { break match result { Ok(result) => result, Err(e) => Err(e.into()) }; },
             result = &mut server => { break match result { Ok(Ok(())) => Ok(()), Ok(Err(e)) => Err(e.into()), Err(e) => Err(e.into()) }; },
             _ = tick.tick() => {
                 match scheduler::tick(&pool).await {
@@ -128,7 +133,7 @@ async fn run(config: config::Config) -> Result<()> {
     };
     tracing::info!("stopping scheduling; draining runs");
     handle.graceful_shutdown(Some(Duration::from_secs(30)));
-    runner.drain().await;
+    tokio::join!(sql_server.shutdown(), runner.drain());
     if !server.is_finished() {
         let _ = tokio::time::timeout(Duration::from_secs(1), &mut server).await;
     }

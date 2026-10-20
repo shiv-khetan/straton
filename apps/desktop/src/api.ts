@@ -1,5 +1,28 @@
 import { fetch } from '@tauri-apps/plugin-http';
 import WebSocket from '@tauri-apps/plugin-websocket';
+
+export interface SqlColumn {
+  name: string;
+  type: string;
+}
+export interface SqlTable {
+  schema: string;
+  name: string;
+  columns: SqlColumn[];
+}
+export type SqlCell = string | number | boolean | null;
+export interface SqlResult {
+  columns: SqlColumn[];
+  rows: SqlCell[][];
+  row_count: number;
+  truncated_preview: boolean;
+  elapsed_ms: number;
+}
+export interface SqlExplain {
+  logical: string;
+  physical: string;
+}
+
 export interface Connection {
   url: string;
   token: string;
@@ -125,6 +148,10 @@ export function api(connection: Connection) {
     return response.json() as Promise<T>;
   }
   return {
+    sqlQuery: (query: string, limit = 1000) =>
+      request<SqlResult>('/v1/sql', 'POST', { query, limit }),
+    sqlExplain: (query: string) => request<SqlExplain>('/v1/sql/explain', 'POST', { query }),
+    sqlTables: () => request<{ tables: SqlTable[] }>('/v1/sql/tables'),
     health: () => request<{ ok: boolean }>('/health'),
     status: () => request<Status>('/v1/status'),
     sources: () => request<Source[]>('/v1/sources'),

@@ -125,3 +125,34 @@ cd src-tauri
 cargo clippy --offline --all-targets -- -D warnings
 cargo build --offline
 ```
+
+## SQL endpoint
+
+The read-only Postgres endpoint listens on `127.0.0.1:5433` by default. Use the engine token from `data/token` as the password; any username and database name are accepted for now.
+
+```powershell
+psql "host=127.0.0.1 port=5433 user=straton sslmode=disable"
+# At the password prompt, paste the engine token.
+```
+
+In DBeaver, create a PostgreSQL connection with host `127.0.0.1`, port `5433`, database/user `straton`, and the token as password. JDBC prepared statements and both text and binary result formats are supported. Use schema-qualified names in the SQL editor. PostgreSQL-specific `pg_catalog` introspection is limited; the desktop table browser, `GET /v1/sql/tables`, and DataFusion's `information_schema.tables` / `information_schema.columns` list queryable tables.
+
+Source names become lowercase schemas, replacing non-ASCII-alphanumeric characters with `_` and prefixing digit-leading names with `_`. Collisions receive `_2`, `_3`, etc., in source-ID order; `public`, `information_schema`, and `pg_catalog` are reserved. Dataset names remain literal: query a Postgres dataset as `"app_database"."public.users"`. Local lake aliases use `"local_lake"."source-id/dataset"`. Only datasets with a published `_current` snapshot appear. Each query resolves that pointer once and reads only its immediate Parquet files. Publication waits for active queries before replacing and deleting a snapshot.
+
+```sql
+SELECT * FROM "app_database"."users" LIMIT 20;
+```
+
+Configure `[sql]` in `straton.toml`: `enabled = true`, `bind = "127.0.0.1:5433"`, `query_timeout_secs = 60`, `max_rows = 100_000`, `memory_limit_mb = 1024`. Matching overrides are `STRATON_SQL_ENABLED`, `STRATON_SQL_BIND`, `STRATON_SQL_QUERY_TIMEOUT_SECS`, `STRATON_SQL_MAX_ROWS`, and `STRATON_SQL_MEMORY_LIMIT_MB`. Timeouts may be fractional seconds. A non-loopback SQL bind requires the existing `tls_cert` and `tls_key` PEM settings and refuses plaintext connections; configure the client to require and verify TLS. Disabling SQL disables the wire listener and SQL REST routes.
+
+Each query uses an isolated DataFusion session and the shared, bounded DataFusion memory pool. Retained Arrow results are charged to that pool too; it does not cap total process RSS. Exceeding the row or memory limit returns an error, never a silently shortened result. The timeout covers catalog resolution, planning, and execution; dropping the execution stream cancels its work. Ctrl-C stops accepting connections and allows up to 30 seconds for SQL connections to drain.
+
+DDL, DML, COPY (including COPY TO), session changes, multi-statement requests, and EXPLAIN ANALYZE are rejected. The wire endpoint has only these client compatibility exceptions: exact `SELECT version()` / `SELECT pg_catalog.version()`, `SELECT current_schema()` / `SELECT current_schema`, `SELECT current_database()`; SHOW for `server_version`, `server_version_num`, `transaction_read_only`, `default_transaction_read_only`, `standard_conforming_strings`, `client_encoding`, `TimeZone`, `DateStyle`, and `search_path`. Harmless SET acknowledgements cover `extra_float_digits` 2/3, UTF8 `client_encoding`, UTC timezone, ISO DateStyle, and `application_name`. These acknowledgements do not change session state. REST accepts only read-only queries and EXPLAIN.
+
+The desktop **SQL** tab supports Ctrl/Cmd+Enter, Run, Explain, table insertion, and a scrollable results grid. Its REST API uses the normal bearer token:
+
+- `POST /v1/sql` with `{"query":"SELECT 1","limit":1000}` returns `columns`, `rows`, total `row_count`, `truncated_preview`, and `elapsed_ms`. The optional preview limit is 0–1000, separate from the engine's hard row limit; the full query must pass all limits even for a small preview. Decimal, temporal, binary, and other non-JSON scalar types are returned as strings.
+- `POST /v1/sql/explain` with `{"query":"SELECT 1"}` returns `logical` and `physical` plan strings without executing the query.
+- `GET /v1/sql/tables` returns `{"tables":[{"schema":"app_database","name":"users","columns":[{"name":"id","type":"Int64"}]}]}`.
+
+Successful and failed queries append `sql.query` audit records; forbidden statements append `sql.rejected`. Details contain principal `engine-token`, the SHA-256 hex digest of the original SQL text, datasets scanned, and row count or error class. Raw SQL and bound parameter values are never stored in the audit log. Extended-protocol parse failures are audited; successful preparation is audited when executed. Per-user tokens and RBAC are phase 5.

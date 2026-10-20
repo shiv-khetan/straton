@@ -345,6 +345,7 @@ async fn publish_snapshot(
     output: &Path,
     id: &str,
 ) -> Result<()> {
+    let _snapshot = crate::sql::SNAPSHOTS.write().await;
     let mut tx = pool.begin().await?;
     // Serialize publishers and cancellation: once _current changes this run is successful.
     let updated = sqlx::query("UPDATE runs SET state='succeeded',updated_at=? WHERE id=? AND state='running' AND cancel_requested=0")
