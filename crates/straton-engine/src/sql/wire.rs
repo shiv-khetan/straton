@@ -681,8 +681,10 @@ mod tests {
     fn numeric_binary_preserves_precision_and_scale() {
         let decode = |bytes: Vec<u8>| {
             bytes
-                .chunks_exact(2)
-                .map(|b| i16::from_be_bytes([b[0], b[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| i16::from_be_bytes(*b))
                 .collect::<Vec<_>>()
         };
         assert_eq!(
