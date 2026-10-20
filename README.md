@@ -37,7 +37,7 @@ Do **not** attempt full Databricks parity in v1. Start with one sharp wedge: sel
 
 ## Running the engine
 
-The engine supports Postgres, SQLite and CSV discovery and Parquet sync. The noop connector remains available for tests; the desktop UI belongs to Phase 3.
+The engine supports Postgres, SQLite and CSV discovery and Parquet sync. The noop connector remains available for tests; the desktop UI is available below.
 
 ```powershell
 Copy-Item straton.example.toml straton.toml
@@ -104,3 +104,24 @@ Discovery updates datasets, columns and declared foreign keys in one transaction
 Use `kind="external"` for disconnected placeholders. Add datasets with `POST /v1/sources/<id>/datasets` and body `{"name":"users","columns":[{"name":"id","type":"Int64","nullable":false,"pk":true}]}`. Create manual edges via `POST /v1/relationships` with `{"kind":"manual","from_dataset":"<id>","from_cols":["user_id"],"to_dataset":"<id>","to_cols":["id"],"confidence":null}`. Only manual edges can be deleted via `DELETE /v1/relationships/<id>`; other kinds return 409.
 
 The optional Postgres integration test runs only when `STRATON_TEST_PG` contains a JSON connector configuration, with an optional `secret` field. It needs a reachable database and permission to create/drop a temporary test schema; the default offline suite skips it. No test accesses the real keychain.
+
+## Desktop app
+
+The Tauri 2 desktop client lives in `apps/desktop`; its Rust shell is an independent Cargo workspace. Dependencies must already be installed for offline development.
+
+```powershell
+cd apps/desktop
+npm run tauri dev
+```
+
+Start the engine first. In Connect, enter `http://127.0.0.1:8787` (or a remote HTTPS engine URL) and paste the token from the engine’s `data/token`. Test and save stores the connection in the OS keychain under service `straton-desktop`. Forget connection removes that entry. Tokens are never placed in localStorage. Connector passwords are write-only and stored by the engine.
+
+Discover sources to populate the Data Map. Drag between column handles to create manual relationships; select a manual edge and press Delete, or use Delete manual edge. Filters, dataset search, MiniMap, and Re-layout help navigate the catalog. Positions are saved locally per engine URL. Jobs use UTC cron with seconds first; blank schedules are manual. Run state activity updates over one reconnecting authenticated WebSocket. The current engine does not expose log streaming or historical log retrieval. Lineage edges are dataset-level in the API (empty column lists) and attach to table headers; column relationships attach to their named columns.
+
+```powershell
+npm run build
+npm test
+cd src-tauri
+cargo clippy --offline --all-targets -- -D warnings
+cargo build --offline
+```
