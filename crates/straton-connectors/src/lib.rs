@@ -783,14 +783,22 @@ impl Connector for Connected {
         })
     }
 }
-pub fn write_parquet(path: &Path, batch: &RecordBatch) -> Result<()> {
+pub fn write_parquet(
+    path: &Path,
+    batch: &RecordBatch,
+    encryption: Option<std::sync::Arc<parquet::encryption::encrypt::FileEncryptionProperties>>,
+) -> Result<()> {
     std::fs::create_dir_all(path.parent().ok_or_else(|| invalid("missing parent"))?)
         .map_err(error)?;
     let temp = path.with_extension("partial");
+    let mut properties = parquet::file::properties::WriterProperties::builder();
+    if let Some(encryption) = encryption {
+        properties = properties.with_file_encryption_properties(encryption);
+    }
     let mut w = parquet::arrow::ArrowWriter::try_new(
         File::create(&temp).map_err(error)?,
         batch.schema(),
-        None,
+        Some(properties.build()),
     )
     .map_err(error)?;
     w.write(batch).map_err(error)?;

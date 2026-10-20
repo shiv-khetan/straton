@@ -13,6 +13,7 @@ pub struct Config {
     pub tls_key: Option<PathBuf>,
     pub backup: Backup,
     pub sql: Sql,
+    pub encryption: Encryption,
 }
 #[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -41,6 +42,7 @@ impl Default for Config {
             tls_key: None,
             backup: Backup::default(),
             sql: Sql::default(),
+            encryption: Encryption::default(),
         }
     }
 }
@@ -62,6 +64,7 @@ impl Config {
                 "STRATON_BACKUP_CRON" => c.backup.cron = value,
                 "STRATON_BACKUP_DIR" => c.backup.dir = value.into(),
                 "STRATON_BACKUP_KEEP" => c.backup.keep = value.parse()?,
+                "STRATON_ENCRYPTION_ENABLED" => c.encryption.enabled = value.parse()?,
                 "STRATON_SQL_ENABLED" => c.sql.enabled = value.parse()?,
                 "STRATON_SQL_BIND" => c.sql.bind = value.parse()?,
                 "STRATON_SQL_QUERY_TIMEOUT_SECS" => c.sql.query_timeout_secs = value.parse()?,
@@ -129,5 +132,16 @@ impl Default for Sql {
             max_rows: 100_000,
             memory_limit_mb: 1024,
         }
+    }
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Encryption {
+    pub enabled: bool,
+}
+impl Default for Encryption {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }

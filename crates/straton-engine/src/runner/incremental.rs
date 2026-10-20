@@ -1,15 +1,12 @@
 use super::{Events, cancelled, checkpoint, lineage, publish_snapshot};
-use crate::{catalog, sql, store};
+use crate::{catalog, keys, sql, store};
 use anyhow::{Result, ensure};
 use datafusion::{
     arrow::{
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     },
-    datasource::{
-        file_format::parquet::ParquetFormat,
-        listing::{ListingOptions, ListingTable, ListingTableConfig},
-    },
+    datasource::listing::{ListingOptions, ListingTable, ListingTableConfig},
     prelude::SessionContext,
 };
 use futures::StreamExt;
@@ -93,20 +90,32 @@ fn parts(dir: &Path) -> Result<Vec<PathBuf>> {
     files.sort();
     Ok(files)
 }
-fn snapshot_schema(dir: &Path, fallback: &Arc<Schema>) -> Result<Arc<Schema>> {
+async fn snapshot_schema(
+    pool: &SqlitePool,
+    dir: &Path,
+    fallback: &Arc<Schema>,
+) -> Result<Arc<Schema>> {
+    let key = keys::snapshot(pool, dir).await?;
     if let Some(file) = parts(dir)?.first() {
-        Ok(straton_connectors::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(file)?)?.schema().clone())
+        Ok(keys::reader(file, key.as_ref())?.schema().clone())
     } else {
         Ok(fallback.clone())
     }
 }
-async fn register(ctx: &SessionContext, name: &str, dir: &Path, schema: Arc<Schema>) -> Result<()> {
+async fn register(
+    pool: &SqlitePool,
+    ctx: &SessionContext,
+    name: &str,
+    dir: &Path,
+    schema: Arc<Schema>,
+) -> Result<()> {
     let urls = parts(dir)?
         .iter()
         .map(|p| sql::listing_url(&p.canonicalize()?))
         .collect::<Result<Vec<_>, _>>()?;
-    let opts =
-        ListingOptions::new(Arc::new(ParquetFormat::default())).with_file_extension(".parquet");
+    let key = keys::snapshot(pool, dir).await?;
+    let opts = ListingOptions::new(Arc::new(keys::format(pool, ctx, key.as_ref())))
+        .with_file_extension(".parquet");
     let mut config = ListingTableConfig::new_with_multi_paths(urls);
     // DataFusion requires assigning options directly when an empty delta has no paths.
     config.options = Some(opts);
@@ -145,7 +154,12 @@ async fn validate_keys(ctx: &SessionContext, table: &str, keys: &[String]) -> Re
 }
 
 // The durable plan freezes the base snapshot and settings across crash recovery.
-pub(crate) async fn prepare(pool: &SqlitePool, output: &Path, id: &str) -> Result<Plan> {
+pub(crate) async fn prepare(
+    pool: &SqlitePool,
+    output: &Path,
+    id: &str,
+    enabled: bool,
+) -> Result<Plan> {
     let staging = output.join(format!(".staging-{id}"));
     std::fs::create_dir_all(staging.join("delta"))?;
     let plan_path = staging.join("sync-plan.json");
@@ -225,7 +239,7 @@ pub(crate) async fn prepare(pool: &SqlitePool, output: &Path, id: &str) -> Resul
         let mut fallback_reason = None;
         if let Some(base) = &base {
             let expected = schema(&ds.columns)?;
-            let old = snapshot_schema(&output.join(base), &expected)?;
+            let old = snapshot_schema(pool, &output.join(base), &expected).await?;
             if old
                 .fields()
                 .iter()
@@ -293,6 +307,8 @@ pub(crate) async fn prepare(pool: &SqlitePool, output: &Path, id: &str) -> Resul
         durable_json(&plan_path, &plan)?;
         plan
     };
+    let key = super::write_key(pool, &staging, id, enabled).await?;
+    let encryption = keys::encryption(key.as_ref())?;
     let mut tx = pool.begin().await?;
     sqlx::query("UPDATE runs SET mode_used=?,fallback_reason=? WHERE id=?")
         .bind(&plan.mode)
@@ -379,6 +395,7 @@ pub(crate) async fn prepare(pool: &SqlitePool, output: &Path, id: &str) -> Resul
         straton_connectors::write_parquet(
             &delta.join(format!("part-{number:06}.parquet")),
             &batch,
+            encryption.clone(),
         )?;
         checkpoint(
             pool,
@@ -389,6 +406,7 @@ pub(crate) async fn prepare(pool: &SqlitePool, output: &Path, id: &str) -> Resul
         last = cursor;
         number += 1;
     }
+    keys::finish(&delta, key.as_ref())?;
     sqlx::query("INSERT INTO run_checkpoints(run_id,cursor,batch_number,updated_at) VALUES(?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET cursor=excluded.cursor,updated_at=excluded.updated_at")
         .bind(id).bind(json!({"source_cursor":last,"delta_complete":true}).to_string()).bind(number).bind(store::now()).execute(pool).await?;
     Ok(plan)
@@ -399,20 +417,30 @@ pub(super) async fn execute(
     events: &Events,
     output: &Path,
     id: &str,
+    enabled: bool,
 ) -> Result<()> {
     if output.join(id).is_dir() {
         return publish_snapshot(pool, events, output, id).await;
     }
-    let plan = prepare(pool, output, id).await?;
+    let plan = prepare(pool, output, id, enabled).await?;
     // Same-target runs are serialized; take the global reader lock only for merging.
     let snapshot_guard = sql::SNAPSHOTS.read().await;
     if cancelled(pool, id).await? {
         return Ok(());
     }
     let staging = output.join(format!(".staging-{id}"));
+    let key = super::write_key(pool, &staging, id, enabled).await?;
+    let encryption = keys::encryption(key.as_ref())?;
     let expected = schema(&plan.columns)?;
     let ctx = SessionContext::new();
-    register(&ctx, "delta", &staging.join("delta"), delta_schema(&plan)?).await?;
+    register(
+        pool,
+        &ctx,
+        "delta",
+        &staging.join("delta"),
+        delta_schema(&plan)?,
+    )
+    .await?;
     let rows_read = count(&ctx, "SELECT COUNT(*) FROM delta").await?;
     // `keyed`: one row per key (anti-joined against the snapshot); `upserts`: rows to add.
     let (keyed, upserts) = if plan.events {
@@ -455,6 +483,7 @@ pub(super) async fn execute(
             "base snapshot changed before merge; start a new run"
         );
         register(
+            pool,
             &ctx,
             "current_snapshot",
             &output.join(base),
@@ -505,9 +534,11 @@ pub(super) async fn execute(
                 straton_connectors::write_parquet(
                     &keys_dir.join(format!("part-{n:06}.parquet")),
                     &batch,
+                    encryption.clone(),
                 )?;
                 n += 1;
             }
+            keys::finish(&keys_dir, key.as_ref())?;
             durable_json(&keys_dir.join("complete.json"), &n)?;
         }
         let key_parts: i64 =
@@ -523,7 +554,7 @@ pub(super) async fn execute(
             .iter()
             .map(|k| plan.columns.iter().find(|c| &c.name == k).unwrap().clone())
             .collect::<Vec<_>>();
-        register(&ctx, "source_keys", &keys_dir, schema(&keys_columns)?).await?;
+        register(pool, &ctx, "source_keys", &keys_dir, schema(&keys_columns)?).await?;
         validate_keys(&ctx, "source_keys", &plan.keys).await?;
         rows_read += count(&ctx, "SELECT COUNT(*) FROM source_keys").await?;
         let on = join(&plan.keys, "m", "k");
@@ -567,13 +598,18 @@ pub(super) async fn execute(
         if cancelled(pool, id).await? {
             return Ok(());
         }
-        straton_connectors::write_parquet(&staging.join(format!("part-{n:06}.parquet")), &batch?)?;
+        straton_connectors::write_parquet(
+            &staging.join(format!("part-{n:06}.parquet")),
+            &batch?,
+            encryption.clone(),
+        )?;
         n += 1;
     }
     if n == 0 {
         straton_connectors::write_parquet(
             &staging.join("part-000000.parquet"),
             &RecordBatch::new_empty(expected),
+            encryption.clone(),
         )?;
     }
     let stats = Stats {
@@ -586,6 +622,7 @@ pub(super) async fn execute(
         fallback_reason: plan.fallback_reason,
     };
     durable_json(&staging.join("sync-result.json"), &stats)?;
+    keys::finish(&staging, key.as_ref())?;
     lineage(pool, &plan.source, &plan.dataset).await?;
     drop(snapshot_guard);
     publish_snapshot(pool, events, output, id).await

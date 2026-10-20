@@ -193,11 +193,25 @@ export interface Run {
   rows_deleted: number;
   fallback_reason: string | null;
 }
+export interface DatasetKey {
+  id: string;
+  target_id: string;
+  kek_version: number;
+  created_at: number;
+  retired_at: number | null;
+}
+export interface AuditVerification {
+  ok: boolean;
+  rows: number;
+  first_bad_id: number | null;
+}
 export interface Status {
   version: string;
   uptime_seconds: number;
   queue_depth: number;
   last_backup: string | null;
+  encryption_enabled: boolean;
+  audit_head: string;
 }
 export interface EngineEvent {
   /** Local receipt time; the engine event payload has no timestamp. */
@@ -245,6 +259,11 @@ export function api(connection: Connection) {
     return response.json() as Promise<T>;
   }
   return {
+    keys: () => request<DatasetKey[]>('/v1/admin/keys'),
+    rotateKek: () => request<{ kek_version: number }>('/v1/admin/keys/rotate-kek', 'POST'),
+    rotateDatasetKey: (target: string) =>
+      request<{ ok: boolean }>('/v1/admin/keys/rotate/' + idPath(target), 'POST'),
+    verifyAudit: () => request<AuditVerification>('/v1/audit/verify'),
     models: () => request<Model[]>('/v1/models'),
     createModel: (model: ModelInput) => request<Model>('/v1/models', 'POST', model),
     updateModel: (id: string, model: ModelInput) =>

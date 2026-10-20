@@ -1,4 +1,4 @@
-use crate::{backup::Backups, store};
+use crate::{backup::Backups, keys, store};
 use anyhow::{Result, ensure};
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -132,7 +132,14 @@ pub(crate) async fn execute(
         let output = backups.data_dir().join("data").join(&source).join(&dataset);
         let staging = output.join(format!(".staging-{id}"));
         if row.get::<String, _>("mode") == "incremental" {
-            incremental::execute(pool, events, &output, id).await?;
+            incremental::execute(
+                pool,
+                events,
+                &output,
+                id,
+                backups.config().encryption.enabled,
+            )
+            .await?;
             return Ok(());
         }
         // A crash after the directory rename must resume publication, not reread checkpointed data.
@@ -174,6 +181,12 @@ pub(crate) async fn execute(
             );
             std::fs::create_dir_all(&staging)?;
         }
+        let key = if noop {
+            None
+        } else {
+            write_key(pool, &staging, id, backups.config().encryption.enabled).await?
+        };
+        let encryption = keys::encryption(key.as_ref())?;
         let mut batches = connector
             .read(
                 &dataset,
@@ -191,7 +204,7 @@ pub(crate) async fn execute(
             let (batch, cursor) = batch?;
             if !noop {
                 let path = staging.join(format!("part-{number:06}.parquet"));
-                straton_connectors::write_parquet(&path, &batch)?;
+                straton_connectors::write_parquet(&path, &batch, encryption.clone())?;
                 if !linked {
                     lineage(pool, &source, &dataset).await?;
                     linked = true;
@@ -206,6 +219,7 @@ pub(crate) async fn execute(
                 lineage(pool, &source, &dataset).await?;
                 let _ = events.send(json!({"type":"catalog.changed"}));
             }
+            keys::finish(&staging, key.as_ref())?;
             publish_snapshot(pool, events, &output, id).await?;
         }
     }
@@ -363,6 +377,14 @@ async fn publish_snapshot(
     id: &str,
 ) -> Result<()> {
     let _snapshot = crate::sql::SNAPSHOTS.write().await;
+    // Resolve keys before opening the publication transaction (a recovery may update keychain state).
+    let existing = output.join(id);
+    let directory = if existing.is_dir() {
+        existing
+    } else {
+        output.join(format!(".staging-{id}"))
+    };
+    let key = keys::snapshot(pool, &directory).await?;
     let mut tx = pool.begin().await?;
     // Serialize publishers and cancellation: once _current changes this run is successful.
     let updated = sqlx::query("UPDATE runs SET state='succeeded',updated_at=? WHERE id=? AND state='running' AND cancel_requested=0")
@@ -379,6 +401,10 @@ async fn publish_snapshot(
     if !snapshot.is_dir() {
         std::fs::rename(output.join(format!(".staging-{id}")), &snapshot)?;
     }
+    let staging_key = snapshot.join("_staging_key");
+    if staging_key.exists() {
+        std::fs::remove_file(staging_key)?;
+    }
     // Read durable part metadata so resumed publications include checkpointed batches.
     let mut row_count = 0_i64;
     let mut model_schema = None;
@@ -387,7 +413,7 @@ async fn publish_snapshot(
         if entry.file_type()?.is_file()
             && entry.path().extension().is_some_and(|ext| ext == "parquet")
         {
-            let reader = straton_connectors::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(entry.path())?)?;
+            let reader = keys::reader(&entry.path(), key.as_ref())?;
             model_schema = Some(reader.schema().clone());
             row_count = row_count
                 .checked_add(reader.metadata().file_metadata().num_rows())
@@ -431,8 +457,22 @@ async fn publish_snapshot(
     let durable = true;
     // Publication is complete; garbage collection must not turn it into a failed run.
     tx.commit().await?;
-    if durable && let Err(error) = clean_snapshots(output, id, &active) {
-        tracing::warn!(%error, "snapshot cleanup deferred");
+    if durable {
+        let cleanup = async {
+            clean_snapshots(output, id, &active)?;
+            keys::cleanup(
+                pool,
+                output
+                    .parent()
+                    .and_then(Path::parent)
+                    .ok_or_else(|| anyhow::anyhow!("missing data root"))?,
+            )
+            .await
+        }
+        .await;
+        if let Err(error) = cleanup {
+            tracing::warn!(%error, "snapshot cleanup deferred");
+        }
     }
     for queued in triggered {
         event(events, &queued, "queued");
@@ -509,6 +549,8 @@ async fn model_run(
         std::fs::remove_dir_all(&resolved)?;
     }
     std::fs::create_dir_all(&staging)?;
+    let key = write_key(pool, &staging, id, backups.config().encryption.enabled).await?;
+    let encryption = keys::encryption(key.as_ref())?;
     let work = async {
         // Pin all input snapshots until the stream is exhausted, then release before publish.
         let _snapshot = crate::sql::SNAPSHOTS.read().await;
@@ -528,6 +570,7 @@ async fn model_run(
             straton_connectors::write_parquet(
                 &staging.join(format!("part-{number:06}.parquet")),
                 &batch,
+                encryption.clone(),
             )?;
             number += 1;
         }
@@ -536,6 +579,7 @@ async fn model_run(
             straton_connectors::write_parquet(
                 &staging.join("part-000000.parquet"),
                 &datafusion::arrow::record_batch::RecordBatch::new_empty(Arc::new(schema.clone())),
+                encryption.clone(),
             )?;
         }
         Ok(Some(schema))
@@ -552,5 +596,17 @@ async fn model_run(
     if cancelled(pool, id).await? {
         return Ok(());
     }
+    keys::finish(&staging, key.as_ref())?;
     publish_snapshot(pool, events, &output, id).await
+}
+
+pub(crate) async fn write_key(
+    pool: &SqlitePool,
+    staging: &Path,
+    run: &str,
+    enabled: bool,
+) -> Result<Option<keys::DataKey>> {
+    let target: String = sqlx::query_scalar("SELECT d.id FROM runs r JOIN jobs j ON j.id=r.job_id JOIN datasets d ON d.source_id=j.source_id AND d.name=j.dataset WHERE r.id=?")
+        .bind(run).fetch_one(pool).await?;
+    keys::for_write(pool, staging, &target, enabled).await
 }

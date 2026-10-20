@@ -28,10 +28,11 @@ rand = "0.9"
 subtle = "2"
 fs2 = "0.4"
 keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
-datafusion = { version = "55", default-features = false, features = ["sql", "parquet", "nested_expressions", "datetime_expressions", "string_expressions", "unicode_expressions", "regex_expressions"] }
+datafusion = { version = "55", default-features = false, features = ["sql", "parquet", "nested_expressions", "datetime_expressions", "string_expressions", "unicode_expressions", "regex_expressions", "parquet_encryption"] }
 pgwire = "0.41"
 sha2 = "0.10.9"
 async-trait = "0.1.92"
+ring = "0.17.14"
 
 [dev-dependencies]
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono"] }

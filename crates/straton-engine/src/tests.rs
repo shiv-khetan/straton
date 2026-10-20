@@ -615,7 +615,9 @@ async fn inference_positive_negative_and_declared() {
 }
 #[tokio::test]
 async fn sqlite_sync_and_crash_resume() {
-    let f = Fixture::new().await;
+    let mut f = Fixture::new().await;
+    // Pre-upgrade checkpoint fixture: explicitly exercise the legacy plaintext path.
+    f.config.encryption.enabled = false;
     let path = f.dir.join("input.db");
     let input = sqlx::sqlite::SqlitePoolOptions::new()
         .connect_with(
@@ -657,10 +659,10 @@ async fn sqlite_sync_and_crash_resume() {
     let (batch, cursor) = stream.next().await.unwrap().unwrap();
     let output = f.dir.join("data/source/users");
     let staging = output.join(format!(".staging-{id}"));
-    straton_connectors::write_parquet(&staging.join("part-000000.parquet"), &batch).unwrap();
+    straton_connectors::write_parquet(&staging.join("part-000000.parquet"), &batch, None).unwrap();
     runner::checkpoint(&f.pool, &id, &cursor).await.unwrap();
     let (batch, _) = stream.next().await.unwrap().unwrap();
-    straton_connectors::write_parquet(&staging.join("part-000001.parquet"), &batch).unwrap();
+    straton_connectors::write_parquet(&staging.join("part-000001.parquet"), &batch, None).unwrap();
     drop(stream);
     drop(c);
     assert!(!output.join("_current").exists());
@@ -2724,7 +2726,7 @@ async fn incremental_seed_merge_boundary_resume_and_failed_publish() {
         .await
         .unwrap();
     let output = f.dir.join("data/source/users");
-    runner::incremental::prepare(&f.pool, &output, &resumed)
+    runner::incremental::prepare(&f.pool, &output, &resumed, f.config.encryption.enabled)
         .await
         .unwrap();
     assert!(
@@ -2988,7 +2990,7 @@ async fn incremental_timestamp_round_trip_and_partial_delta_resume() {
         .await
         .unwrap();
     let output = f.dir.join("data/source/users");
-    runner::incremental::prepare(&f.pool, &output, &run)
+    runner::incremental::prepare(&f.pool, &output, &run, f.config.encryption.enabled)
         .await
         .unwrap();
     let staging = output.join(format!(".staging-{run}"));
@@ -3828,6 +3830,335 @@ async fn models_delete_recreate_never_reuses_old_output_and_cron_schedules() {
             .0,
         StatusCode::BAD_REQUEST
     );
+    drop(a);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn encrypted_snapshot_rotation_legacy_and_missing_kek() {
+    use crate::keys;
+    use straton_connectors::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    let mut f = sql_fixture().await;
+    let output = f.dir.join("data/source/users");
+    f.config.encryption.enabled = false;
+    let legacy = sql_sync(&f).await;
+    assert!(!output.join(&legacy).join("_key").exists());
+    assert!(
+        ParquetRecordBatchReaderBuilder::try_new(
+            std::fs::File::open(output.join(&legacy).join("part-000000.parquet")).unwrap()
+        )
+        .is_ok()
+    );
+    let query = json!({"query":"SELECT id,name FROM app_db.users ORDER BY id"});
+    assert_eq!(
+        request(&app(&f), "POST", "/v1/sql", query.clone()).await.1["rows"],
+        json!([[1, "Alice"], [2, "Bob"]])
+    );
+    f.config.encryption.enabled = true;
+    let first = sql_sync(&f).await;
+    let snapshot = output.join(&first);
+    let key_id = std::fs::read_to_string(snapshot.join("_key")).unwrap();
+    for entry in std::fs::read_dir(&snapshot).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "parquet") {
+            assert!(
+                ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path).unwrap())
+                    .is_err()
+            );
+        }
+    }
+    let a = app(&f);
+    assert_eq!(
+        request(&a, "POST", "/v1/sql", query.clone()).await.1["rows"],
+        json!([[1, "Alice"], [2, "Bob"]])
+    );
+    let (_, before) = request(&a, "GET", "/v1/admin/keys", json!(null)).await;
+    assert!(!before.to_string().contains("wrapped_key"));
+    let version = before[0]["kek_version"].as_i64().unwrap();
+    let (status, rotated) = request(&a, "POST", "/v1/admin/keys/rotate-kek", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{rotated}");
+    assert_eq!(rotated["kek_version"], version + 1);
+    assert_eq!(
+        request(&a, "POST", "/v1/sql", query.clone()).await.1["rows"],
+        json!([[1, "Alice"], [2, "Bob"]])
+    );
+    let (_, after) = request(&a, "GET", "/v1/admin/keys", json!(null)).await;
+    assert_eq!(after[0]["id"], key_id);
+    assert_eq!(after[0]["kek_version"], version + 1);
+    let target = dataset_id(&f, "users").await;
+    let (status, value) = request(
+        &a,
+        "POST",
+        &format!("/v1/admin/keys/rotate/{target}"),
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    let retired: Option<i64> = sqlx::query_scalar("SELECT retired_at FROM dataset_keys WHERE id=?")
+        .bind(&key_id)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert!(retired.is_some());
+    keys::cleanup(&f.pool, &f.dir.join("data")).await.unwrap();
+    assert_eq!(
+        request(&a, "POST", "/v1/sql", query.clone()).await.1["rows"],
+        json!([[1, "Alice"], [2, "Bob"]])
+    );
+    let next = sql_sync(&f).await;
+    let next_key = std::fs::read_to_string(output.join(next).join("_key")).unwrap();
+    assert_ne!(key_id, next_key);
+    let old: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM dataset_keys WHERE id=?)")
+        .bind(key_id)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert!(!old);
+    // Disabling new encryption never disables decryption of an existing snapshot.
+    f.config.encryption.enabled = false;
+    let a = app(&f);
+    assert_eq!(
+        request(&a, "POST", "/v1/sql", query.clone()).await.0,
+        StatusCode::OK
+    );
+    crate::credentials::delete(&keys::account(&f.pool, false)).unwrap();
+    let (status, value) = request(&a, "POST", "/v1/sql", query).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(value["error"].as_str().unwrap().contains("KEK"), "{value}");
+    assert!(keys::initialize(&f.pool).await.is_err());
+    drop(a);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn encrypted_incremental_key_diff_and_model_inputs() {
+    use straton_connectors::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    let (f, input) = incremental_fixture().await;
+    let seed = sql_sync(&f).await;
+    assert!(
+        f.dir
+            .join("data/source/users")
+            .join(&seed)
+            .join("_key")
+            .is_file()
+    );
+    sqlx::query("UPDATE jobs SET delete_detection='key_diff',key_diff_every_runs=1")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql("DELETE FROM users WHERE id=1; UPDATE users SET name='Bobby',updated_at=3 WHERE id=2; INSERT INTO users VALUES(3,'Cara',4);").execute(&input).await.unwrap();
+    let run = f.enqueue().await;
+    runner::state(&f.pool, &f.events, &run, "running", None)
+        .await
+        .unwrap();
+    let output = f.dir.join("data/source/users");
+    runner::incremental::prepare(&f.pool, &output, &run, true)
+        .await
+        .unwrap();
+    let delta = output.join(format!(".staging-{run}/delta/part-000000.parquet"));
+    assert!(ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(delta).unwrap()).is_err());
+    runner::execute(
+        &f.pool,
+        &backup::Backups::new(f.config.clone()),
+        &run,
+        &f.events,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        synced_rows(&f).await,
+        json!([[2, "Bobby", 3], [3, "Cara", 4]])
+    );
+    for subdir in ["", "delta", "keys"] {
+        let dir = output.join(&run).join(subdir);
+        assert!(dir.join("_key").is_file());
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "parquet") {
+                assert!(
+                    ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path).unwrap())
+                        .is_err()
+                );
+            }
+        }
+    }
+    let a = app(&f);
+    let model = create_model(
+        &a,
+        "secured",
+        "SELECT id,name FROM app_db.users",
+        "table",
+        "manual",
+    )
+    .await;
+    let model_run = execute_model(&f, &a, &model).await;
+    let dir = f.dir.join("data/straton-models/secured").join(model_run);
+    assert!(dir.join("_key").is_file());
+    assert!(
+        ParquetRecordBatchReaderBuilder::try_new(
+            std::fs::File::open(dir.join("part-000000.parquet")).unwrap()
+        )
+        .is_err()
+    );
+    assert_eq!(
+        request(
+            &a,
+            "POST",
+            "/v1/sql",
+            json!({"query":"SELECT id,name FROM models.secured ORDER BY id"})
+        )
+        .await
+        .1["rows"],
+        json!([[2, "Bobby"], [3, "Cara"]])
+    );
+    assert_eq!(
+        request(
+            &a,
+            "POST",
+            "/v1/sql",
+            json!({"query":"SELECT count(*) FROM local_lake.app_db_users"})
+        )
+        .await
+        .1["rows"],
+        json!([[2]])
+    );
+    assert_eq!(
+        request(&a, "POST", "/v1/admin/keys/rotate-kek", json!(null))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &a,
+            "POST",
+            "/v1/sql",
+            json!({"query":"SELECT count(*) FROM models.secured"})
+        )
+        .await
+        .1["rows"],
+        json!([[2]])
+    );
+    drop(a);
+    input.close().await;
+    f.close().await;
+}
+
+#[tokio::test]
+async fn audit_chain_backfill_verification_tampering_and_status() {
+    let dir = std::env::temp_dir().join(format!("straton-audit-test-{}", store::id()));
+    tokio::fs::create_dir_all(&dir).await.unwrap();
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(dir.join("state.db"))
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    let mut old = sqlx::migrate!();
+    old.migrations = std::borrow::Cow::Owned(
+        old.migrations
+            .iter()
+            .filter(|m| m.version < 8)
+            .cloned()
+            .collect(),
+    );
+    old.run(&pool).await.unwrap();
+    sqlx::query("INSERT INTO audit_log(timestamp,action,entity_id,detail) VALUES(1,'old.event','dataset','legacy'),(2,'old.event','dataset','second')").execute(&pool).await.unwrap();
+    pool.close().await;
+    let pool = store::open(&dir).await.unwrap();
+    assert!(store::verify_audit(&pool).await.unwrap().ok);
+    assert_eq!(store::verify_audit(&pool).await.unwrap().rows, 2);
+    let head = store::audit_head(&pool).await.unwrap();
+    store::backfill_audit(&pool).await.unwrap();
+    assert_eq!(store::audit_head(&pool).await.unwrap(), head);
+    crate::access::bootstrap(&pool, "audit-token")
+        .await
+        .unwrap();
+    let config = Config {
+        data_dir: dir.clone(),
+        ..Default::default()
+    };
+    let (events, _) = tokio::sync::broadcast::channel(8);
+    let a = api::router(api::App {
+        pool: pool.clone(),
+        sql: crate::sql::Sql::new(pool.clone(), &config).unwrap(),
+        events,
+        backups: backup::Backups::new(config),
+        started: Instant::now(),
+    });
+    let (status, value) =
+        request_as(&a, "audit-token", "GET", "/v1/audit/verify", json!(null)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["ok"], true);
+    let (_, status) = request_as(&a, "audit-token", "GET", "/v1/status", json!(null)).await;
+    assert_eq!(
+        status["audit_head"],
+        store::audit_head(&pool).await.unwrap()
+    );
+    assert_eq!(status["audit_head"].as_str().unwrap().len(), 64);
+    // Bypass the normal append-only guard to model an attacker with database write access.
+    sqlx::query("DROP TRIGGER audit_log_no_update")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE audit_log SET detail='tampered' WHERE id=2")
+        .execute(&pool)
+        .await
+        .unwrap();
+    store::backfill_audit(&pool).await.unwrap();
+    let bad = store::verify_audit(&pool).await.unwrap();
+    assert!(!bad.ok);
+    assert_eq!(bad.first_bad_id, Some(2));
+    let (_, value) = request_as(&a, "audit-token", "GET", "/v1/audit/verify", json!(null)).await;
+    assert_eq!(value["first_bad_id"], 2);
+    drop(a);
+    pool.close().await;
+    let _ = tokio::fs::remove_dir_all(dir).await;
+}
+
+#[tokio::test]
+async fn security_endpoints_require_global_admin_and_rotation_waits_for_runs() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let target = dataset_id(&f, "users").await;
+    let role = access_role(&a, "security reader").await;
+    access_grant(&a, &role, "dataset", &target, "read").await;
+    let (_, token) = access_user(&a, "security analyst", &[&role]).await;
+    for (method, path) in [
+        ("GET", "/v1/admin/keys".to_owned()),
+        ("POST", "/v1/admin/keys/rotate-kek".to_owned()),
+        ("POST", format!("/v1/admin/keys/rotate/{target}")),
+        ("GET", "/v1/audit/verify".to_owned()),
+    ] {
+        assert_eq!(
+            request_as(&a, &token, method, &path, json!(null)).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let pending = f.enqueue().await;
+    let (status, value) = request(
+        &a,
+        "POST",
+        &format!("/v1/admin/keys/rotate/{target}"),
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{value}");
+    runner::state(&f.pool, &f.events, &pending, "cancelled", None)
+        .await
+        .unwrap();
+    let (status, value) = request(
+        &a,
+        "POST",
+        &format!("/v1/admin/keys/rotate/{target}"),
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert!(store::verify_audit(&f.pool).await.unwrap().ok);
     drop(a);
     f.close().await;
 }

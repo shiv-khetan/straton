@@ -10,10 +10,7 @@ use datafusion::{
     catalog::{MemorySchemaProvider, SchemaProvider},
     common::{ScalarValue, tree_node::TreeNodeRecursion},
     dataframe::DataFrame,
-    datasource::{
-        file_format::parquet::ParquetFormat,
-        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
-    },
+    datasource::listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
     execution::{
         context::SQLOptions,
         memory_pool::{GreedyMemoryPool, MemoryConsumer, MemoryReservation},
@@ -86,8 +83,13 @@ impl From<datafusion::error::DataFusionError> for Error {
     }
 }
 impl From<anyhow::Error> for Error {
-    fn from(_: anyhow::Error) -> Self {
-        Self::new("internal", "SQL catalog operation failed")
+    fn from(e: anyhow::Error) -> Self {
+        let message = if e.to_string().contains("KEK") || e.to_string().contains("dataset key") {
+            e.to_string()
+        } else {
+            "SQL catalog operation failed".into()
+        };
+        Self::new("internal", message)
     }
 }
 #[derive(Serialize)]
@@ -375,8 +377,13 @@ impl Sql {
                     urls.push(listing_url(&file)?);
                 }
             }
-            let opts = ListingOptions::new(Arc::new(ParquetFormat::default()))
-                .with_file_extension(".parquet");
+            let key = crate::keys::snapshot(&self.pool, path).await?;
+            let opts = ListingOptions::new(Arc::new(crate::keys::format(
+                &self.pool,
+                &ctx,
+                key.as_ref(),
+            )))
+            .with_file_extension(".parquet");
             let cfg = if urls.is_empty() {
                 let rows = sqlx::query(
                     "SELECT name,data_type,nullable FROM columns WHERE dataset_id=? ORDER BY rowid",

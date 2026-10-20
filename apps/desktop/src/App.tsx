@@ -20,6 +20,7 @@ import type {
 import SqlView from './Sql';
 import Models from './Models';
 import Access from './Access';
+import Security from './Security';
 import { can, canPage } from './access-model';
 import Dashboard from './Dashboard';
 import {
@@ -835,6 +836,16 @@ function AppContent() {
                     </p>
                   )}
                 </Card>
+                {me?.privileges.admin && (
+                  <Security
+                    client={client}
+                    status={status}
+                    datasets={datasets}
+                    readOnly={!online}
+                    revision={revision}
+                    onChanged={refresh}
+                  />
+                )}
               </>
             )}
             {client && canPage(me, 'Sources') && page === 'Sources' && (

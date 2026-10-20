@@ -4,6 +4,7 @@ mod backup;
 mod catalog;
 mod config;
 mod credentials;
+mod keys;
 mod models;
 mod optimizer;
 mod policies;
@@ -35,6 +36,7 @@ enum Command {
     Run,
     Restore { file: PathBuf },
     Token,
+    VerifyAudit,
 }
 
 #[tokio::main]
@@ -52,6 +54,15 @@ async fn main() -> Result<()> {
         Command::Restore { file } => {
             backup::restore(&config, &file).await?;
             println!("restored {}", file.display());
+            Ok(())
+        }
+        Command::VerifyAudit => {
+            let _lock = security::lock(&config.data_dir)?;
+            let pool = store::open(&config.data_dir).await?;
+            let result = store::verify_audit(&pool).await?;
+            println!("{}", serde_json::to_string(&result)?);
+            pool.close().await;
+            anyhow::ensure!(result.ok, "audit chain verification failed");
             Ok(())
         }
         Command::Run => run(config).await,
@@ -74,6 +85,7 @@ async fn run(config: config::Config) -> Result<()> {
         )
         .init();
     let pool = store::open(&config.data_dir).await?;
+    keys::initialize(&pool).await?;
     access::bootstrap(&pool, secrecy::ExposeSecret::expose_secret(token.as_ref())).await?;
     let (events, _) = tokio::sync::broadcast::channel(256);
     let backups = backup::Backups::new(config.clone());

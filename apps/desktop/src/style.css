@@ -2251,3 +2251,7 @@ dd {
     transition: none;
   }
 }
+
+.security-hash {
+  overflow-wrap: anywhere;
+}

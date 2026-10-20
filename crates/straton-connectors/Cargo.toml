@@ -10,7 +10,7 @@ arrow = { version = "59", default-features = false, features = ["csv"] }
 futures.workspace = true
 serde_json.workspace = true
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "sqlite", "chrono", "json", "macros"] }
-parquet = { version = "59", default-features = false, features = ["arrow", "snap"] }
+parquet = { version = "59", default-features = false, features = ["arrow", "snap", "encryption"] }
 tokio = { version = "1", features = ["fs", "rt", "time", "sync"] }
 async-trait = "0.1.92"
 chrono.workspace = true

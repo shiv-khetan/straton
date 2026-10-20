@@ -21,6 +21,7 @@ use std::time::Instant;
 use straton_core::{IncrementalStyle, Job, SourceKind};
 mod access_api;
 mod models_api;
+mod security_api;
 
 #[derive(Clone)]
 pub struct App {
@@ -34,6 +35,7 @@ pub fn router(app: App) -> Router {
     Router::new()
         .merge(access_api::routes())
         .merge(models_api::routes())
+        .merge(security_api::routes())
         .route("/v1/me", get(me))
         .route("/v1/status", get(status))
         .route("/v1/sql", post(sql_query))
@@ -154,7 +156,7 @@ async fn status(
         .fetch_one(&a.pool)
         .await?;
     Ok(Json(
-        json!({"version":env!("CARGO_PKG_VERSION"),"uptime_seconds":a.started.elapsed().as_secs(),"queue_depth":if p.admin(){depth}else{0},"last_backup":if p.admin(){a.backups.list().await?.first().cloned()}else{None}}),
+        json!({"version":env!("CARGO_PKG_VERSION"),"uptime_seconds":a.started.elapsed().as_secs(),"queue_depth":if p.admin(){depth}else{0},"encryption_enabled":a.backups.config().encryption.enabled,"audit_head":store::audit_head(&a.pool).await?,"last_backup":if p.admin(){a.backups.list().await?.first().cloned()}else{None}}),
     ))
 }
 fn source_json(row: sqlx::sqlite::SqliteRow) -> Value {
@@ -223,8 +225,11 @@ async fn save_source(
         SourceKind::Salesforce => "salesforce",
         SourceKind::Parquet => return Err(bad("parquet sources are managed by sync")),
     };
-    if s.id == "straton-local-lake" || s.id == "straton-models" {
-        return Err(bad("local lake source id is reserved"));
+    if ["straton-local-lake", "straton-models", "kek", "kek.pending"]
+        .iter()
+        .any(|reserved| s.id.eq_ignore_ascii_case(reserved))
+    {
+        return Err(bad("source id is reserved by the engine"));
     }
     if s.credential_id.as_deref().is_some_and(|id| id != s.id) {
         return Err(bad("credential_id must equal source id"));

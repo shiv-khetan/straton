@@ -19,3 +19,7 @@ query_timeout_secs = 60
 max_rows = 100_000
 memory_limit_mb = 1024
 # All settings support STRATON_SQL_* environment overrides.
+
+[encryption]
+enabled = true
+# STRATON_ENCRYPTION_ENABLED=false makes new runs plaintext; encrypted reads still need their key.

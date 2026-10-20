@@ -1,0 +1,27 @@
+# Offline license inventory: all 487 registry packages in Cargo.lock were inspected.
+# OR alternatives need no exception when an allowed license satisfies the expression.
+[advisories]
+version = 2
+# Vulnerabilities are always denied by cargo-deny. No RustSec advisory is ignored.
+ignore = []
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = [
+  "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
+  "Unicode-3.0", "MPL-2.0", "CDLA-Permissive-2.0",
+]
+# tiny-keccak has only CC0-1.0; const-random-macro uses it for compile-time hashing.
+[[licenses.exceptions]]
+name = "tiny-keccak"
+version = "=2.0.2"
+allow = ["CC0-1.0"]
+
+[bans]
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
