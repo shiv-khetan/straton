@@ -17,7 +17,7 @@ export function can(
 }
 export function canPage(me: Me | null, page: string): boolean {
   if (page === 'Connect') return true;
-  if (page === 'Dashboard') return me !== null;
+  if (page === 'Dashboard' || page === 'Models') return me !== null;
   if (page === 'Sources')
     return (
       can(me, 'admin') ||

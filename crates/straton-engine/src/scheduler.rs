@@ -17,7 +17,7 @@ pub async fn tick(pool: &SqlitePool) -> Result<Vec<String>> {
     let now = store::now();
     let mut tx = pool.begin().await?;
     let jobs =
-        sqlx::query("SELECT id,cron,last_scheduled FROM jobs WHERE enabled=1 AND cron IS NOT NULL")
+        sqlx::query("SELECT id,cron,last_scheduled FROM jobs WHERE enabled=1 AND cron IS NOT NULL AND (model_id IS NULL OR EXISTS(SELECT 1 FROM models m WHERE m.id=jobs.model_id AND m.status='ready'))")
             .fetch_all(&mut *tx)
             .await?;
     let mut queued = Vec::new();

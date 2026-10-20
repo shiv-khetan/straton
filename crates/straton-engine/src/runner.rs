@@ -115,8 +115,11 @@ pub(crate) async fn execute(
     if cancelled(pool, id).await? {
         return Ok(());
     }
-    let row = sqlx::query("SELECT j.builtin,j.dataset,j.source_id,j.mode,s.kind FROM runs r JOIN jobs j ON j.id=r.job_id LEFT JOIN sources s ON s.id=j.source_id WHERE r.id=?")
+    let row = sqlx::query("SELECT j.builtin,j.dataset,j.source_id,j.mode,j.model_id,s.kind FROM runs r JOIN jobs j ON j.id=r.job_id LEFT JOIN sources s ON s.id=j.source_id WHERE r.id=?")
         .bind(id).fetch_one(pool).await?;
+    if let Some(model) = row.get::<Option<String>, _>("model_id") {
+        return model_run(pool, backups, id, events, &model).await;
+    }
     if row.get::<bool, _>("builtin") {
         backups.create(pool).await?;
     } else {
@@ -271,7 +274,7 @@ impl Runner {
                 break;
             };
             let mut tx = self.pool.begin().await?;
-            let id: Option<String> = sqlx::query_scalar("UPDATE runs SET state='running',updated_at=? WHERE id=(SELECT id FROM runs WHERE state='queued' AND available_at<=? AND NOT EXISTS(SELECT 1 FROM runs active JOIN jobs aj ON aj.id=active.job_id JOIN jobs candidate ON candidate.id=runs.job_id WHERE active.state='running' AND (active.job_id=runs.job_id OR (aj.source_id=candidate.source_id AND aj.dataset=candidate.dataset))) ORDER BY created_at,id LIMIT 1) RETURNING id")
+            let id: Option<String> = sqlx::query_scalar("UPDATE runs SET state='running',updated_at=? WHERE id=(SELECT id FROM runs WHERE state='queued' AND available_at<=? AND NOT EXISTS(WITH RECURSIVE upstream(id) AS (SELECT upstream_model_id FROM model_deps WHERE model_id=(SELECT model_id FROM jobs WHERE id=runs.job_id) AND upstream_model_id IS NOT NULL UNION SELECT md.upstream_model_id FROM model_deps md JOIN upstream u ON md.model_id=u.id WHERE md.upstream_model_id IS NOT NULL) SELECT 1 FROM upstream u JOIN jobs uj ON uj.model_id=u.id JOIN runs ur ON ur.job_id=uj.id WHERE ur.state IN ('queued','running')) AND NOT EXISTS(SELECT 1 FROM runs active JOIN jobs aj ON aj.id=active.job_id JOIN jobs candidate ON candidate.id=runs.job_id WHERE active.state='running' AND (active.job_id=runs.job_id OR (aj.source_id=candidate.source_id AND aj.dataset=candidate.dataset))) ORDER BY created_at,id LIMIT 1) RETURNING id")
                 .bind(store::now()).bind(store::now()).fetch_optional(&mut *tx).await?;
             let Some(id) = id else {
                 break;
@@ -378,21 +381,35 @@ async fn publish_snapshot(
     }
     // Read durable part metadata so resumed publications include checkpointed batches.
     let mut row_count = 0_i64;
+    let mut model_schema = None;
     for entry in std::fs::read_dir(&snapshot)? {
         let entry = entry?;
         if entry.file_type()?.is_file()
             && entry.path().extension().is_some_and(|ext| ext == "parquet")
         {
             let reader = straton_connectors::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(entry.path())?)?;
+            model_schema = Some(reader.schema().clone());
             row_count = row_count
                 .checked_add(reader.metadata().file_metadata().num_rows())
                 .ok_or_else(|| anyhow::anyhow!("snapshot row count overflow"))?;
         }
     }
+    if let Some(m) = sqlx::query("SELECT m.id,m.name FROM models m JOIN jobs j ON j.model_id=m.id JOIN runs r ON r.job_id=j.id WHERE r.id=?").bind(id).fetch_optional(&mut *tx).await? {
+        let schema = model_schema.ok_or_else(||anyhow::anyhow!("model snapshot schema is missing"))?;
+        let ds = straton_core::DatasetSchema {
+            dataset: straton_core::Dataset { id:String::new(), source_id:crate::models::SOURCE.into(), name:m.get("name") },
+            columns: schema.fields().iter().map(|f|straton_core::Column {id:String::new(),dataset_id:String::new(),name:f.name().clone(),data_type:f.data_type().to_string(),nullable:f.is_nullable(),primary_key:false}).collect(),
+            relationships:vec![],
+        };
+        crate::catalog::upsert(&mut tx,crate::models::SOURCE,&ds).await?;
+        store::audit(&mut tx,"model.output",m.get("id"),id).await?;
+    }
     sqlx::query("UPDATE datasets SET row_count=?1,last_synced_at=?2 WHERE (source_id,name) IN (SELECT j.source_id,j.dataset FROM jobs j JOIN runs r ON r.job_id=j.id WHERE r.id=?3) OR (source_id='straton-local-lake' AND name IN (SELECT j.source_id || '/' || j.dataset FROM jobs j JOIN runs r ON r.job_id=j.id WHERE r.id=?3))")
         .bind(row_count).bind(chrono::Utc::now().to_rfc3339()).bind(id)
         .execute(&mut *tx).await?;
     incremental::publish_state(&mut tx, &snapshot, id, row_count).await?;
+    let published: Vec<String> = sqlx::query_scalar("SELECT d.id FROM datasets d JOIN jobs j ON (d.source_id=j.source_id AND d.name=j.dataset) OR (d.source_id='straton-local-lake' AND d.name=j.source_id || '/' || j.dataset) JOIN runs r ON r.job_id=j.id WHERE r.id=?").bind(id).fetch_all(&mut *tx).await?;
+    let triggered = crate::models::enqueue_upstream(&mut tx, &published).await?;
     let temporary = output.join("_current.partial");
     let mut file = std::fs::File::create(&temporary)?;
     file.write_all(id.as_bytes())?;
@@ -416,6 +433,9 @@ async fn publish_snapshot(
     tx.commit().await?;
     if durable && let Err(error) = clean_snapshots(output, id, &active) {
         tracing::warn!(%error, "snapshot cleanup deferred");
+    }
+    for queued in triggered {
+        event(events, &queued, "queued");
     }
     event(events, id, "succeeded");
     let _ = events.send(json!({"type":"catalog.changed"}));
@@ -449,4 +469,88 @@ fn clean_snapshots(output: &Path, current: &str, active: &[String]) -> Result<()
         std::fs::remove_dir_all(path)?;
     }
     Ok(())
+}
+
+async fn model_run(
+    pool: &SqlitePool,
+    backups: &Backups,
+    id: &str,
+    events: &Events,
+    model: &str,
+) -> Result<()> {
+    let m = sqlx::query("SELECT * FROM models WHERE id=?")
+        .bind(model)
+        .fetch_one(pool)
+        .await?;
+    ensure!(
+        m.get::<&str, _>("materialization") == "table",
+        "view models cannot run"
+    );
+    ensure!(m.get::<&str, _>("status") == "ready", "model is broken");
+    let name: &str = m.get("name");
+    crate::catalog::path_component(name)?;
+    crate::catalog::path_component(id)?;
+    let output = backups
+        .data_dir()
+        .join("data")
+        .join(crate::models::SOURCE)
+        .join(name);
+    // A crash after rename resumes the existing durable publication.
+    if output.join(id).is_dir() {
+        return publish_snapshot(pool, events, &output, id).await;
+    }
+    let staging = output.join(format!(".staging-{id}"));
+    if staging.exists() {
+        let resolved = staging.canonicalize()?;
+        ensure!(
+            resolved.parent() == Some(output.canonicalize()?.as_path()),
+            "staging escapes model output"
+        );
+        std::fs::remove_dir_all(&resolved)?;
+    }
+    std::fs::create_dir_all(&staging)?;
+    let work = async {
+        // Pin all input snapshots until the stream is exhausted, then release before publish.
+        let _snapshot = crate::sql::SNAPSHOTS.read().await;
+        let owner = crate::access::principal(pool, m.get("owner_id")).await?;
+        let sql = crate::sql::Sql::new(pool.clone(), backups.config())?.for_principal(owner);
+        let (ctx, _) = sql.context().await?;
+        let frame = sql.plan(&ctx, m.get("sql"), &[]).await?;
+        let (frame, _) = crate::optimizer::optimize(frame, m.get("optimize"))?;
+        let schema = frame.schema().as_arrow().clone();
+        let mut stream = frame.execute_stream().await?;
+        let mut number = 0;
+        while let Some(batch) = stream.next().await {
+            if cancelled(pool, id).await? {
+                return Ok::<_, anyhow::Error>(None);
+            }
+            let batch = batch?;
+            straton_connectors::write_parquet(
+                &staging.join(format!("part-{number:06}.parquet")),
+                &batch,
+            )?;
+            number += 1;
+        }
+        // Persist the schema even for zero rows, so crash recovery can publish an empty result.
+        if number == 0 {
+            straton_connectors::write_parquet(
+                &staging.join("part-000000.parquet"),
+                &datafusion::arrow::record_batch::RecordBatch::new_empty(Arc::new(schema.clone())),
+            )?;
+        }
+        Ok(Some(schema))
+    };
+    let schema = tokio::time::timeout(
+        Duration::from_secs_f64(backups.config().sql.query_timeout_secs),
+        work,
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("model query timed out"))??;
+    let Some(_) = schema else {
+        return Ok(());
+    };
+    if cancelled(pool, id).await? {
+        return Ok(());
+    }
+    publish_snapshot(pool, events, &output, id).await
 }

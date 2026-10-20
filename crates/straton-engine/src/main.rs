@@ -4,6 +4,8 @@ mod backup;
 mod catalog;
 mod config;
 mod credentials;
+mod models;
+mod optimizer;
 mod policies;
 mod runner;
 mod scheduler;

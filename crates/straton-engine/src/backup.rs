@@ -19,6 +19,9 @@ impl Backups {
             gate: Arc::new(Mutex::new(())),
         }
     }
+    pub(crate) fn config(&self) -> &Config {
+        &self.config
+    }
     pub fn data_dir(&self) -> &Path {
         &self.config.data_dir
     }

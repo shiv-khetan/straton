@@ -20,6 +20,7 @@ use sqlx::{Row, SqlitePool};
 use std::time::Instant;
 use straton_core::{IncrementalStyle, Job, SourceKind};
 mod access_api;
+mod models_api;
 
 #[derive(Clone)]
 pub struct App {
@@ -32,6 +33,7 @@ pub struct App {
 pub fn router(app: App) -> Router {
     Router::new()
         .merge(access_api::routes())
+        .merge(models_api::routes())
         .route("/v1/me", get(me))
         .route("/v1/status", get(status))
         .route("/v1/sql", post(sql_query))
@@ -80,7 +82,11 @@ async fn auth(State(app): State<App>, mut req: Request<axum::body::Body>, next: 
         }
     };
     let path = req.uri().path();
-    let allowed = if path == "/v1/me" || path == "/v1/status" || path == "/v1/events" {
+    let allowed = if path == "/v1/me"
+        || path == "/v1/status"
+        || path == "/v1/events"
+        || path.starts_with("/v1/models")
+    {
         true
     } else if path.starts_with("/v1/sql") || path == "/v1/datamap" {
         p.has("read")
@@ -217,7 +223,7 @@ async fn save_source(
         SourceKind::Salesforce => "salesforce",
         SourceKind::Parquet => return Err(bad("parquet sources are managed by sync")),
     };
-    if s.id == "straton-local-lake" {
+    if s.id == "straton-local-lake" || s.id == "straton-models" {
         return Err(bad("local lake source id is reserved"));
     }
     if s.credential_id.as_deref().is_some_and(|id| id != s.id) {
@@ -286,6 +292,9 @@ async fn delete_source(
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
     require_source_admin(&actor, &id)?;
+    if id == "straton-models" || id == "straton-local-lake" {
+        return Err(bad("built-in source is managed by the engine"));
+    }
     let mut tx = a.pool.begin().await?;
     found(
         sqlx::query("DELETE FROM sources WHERE id=?")
@@ -300,7 +309,7 @@ async fn delete_source(
     Ok(StatusCode::NO_CONTENT)
 }
 fn job_json(row: sqlx::sqlite::SqliteRow) -> Value {
-    json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"source_id":row.get::<Option<String>,_>("source_id"),"dataset":row.get::<String,_>("dataset"),"cron":row.get::<Option<String>,_>("cron"),"enabled":row.get::<bool,_>("enabled"),"builtin":row.get::<bool,_>("builtin"),"mode":row.get::<String,_>("mode"),"watermark_column":row.get::<Option<String>,_>("watermark_column"),"key_columns":row.get::<Option<String>,_>("key_columns").and_then(|s|serde_json::from_str::<Value>(&s).ok()),"delete_detection":row.get::<String,_>("delete_detection"),"key_diff_every_runs":row.get::<i64,_>("key_diff_every_runs"),"watermark":row.get::<Option<String>,_>("watermark").and_then(|s|serde_json::from_str::<Value>(&s).ok())})
+    json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"source_id":row.get::<Option<String>,_>("source_id"),"dataset":row.get::<String,_>("dataset"),"cron":row.get::<Option<String>,_>("cron"),"enabled":row.get::<bool,_>("enabled"),"builtin":row.get::<bool,_>("builtin"),"model_id":row.get::<Option<String>,_>("model_id"),"kind":if row.get::<Option<String>,_>("model_id").is_some(){"model"}else{"sync"},"mode":row.get::<String,_>("mode"),"watermark_column":row.get::<Option<String>,_>("watermark_column"),"key_columns":row.get::<Option<String>,_>("key_columns").and_then(|s|serde_json::from_str::<Value>(&s).ok()),"delete_detection":row.get::<String,_>("delete_detection"),"key_diff_every_runs":row.get::<i64,_>("key_diff_every_runs"),"watermark":row.get::<Option<String>,_>("watermark").and_then(|s|serde_json::from_str::<Value>(&s).ok())})
 }
 async fn jobs(State(a): State<App>, Extension(p): Extension<Principal>) -> ApiResult<Json<Value>> {
     Ok(Json(Value::Array(
@@ -406,6 +415,9 @@ async fn validate_incremental_job(pool: &SqlitePool, j: &Job) -> ApiResult<()> {
     Ok(())
 }
 async fn save_job(a: App, p: Principal, mut j: Job, update: bool) -> ApiResult<Json<Value>> {
+    if j.source_id == "straton-models" {
+        return Err(bad("use the models API for model jobs"));
+    }
     require_job_target(&a.pool, &p, Some(j.source_id.as_str()), &j.dataset).await?;
     if update {
         require_job(&a.pool, &p, &j.id).await?;
@@ -443,7 +455,7 @@ async fn save_job(a: App, p: Principal, mut j: Job, update: bool) -> ApiResult<J
         }
     }
     let query = if update {
-        "UPDATE jobs SET name=?2,source_id=?3,dataset=?4,cron=?5,enabled=?6,last_scheduled=CASE WHEN cron IS NOT ?5 THEN ?7 ELSE last_scheduled END WHERE id=?1 AND builtin=0"
+        "UPDATE jobs SET name=?2,source_id=?3,dataset=?4,cron=?5,enabled=?6,last_scheduled=CASE WHEN cron IS NOT ?5 THEN ?7 ELSE last_scheduled END WHERE id=?1 AND builtin=0 AND model_id IS NULL"
     } else {
         "INSERT INTO jobs(id,name,source_id,dataset,cron,enabled,last_scheduled) VALUES(?1,?2,?3,?4,?5,?6,?7)"
     };
@@ -496,7 +508,7 @@ async fn delete_job(
     require_job(&a.pool, &p, &id).await?;
     let mut tx = a.pool.begin().await?;
     found(
-        sqlx::query("DELETE FROM jobs WHERE id=? AND builtin=0")
+        sqlx::query("DELETE FROM jobs WHERE id=? AND builtin=0 AND model_id IS NULL")
             .bind(&id)
             .execute(&mut *tx)
             .await?
@@ -513,6 +525,14 @@ async fn run_job(
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let mut tx = a.pool.begin().await?;
     require_job(&a.pool, &p, &id).await?;
+    let model: Option<String> = sqlx::query_scalar("SELECT model_id FROM jobs WHERE id=?")
+        .bind(&id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .flatten();
+    if model.is_some() {
+        return Err(bad("use the model run endpoint for model jobs"));
+    }
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE id=?)")
         .bind(&id)
         .fetch_one(&mut *tx)

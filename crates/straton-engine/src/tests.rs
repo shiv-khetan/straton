@@ -3276,3 +3276,558 @@ async fn stripe_events_merge_deletes_fallback_and_validation() {
     assert!(r.get::<String, _>("fallback_reason").contains("retention"));
     f.close().await;
 }
+
+fn model_input(name: &str, query: &str, materialization: &str, trigger: &str) -> serde_json::Value {
+    json!({"name":name,"sql":query,"materialization":materialization,"trigger":trigger,"cron":null,"optimize":true})
+}
+async fn create_model(
+    a: &axum::Router,
+    name: &str,
+    query: &str,
+    materialization: &str,
+    trigger: &str,
+) -> String {
+    let (s, m) = request(
+        a,
+        "POST",
+        "/v1/models",
+        model_input(name, query, materialization, trigger),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{m}");
+    m["id"].as_str().unwrap().into()
+}
+async fn execute_model(f: &Fixture, a: &axum::Router, model: &str) -> String {
+    let (s, r) = request(a, "POST", &format!("/v1/models/{model}/run"), json!(null)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{r}");
+    let id = r["id"].as_str().unwrap();
+    runner::state(&f.pool, &f.events, id, "running", None)
+        .await
+        .unwrap();
+    runner::execute(
+        &f.pool,
+        &backup::Backups::new(f.config.clone()),
+        id,
+        &f.events,
+    )
+    .await
+    .unwrap();
+    assert_eq!(f.state(id).await, "succeeded");
+    id.into()
+}
+#[tokio::test]
+async fn models_materialize_validate_lineage_and_recover() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    for query in [
+        "SELECT * FROM missing",
+        "CREATE TABLE x(id INT)",
+        "SELECT 1; SELECT 2",
+        "SELECT 1 INTO forbidden",
+    ] {
+        let (s, e) = request(
+            &a,
+            "POST",
+            "/v1/models",
+            model_input("bad", query, "table", "manual"),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{query}: {e}");
+    }
+    let id = create_model(
+        &a,
+        "m",
+        "SELECT id,name FROM app_db.users",
+        "table",
+        "manual",
+    )
+    .await;
+    let run = execute_model(&f, &a, &id).await;
+    let (s, out) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT * FROM models.m ORDER BY id"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{out}");
+    assert_eq!(out["rows"], json!([[1, "Alice"], [2, "Bob"]]));
+    let (_, m) = request(&a, "GET", &format!("/v1/models/{id}"), json!(null)).await;
+    assert_eq!(m["row_count"], 2);
+    assert_eq!(m["last_run_status"], "succeeded");
+    let (_, l) = request(&a, "GET", &format!("/v1/models/{id}/lineage"), json!(null)).await;
+    assert_eq!(l["upstream"].as_array().unwrap().len(), 1);
+    let (_, map) = request(&a, "GET", "/v1/datamap", json!(null)).await;
+    assert!(
+        map["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["type"] == "dataset"
+                && n["source_id"] == "straton-models"
+                && n["sql_schema"] == "models")
+    );
+    assert!(map["edges"].as_array().unwrap().iter().any(|e| {
+        e["kind"] == "lineage"
+            && e["to_dataset"]
+                == map["nodes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|n| n["type"] == "dataset" && n["name"] == "m")
+                    .unwrap()["id"]
+    }));
+    // Re-execute disposable staging after a crash; preserve a completed publication too.
+    sqlx::query("UPDATE runs SET state='running' WHERE id=?")
+        .bind(&run)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    runner::recover(&f.pool, &f.events, 3).await.unwrap();
+    assert_eq!(f.state(&run).await, "queued");
+    sqlx::query("UPDATE runs SET available_at=0 WHERE id=?")
+        .bind(&run)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let mut worker = runner::Runner::new(
+        f.pool.clone(),
+        f.events.clone(),
+        backup::Backups::new(f.config.clone()),
+        1,
+    );
+    worker.dispatch().await.unwrap();
+    worker.drain().await;
+    assert_eq!(f.state(&run).await, "succeeded");
+    let (s, r) = request(&a, "POST", &format!("/v1/models/{id}/run"), json!(null)).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let fresh = r["id"].as_str().unwrap();
+    let staging = f
+        .dir
+        .join("data/straton-models/m")
+        .join(format!(".staging-{fresh}"));
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::write(staging.join("part-999999.parquet"), b"interrupted garbage").unwrap();
+    runner::state(&f.pool, &f.events, fresh, "running", None)
+        .await
+        .unwrap();
+    runner::recover(&f.pool, &f.events, 3).await.unwrap();
+    sqlx::query("UPDATE runs SET available_at=0 WHERE id=?")
+        .bind(fresh)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    worker.dispatch().await.unwrap();
+    worker.drain().await;
+    assert_eq!(f.state(fresh).await, "succeeded");
+    let (_, out) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT * FROM models.m"}),
+    )
+    .await;
+    assert_eq!(out["row_count"], 2);
+    let audits: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_log WHERE action='model.created' AND principal_id='admin'",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(audits, 1);
+    drop(worker);
+    drop(a);
+    f.close().await;
+}
+#[tokio::test]
+async fn models_cycles_downstream_and_inlined_optimizer() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let v = create_model(
+        &a,
+        "v",
+        "SELECT id + 1 AS y FROM app_db.users",
+        "view",
+        "manual",
+    )
+    .await;
+    let m = create_model(
+        &a,
+        "m",
+        "SELECT y - 1 AS x FROM models.v",
+        "table",
+        "manual",
+    )
+    .await;
+    let (s, plans) = request(&a, "GET", &format!("/v1/models/{m}/explain"), json!(null)).await;
+    assert_eq!(s, StatusCode::OK, "{plans}");
+    assert!(
+        !plans["rules_fired"].as_array().unwrap().is_empty(),
+        "{plans}"
+    );
+    assert!(
+        plans["rules_fired"][0]["after"]
+            .as_str()
+            .unwrap()
+            .ends_with(".id"),
+        "{plans}"
+    );
+    assert!(
+        !plans["logical_after"].as_str().unwrap().contains(" + "),
+        "{plans}"
+    );
+    let (s, query_plan) = request(
+        &a,
+        "POST",
+        "/v1/sql/explain",
+        json!({"query":"SELECT y - 1 AS x FROM models.v"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{query_plan}");
+    assert!(
+        !query_plan["logical"].as_str().unwrap().contains(" + "),
+        "{query_plan}"
+    );
+    execute_model(&f, &a, &m).await;
+    let (_, out) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT x FROM models.m ORDER BY x"}),
+    )
+    .await;
+    assert_eq!(out["rows"], json!([[1], [2]]));
+    assert_eq!(out["columns"][0]["type"], "Int64");
+    let (s, e) = request(
+        &a,
+        "PUT",
+        &format!("/v1/models/{v}"),
+        model_input("v", "SELECT x AS y FROM models.m", "view", "manual"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
+    assert!(e["error"].as_str().unwrap().contains("v → m → v"), "{e}");
+    let mut disabled = model_input("m", "SELECT y - 1 AS x FROM models.v", "table", "manual");
+    disabled["optimize"] = json!(false);
+    assert_eq!(
+        request(&a, "PUT", &format!("/v1/models/{m}"), disabled)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (_, plans) = request(&a, "GET", &format!("/v1/models/{m}/explain"), json!(null)).await;
+    assert_eq!(plans["rules_fired"], json!([]));
+    let (s, e) = request(
+        &a,
+        "PUT",
+        &format!("/v1/models/{v}"),
+        model_input(
+            "v",
+            "SELECT name AS renamed FROM app_db.users",
+            "view",
+            "manual",
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{e}");
+    let (_, broken) = request(&a, "GET", &format!("/v1/models/{m}"), json!(null)).await;
+    assert_eq!(broken["status"], "broken");
+    assert!(broken["error"].as_str().is_some());
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/models/{v}"),
+        model_input(
+            "v",
+            "SELECT id + 1 AS y FROM app_db.users",
+            "view",
+            "manual",
+        ),
+    )
+    .await;
+    let (_, fixed) = request(&a, "GET", &format!("/v1/models/{m}"), json!(null)).await;
+    assert_eq!(fixed["status"], "ready");
+    drop(a);
+    f.close().await;
+}
+#[tokio::test]
+async fn models_owner_policies_and_querying_view_policies() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let role = access_role(&a, "owner").await;
+    access_grant(&a, &role, "source", "source", "read").await;
+    access_grant(&a, &role, "source", "straton-models", "read").await;
+    let (_, token) = access_user(&a, "owner", &[&role]).await;
+    let dataset = dataset_id(&f, "users").await;
+    assert_eq!(
+        request(
+            &a,
+            "PUT",
+            &format!("/v1/datasets/{dataset}/row-filters/{role}"),
+            json!({"predicate":"id = 1"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &a,
+            "PUT",
+            &format!("/v1/datasets/{dataset}/masks/{role}/name"),
+            json!({"kind":"redact"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (s, m) = request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/models",
+        model_input(
+            "owned",
+            "SELECT id,name FROM app_db.users",
+            "table",
+            "manual",
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{m}");
+    execute_model(&f, &a, m["id"].as_str().unwrap()).await;
+    let (_, out) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT * FROM models.owned"}),
+    )
+    .await;
+    assert_eq!(out["rows"], json!([[1, "***"]]));
+    let reader = access_role(&a, "reader").await;
+    access_grant(&a, &reader, "source", "source", "read").await;
+    let (_, reader_token) = access_user(&a, "reader", &[&reader]).await;
+    assert_ne!(
+        request_as(
+            &a,
+            &reader_token,
+            "POST",
+            "/v1/sql",
+            json!({"query":"SELECT * FROM models.owned"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (_, unprivileged) = access_user(&a, "no_access", &[]).await;
+    assert_ne!(
+        request_as(
+            &a,
+            &unprivileged,
+            "POST",
+            "/v1/models",
+            model_input("denied", "SELECT * FROM app_db.users", "table", "manual")
+        )
+        .await
+        .0,
+        StatusCode::CREATED
+    );
+    let view = create_model(
+        &a,
+        "v_all",
+        "SELECT id,name FROM app_db.users",
+        "view",
+        "manual",
+    )
+    .await;
+    let (_, out) = request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT * FROM models.v_all"}),
+    )
+    .await;
+    assert_eq!(out["rows"], json!([[1, "***"]]));
+    assert_eq!(
+        request_as(
+            &a,
+            &token,
+            "PUT",
+            &format!("/v1/models/{view}"),
+            model_input("v_all", "SELECT 1", "view", "manual")
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    access_grant(&a, &reader, "source", "straton-models", "read").await;
+    // A Models grant cannot widen a view reader's input access.
+    let models_only = access_role(&a, "models_only").await;
+    access_grant(&a, &models_only, "source", "straton-models", "read").await;
+    let (_, only) = access_user(&a, "models_only", &[&models_only]).await;
+    assert_ne!(
+        request_as(
+            &a,
+            &only,
+            "POST",
+            "/v1/sql",
+            json!({"query":"SELECT * FROM models.v_all"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    drop(a);
+    f.close().await;
+}
+#[tokio::test]
+async fn models_upstream_dedup_and_dag_wait() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let upstream = create_model(
+        &a,
+        "first",
+        "SELECT * FROM app_db.users",
+        "table",
+        "upstream",
+    )
+    .await;
+    let downstream = create_model(
+        &a,
+        "second",
+        "SELECT * FROM models.first",
+        "table",
+        "upstream",
+    )
+    .await;
+    sql_sync(&f).await;
+    sql_sync(&f).await;
+    let count:i64=sqlx::query_scalar("SELECT count(*) FROM runs r JOIN jobs j ON j.id=r.job_id WHERE j.model_id=? AND r.state='queued'").bind(&upstream).fetch_one(&f.pool).await.unwrap();
+    assert_eq!(count, 1);
+    // Queue the downstream first in time, then hold the upstream until explicitly released.
+    let (_, r) = request(
+        &a,
+        "POST",
+        &format!("/v1/models/{downstream}/run"),
+        json!(null),
+    )
+    .await;
+    let down = r["id"].as_str().unwrap();
+    sqlx::query(
+        "UPDATE runs SET available_at=? WHERE job_id IN(SELECT id FROM jobs WHERE model_id=?)",
+    )
+    .bind(store::now() + 3600)
+    .bind(&upstream)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    let mut worker = runner::Runner::new(
+        f.pool.clone(),
+        f.events.clone(),
+        backup::Backups::new(f.config.clone()),
+        2,
+    );
+    worker.dispatch().await.unwrap();
+    assert_eq!(f.state(down).await, "queued");
+    sqlx::query(
+        "UPDATE runs SET available_at=0 WHERE job_id IN(SELECT id FROM jobs WHERE model_id=?)",
+    )
+    .bind(&upstream)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    worker.dispatch().await.unwrap();
+    worker.drain().await;
+    assert_eq!(f.state(down).await, "queued");
+    worker.dispatch().await.unwrap();
+    worker.drain().await;
+    assert_eq!(f.state(down).await, "succeeded");
+    drop(worker);
+    drop(a);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn models_delete_recreate_never_reuses_old_output_and_cron_schedules() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let old = create_model(
+        &a,
+        "reused",
+        "SELECT * FROM app_db.users",
+        "table",
+        "manual",
+    )
+    .await;
+    execute_model(&f, &a, &old).await;
+    assert_eq!(
+        request(&a, "DELETE", &format!("/v1/models/{old}"), json!(null))
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    let new = create_model(
+        &a,
+        "reused",
+        "SELECT id FROM app_db.users WHERE id=2",
+        "table",
+        "manual",
+    )
+    .await;
+    let (s, _) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT * FROM models.reused"}),
+    )
+    .await;
+    assert_ne!(
+        s,
+        StatusCode::OK,
+        "a recreated model must not expose its predecessor's files"
+    );
+    execute_model(&f, &a, &new).await;
+    let (_, out) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT * FROM models.reused"}),
+    )
+    .await;
+    assert_eq!(out["rows"], json!([[2]]));
+    let mut cron = model_input(
+        "reused",
+        "SELECT id FROM app_db.users WHERE id=2",
+        "table",
+        "cron",
+    );
+    cron["cron"] = json!("0 0 0 1 1 * 2000");
+    assert_eq!(
+        request(&a, "PUT", &format!("/v1/models/{new}"), cron)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    sqlx::query("UPDATE jobs SET last_scheduled=0 WHERE model_id=?")
+        .bind(&new)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(scheduler::tick(&f.pool).await.unwrap().len(), 1);
+    assert!(scheduler::tick(&f.pool).await.unwrap().is_empty());
+    let view = create_model(&a, "no_run", "SELECT * FROM app_db.users", "view", "manual").await;
+    assert_eq!(
+        request(&a, "POST", &format!("/v1/models/{view}/run"), json!(null))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    drop(a);
+    f.close().await;
+}

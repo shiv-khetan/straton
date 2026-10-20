@@ -1440,3 +1440,44 @@ dd {
   align-items: center;
   gap: 8px;
 }
+
+.model-sql {
+  font-family: 'Cascadia Code', ui-monospace, monospace;
+  min-height: 240px;
+  resize: vertical;
+  tab-size: 2;
+}
+.model-actions {
+  margin-top: 24px;
+}
+.model-name {
+  text-align: left;
+}
+.model-lineage {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.model-lineage > section {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.model-lineage code {
+  overflow-wrap: anywhere;
+}
+.model-plan {
+  margin-top: 16px;
+}
+.model-plan pre {
+  overflow: auto;
+  max-height: 360px;
+  background: var(--bg);
+  padding: 16px;
+  border-radius: 8px;
+}
+.rule-before {
+  background: var(--danger-50);
+}
+.rule-after {
+  background: var(--success-50);
+}

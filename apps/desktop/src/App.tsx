@@ -17,6 +17,7 @@ import type {
   Status,
 } from './api';
 import SqlView from './Sql';
+import Models from './Models';
 import Access from './Access';
 import { can, canPage } from './access-model';
 import Dashboard from './Dashboard';
@@ -38,7 +39,15 @@ import { tableReference } from './sql-model';
 const DataMapView = lazy(() => import('./DataMap'));
 const emptyMap: DataMap = { nodes: [], edges: [] };
 type Page =
-  'Dashboard' | 'Sources' | 'Jobs' | 'Data Map' | 'SQL' | 'Connect' | 'Backups' | 'Access';
+  | 'Dashboard'
+  | 'Sources'
+  | 'Models'
+  | 'Jobs'
+  | 'Data Map'
+  | 'SQL'
+  | 'Connect'
+  | 'Backups'
+  | 'Access';
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="field">
@@ -262,6 +271,7 @@ function AppContent() {
                   ['Sources', 'source'],
                   ['Jobs', 'jobs'],
                   ['SQL', 'sql'],
+                  ['Models', 'jobs'],
                 ],
               },
               {
@@ -431,6 +441,9 @@ function AppContent() {
             <Dashboard datasets={datasets} runs={runs} jobs={jobs} status={status}>
               <RunTable runs={runs.slice(0, 12)} jobs={jobs} />
             </Dashboard>
+          )}
+          {client && me && page === 'Models' && (
+            <Models client={client} me={me} revision={revision} changed={refresh} />
           )}
           {client && page === 'Backups' && (
             <>
@@ -750,7 +763,7 @@ function Sources({
                         </button>
                       </>
                     )}
-                    {!['external', 'parquet'].includes(source.kind) && (
+                    {!['external', 'parquet', 'models'].includes(source.kind) && (
                       <>
                         <button
                           disabled={busy}

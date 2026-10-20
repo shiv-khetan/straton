@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { modelStatus, ruleDiffRows } from '../src/model-model.ts';
+assert.deepEqual(modelStatus('broken','succeeded'),{label:'broken',tone:'danger'});
+assert.deepEqual(modelStatus('ready','failed'),{label:'failed',tone:'danger'});
+assert.deepEqual(modelStatus('ready','queued'),{label:'queued',tone:'warning'});
+assert.deepEqual(modelStatus('ready','running'),{label:'running',tone:'primary'});
+assert.deepEqual(modelStatus('ready',null),{label:'ready',tone:'success'});
+assert.deepEqual(ruleDiffRows([]),[]);
+assert.deepEqual(ruleDiffRows([{rule:'cancel_compensating_arithmetic',before:'(x + 1) - 1',after:'x'}]).map(r => [r.sign,r.expression,r.kind]),[['−','(x + 1) - 1','before'],['+','x','after']]);
+console.log('Model status mapping and explain diff rows passed.');

@@ -98,9 +98,9 @@ pub struct Column {
 }
 #[derive(Serialize)]
 pub struct Table {
-    schema: String,
-    name: String,
-    columns: Vec<Column>,
+    pub(crate) schema: String,
+    pub(crate) name: String,
+    pub(crate) columns: Vec<Column>,
 }
 pub struct Output {
     pub schema: SchemaRef,
@@ -137,7 +137,7 @@ fn read_only(stmt: &Statement) -> bool {
         _ => false,
     }
 }
-fn options() -> SQLOptions {
+pub(crate) fn options() -> SQLOptions {
     SQLOptions::new()
         .with_allow_ddl(false)
         .with_allow_dml(false)
@@ -178,13 +178,18 @@ pub fn catalog_names(
         "public".to_owned(),
         "information_schema".to_owned(),
         "pg_catalog".to_owned(),
+        "models".to_owned(),
     ]);
     let schemas = sources
         .iter()
         .map(|s| {
             (
                 s.get::<String, _>("id"),
-                unique_name(schema_name(s.get("name")), &mut used),
+                if s.get::<&str, _>("id") == "straton-models" {
+                    "models".to_owned()
+                } else {
+                    unique_name(schema_name(s.get("name")), &mut used)
+                },
             )
         })
         .collect();
@@ -219,7 +224,7 @@ pub fn catalog_names(
     (schemas, tables)
 }
 
-fn columns(schema: &Schema) -> Vec<Column> {
+pub(crate) fn columns(schema: &Schema) -> Vec<Column> {
     schema
         .fields()
         .iter()
@@ -256,7 +261,13 @@ impl Sql {
         sql.principal = Some(p);
         sql
     }
-    async fn context(&self) -> Result<(SessionContext, Vec<Table>)> {
+    pub(crate) async fn context(&self) -> Result<(SessionContext, Vec<Table>)> {
+        self.context_for_models(false).await
+    }
+    pub(crate) async fn context_for_models(
+        &self,
+        validation: bool,
+    ) -> Result<(SessionContext, Vec<Table>)> {
         let ctx = SessionContext::new_with_config_rt(
             SessionConfig::new().with_information_schema(false),
             self.runtime.clone(),
@@ -315,6 +326,13 @@ impl Sql {
                     .join(storage_dataset);
                 let snapshot = match tokio::fs::read_to_string(dir.join("_current")).await {
                     Ok(run) => {
+                        if source == crate::models::SOURCE {
+                            let belongs: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs r JOIN jobs j ON j.id=r.job_id JOIN models m ON m.id=j.model_id WHERE r.id=? AND m.name=? AND m.materialization='table')").bind(&run).bind(name).fetch_one(&self.pool).await?;
+                            if !belongs {
+                                entry.insert(None);
+                                continue;
+                            }
+                        }
                         ensure!(
                             uuid::Uuid::try_parse(&run).is_ok(),
                             "invalid current snapshot"
@@ -402,8 +420,16 @@ impl Sql {
                 name: alias.clone(),
                 columns: columns(&view.schema()),
             });
+            let view: Arc<dyn datafusion::catalog::TableProvider> = if validation {
+                Arc::new(datafusion::datasource::empty::EmptyTable::new(
+                    view.schema(),
+                ))
+            } else {
+                view
+            };
             provider.register_table(alias.clone(), view)?;
         }
+        crate::models::register(&self.pool, principal, &ctx, &mut tables, validation).await?;
         Ok((ctx, tables))
     }
     pub async fn tables(&self) -> std::result::Result<Vec<Table>, Error> {
@@ -420,7 +446,7 @@ impl Sql {
         .await
         .map_err(|_| Error::new("timeout", "SQL query timed out"))?
     }
-    async fn plan(
+    pub(crate) async fn plan(
         &self,
         ctx: &SessionContext,
         query: &str,
@@ -482,6 +508,10 @@ impl Sql {
         })?;
         if !params.is_empty() {
             frame = frame.with_param_values(params)?;
+        }
+        if !matches!(mode, Mode::Describe) {
+            let (optimized, _) = crate::optimizer::optimize(frame, true)?;
+            frame = optimized;
         }
         let schema = Arc::new(frame.schema().as_arrow().clone());
         let parameter_map = frame.logical_plan().get_parameter_types()?;

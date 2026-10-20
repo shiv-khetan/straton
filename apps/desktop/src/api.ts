@@ -23,12 +23,47 @@ export interface SqlExplain {
   physical: string;
 }
 
+export interface ModelInput {
+  name: string;
+  sql: string;
+  materialization: 'table' | 'view';
+  trigger: 'manual' | 'cron' | 'upstream';
+  cron: string | null;
+  optimize: boolean;
+}
+export interface Model extends ModelInput {
+  id: string;
+  owner_id: string;
+  status: string;
+  error: string | null;
+  row_count: number | null;
+  last_run: number | null;
+  last_run_status: string | null;
+}
+export interface ModelExplain {
+  logical_before: string;
+  logical_after: string;
+  physical: string;
+  rules_fired: { rule: string; before: string; after: string }[];
+}
+export interface ModelLineage {
+  upstream: Dataset[];
+  downstream: Dataset[];
+}
 export interface Connection {
   url: string;
   token: string;
 }
 export type SourceKind =
-  'postgres' | 'sqlite' | 'csv' | 'stripe' | 'salesforce' | 'external' | 'parquet' | 'noop';
+  | 'postgres'
+  | 'sqlite'
+  | 'csv'
+  | 'stripe'
+  | 'salesforce'
+  | 'external'
+  | 'parquet'
+  | 'noop'
+  | 'models';
 export interface Source {
   id: string;
   name: string;
@@ -208,6 +243,16 @@ export function api(connection: Connection) {
     return response.json() as Promise<T>;
   }
   return {
+    models: () => request<Model[]>('/v1/models'),
+    createModel: (model: ModelInput) => request<Model>('/v1/models', 'POST', model),
+    updateModel: (id: string, model: ModelInput) =>
+      request<Model>('/v1/models/' + idPath(id), 'PUT', model),
+    deleteModel: (id: string) => request<void>('/v1/models/' + idPath(id), 'DELETE'),
+    validateModel: (model: ModelInput) =>
+      request<{ valid: boolean }>('/v1/models/validate', 'POST', model),
+    runModel: (id: string) => request<{ id: string }>('/v1/models/' + idPath(id) + '/run', 'POST'),
+    explainModel: (id: string) => request<ModelExplain>('/v1/models/' + idPath(id) + '/explain'),
+    modelLineage: (id: string) => request<ModelLineage>('/v1/models/' + idPath(id) + '/lineage'),
     me: () => request<Me>('/v1/me'),
     users: () => request<User[]>('/v1/users'),
     createUser: (name: string) => request<User>('/v1/users', 'POST', { name }),
