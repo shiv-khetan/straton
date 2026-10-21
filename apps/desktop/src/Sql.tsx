@@ -93,8 +93,8 @@ export default function SqlView({
   return (
     <div className="sql-layout">
       <div className="sql-workspace" aria-label="SQL workspace" aria-busy={busy}>
-        <Card>
-          <h2>SQL editor</h2>
+        <Card className="sql-editor-panel">
+          <h2 className="mono-caption">SQL editor</h2>
           <label className="field" htmlFor="sql-query">
             <span>Query</span>
             <div className="editor-with-gutter">

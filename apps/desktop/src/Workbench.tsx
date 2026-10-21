@@ -283,7 +283,7 @@ export function ConsoleDrawer({
           }}
         />
       )}
-      <div className="drawer-tabs">
+      <div className="drawer-tabs panel-chrome">
         <Tabs
           id={id}
           items={tabs}

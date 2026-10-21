@@ -69,7 +69,7 @@ function textWidth(text: string, header = false) {
   if (!textContext) return Array.from(text).length * (header ? 9 : 8);
   textContext.font = header
     ? '600 14px "JetBrains Mono Variable", ui-monospace, monospace'
-    : '12px "JetBrains Mono Variable", ui-monospace, monospace';
+    : '13px "JetBrains Mono Variable", ui-monospace, monospace';
   return textContext.measureText(text).width;
 }
 export function tableSize(dataset: Dataset) {

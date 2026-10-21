@@ -286,7 +286,7 @@ export default function Models({
           )}
           {!open && notice && <p role="status">{notice}</p>}
           {view === 'List' && (
-            <Card className="model-list" aria-busy={loading}>
+            <Card className="model-list table-surface" aria-busy={loading}>
               {loading ? (
                 <Skeleton label="Loading models…" />
               ) : models.length ? (

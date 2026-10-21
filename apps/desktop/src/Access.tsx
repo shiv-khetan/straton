@@ -11,7 +11,7 @@ import type {
   TokenInfo,
   User,
 } from './api';
-import { Button, Card, EmptyState, Pill, Sheet, Table, Tabs, Toast } from './ui';
+import { Button, Tray, EmptyState, Pill, Sheet, Table, Tabs, Toast } from './ui';
 import { Field } from './App';
 import { Skeleton } from './Workbench';
 import { setMask } from './access-model';
@@ -153,7 +153,7 @@ export default function Access({
       <Tabs id="access" items={['Users', 'Roles', 'Policies']} value={tab} onChange={setTab} />
       <section role="tabpanel" id={'access-panel-' + tab} aria-labelledby={'access-tab-' + tab}>
         {tab === 'Users' && (
-          <Card>
+          <Tray title="Users">
             <form
               className="access-inline"
               onSubmit={(e) => {
@@ -254,10 +254,10 @@ export default function Access({
                 ))}
               </tbody>
             </Table>
-          </Card>
+          </Tray>
         )}
         {tab === 'Roles' && (
-          <Card>
+          <Tray title="Roles">
             <form
               className="access-inline"
               onSubmit={(e) => {
@@ -421,10 +421,10 @@ export default function Access({
                 </Table>
               </>
             )}
-          </Card>
+          </Tray>
         )}
         {tab === 'Policies' && (
-          <Card>
+          <Tray title="Policies">
             <Field label="Dataset">
               <select
                 value={dataset}
@@ -578,7 +578,7 @@ export default function Access({
                 </Table>
               </>
             )}
-          </Card>
+          </Tray>
         )}
       </section>
       <Sheet

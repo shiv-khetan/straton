@@ -137,7 +137,7 @@ function Table({ data }: NodeProps<TableNode>) {
 }
 function SourceGroup({ data }: NodeProps<GroupNode>) {
   return (
-    <div className={'source-label' + (data.external ? ' external-label' : '')}>
+    <div className={'source-label mono-caption' + (data.external ? ' external-label' : '')}>
       <Icon name="source" />
       <span>{data.label}</span>
       <Pill tone={data.stale ? 'warning' : data.external ? 'neutral' : 'success'}>

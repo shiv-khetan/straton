@@ -38,7 +38,7 @@ const paths = {
   link: 'm10 14 4-4 M8 16l-2 2a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0 M16 8l2-2a4 4 0 0 0-6-6L8 4a4 4 0 0 0 0 6',
 };
 export type IconName = keyof typeof paths;
-export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
+export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   return (
     <svg
       width={size}
@@ -254,7 +254,7 @@ export function Tabs({
   id: string;
 }) {
   return (
-    <div className="tabs" role="tablist" aria-label={id}>
+    <div className="tabs segmented-control" role="tablist" aria-label={id}>
       {items.map((item, i) => (
         <button
           key={item}
@@ -428,5 +428,133 @@ export function SchemaTree({
         </details>
       ))}
     </div>
+  );
+}
+
+export function Tray({
+  title,
+  actions,
+  children,
+  className = '',
+  ...props
+}: HTMLAttributes<HTMLElement> & { title: string; actions?: ReactNode }) {
+  const id = useId();
+  return (
+    <section className={'tray ' + className} aria-labelledby={id} {...props}>
+      <header className="tray-heading">
+        <h2 id={id} className="mono-caption">
+          {title}
+        </h2>
+        {actions}
+      </header>
+      <div className="tray-surface">{children}</div>
+    </section>
+  );
+}
+export function SegmentedControl({
+  items,
+  value,
+  onChange,
+  label,
+}: {
+  items: string[];
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+}) {
+  return (
+    <div className="segmented-control" role="group" aria-label={label}>
+      {items.map((item, i) => (
+        <button
+          type="button"
+          key={item}
+          aria-pressed={value === item}
+          onClick={() => onChange(item)}
+          onKeyDown={(event) => {
+            const next =
+              event.key === 'ArrowRight'
+                ? (i + 1) % items.length
+                : event.key === 'ArrowLeft'
+                  ? (i + items.length - 1) % items.length
+                  : event.key === 'Home'
+                    ? 0
+                    : event.key === 'End'
+                      ? items.length - 1
+                      : null;
+            if (next === null) return;
+            event.preventDefault();
+            onChange(items[next]);
+            (event.currentTarget.parentElement?.children[next] as HTMLButtonElement)?.focus();
+          }}
+        >
+          {item}
+        </button>
+      ))}
+    </div>
+  );
+}
+export function KpiTile({
+  caption,
+  value,
+  unit,
+  series,
+  seriesLabel,
+  footer,
+  tone = 'neutral',
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  caption: string;
+  value: ReactNode;
+  unit?: string;
+  series: number[];
+  seriesLabel: string;
+  footer: string;
+  tone?: Tone;
+}) {
+  const max = Math.max(1, ...series);
+  return (
+    <button type="button" className="kpi-tile" {...props}>
+      <span className="kpi-top">
+        <span className="mono-caption">{caption}</span>
+        <span className="kpi-reading">
+          <span className="kpi-value">{value}</span>
+          {unit && <span className="kpi-unit">{unit}</span>}
+          <svg className="sparkline" viewBox="0 0 62 40" role="img" aria-label={seriesLabel}>
+            <title>{seriesLabel + ': ' + series.join(', ')}</title>
+            {series.map((n, i) => (
+              <rect
+                key={i}
+                x={i * 5 + 1}
+                y={38 - (n / max) * 34}
+                width="2"
+                height={(n / max) * 34}
+                fill={i === series.length - 1 ? 'var(--mark)' : 'var(--line)'}
+              />
+            ))}
+          </svg>
+        </span>
+      </span>
+      <span className="kpi-footer">
+        <span className={'kpi-glyph tone-' + tone}>
+          <Icon
+            name={tone === 'danger' ? 'warning' : tone === 'success' ? 'check' : 'clock'}
+            size={12}
+          />
+        </span>
+        <span className={tone === 'neutral' ? '' : 'delta-' + tone}>{footer}</span>
+      </span>
+    </button>
+  );
+}
+export function SidebarNavItem({
+  icon,
+  children,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & { icon: IconName }) {
+  return (
+    <button type="button" {...props}>
+      <Icon name={icon} />
+      <span className="rail-hide">{children}</span>
+    </button>
   );
 }

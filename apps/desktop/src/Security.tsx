@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Api, AuditVerification, Dataset, DatasetKey, Status } from './api';
-import { Button, Pill, Sheet, Table } from './ui';
+import { Button, Pill, Sheet, Table, Tray } from './ui';
 import { Skeleton } from './Workbench';
 
 type Rotation = { kind: 'kek' } | { kind: 'dataset'; target: string; name: string };
@@ -74,9 +74,9 @@ export default function Security({
     }
   }
   return (
-    <section className="form-section" aria-labelledby="security-heading">
-      <div className="panel-heading">
-        <h2 id="security-heading">Security</h2>
+    <Tray
+      title="Security"
+      actions={
         <Pill tone={status?.encryption_enabled ? 'success' : 'warning'}>
           {status
             ? status.encryption_enabled
@@ -84,7 +84,8 @@ export default function Security({
               : 'New snapshots are plaintext'
             : 'Loading status…'}
         </Pill>
-      </div>
+      }
+    >
       <p className="hint">
         Snapshot encryption covers Parquet data. Database metadata and backups remain plaintext.
       </p>
@@ -201,6 +202,6 @@ export default function Security({
           </Button>
         </div>
       </Sheet>
-    </section>
+    </Tray>
   );
 }

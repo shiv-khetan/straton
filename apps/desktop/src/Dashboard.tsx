@@ -1,11 +1,264 @@
+import { useId, useState } from 'react';
 import type { Dataset, Job, Run, Status } from './api';
-import { Card, EmptyState, Icon, Pill, stateTone } from './ui';
-import { backupTime, bucketRuns, chartStates, relativeTime } from './view-model';
+import { EmptyState, Icon, KpiTile, Pill, SegmentedControl, Tray, stateTone } from './ui';
+import {
+  backupTime,
+  bucketRuns,
+  bucketTooltip,
+  axisLabelShown,
+  chartStates,
+  matrixCells,
+  matrixLayout,
+  navigateBucket,
+  relativeTime,
+  runKpi,
+  runSparkline,
+  timestampSeries,
+} from './view-model';
+
+function SyncActivity({ runs }: { runs: Run[] }) {
+  const [range, setRange] = useState<7 | 30>(7);
+  const [active, setActive] = useState<number | null>(null);
+  const [focused, setFocused] = useState(false);
+  const id = useId();
+  const days = bucketRuns(runs, Date.now(), range, range === 7 ? 4 : 1);
+  const { unit, rows } = matrixLayout(days);
+  const tooltip = active === null ? null : bucketTooltip(days[active]);
+  const width = Math.max(560, days.length * 16 + 64);
+  const height = rows * 12 + 64;
+  const x = (i: number) => 48 + i * ((width - 80) / (days.length - 1));
+  return (
+    <>
+      <div className="chart-toolbar">
+        <p>
+          <code>
+            {days.reduce((sum, day) => sum + bucketTooltip(day).total, 0).toLocaleString()}
+          </code>{' '}
+          runs <span className="hint">by scheduled time</span>
+        </p>
+        <SegmentedControl
+          label="Sync activity range"
+          items={['7d', '30d']}
+          value={range + 'd'}
+          onChange={(value) => {
+            setRange(value === '7d' ? 7 : 30);
+            setActive(null);
+          }}
+        />
+      </div>
+      <div className="matrix-container">
+        <svg
+          className="activity-chart"
+          viewBox={'0 0 ' + width + ' ' + height}
+          tabIndex={0}
+          role="group"
+          aria-label={'Sync activity, last ' + range + ' days'}
+          aria-describedby={id + '-help'}
+          onFocus={() => {
+            setFocused(true);
+            setActive(days.length - 1);
+          }}
+          onBlur={() => {
+            setFocused(false);
+            setActive(null);
+          }}
+          onPointerLeave={() => {
+            if (!focused) setActive(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              setActive(null);
+              return;
+            }
+            if (
+              !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(
+                event.key,
+              )
+            )
+              return;
+            event.preventDefault();
+            setActive(navigateBucket(active ?? days.length - 1, event.key, days.length));
+          }}
+        >
+          <title>Sync activity by scheduled run time</title>
+          <desc>
+            Square cells show run counts. Patterns distinguish states. Exact values are available in
+            the data table below.
+          </desc>
+          <defs>
+            {chartStates
+              .filter((state) => state !== 'succeeded')
+              .map((state) => (
+                <pattern
+                  key={state}
+                  id={id + '-' + state}
+                  width="8"
+                  height="8"
+                  patternUnits="userSpaceOnUse"
+                >
+                  <rect width="8" height="8" fill="var(--panel-2)" />
+                  <path
+                    d={
+                      {
+                        running: 'M0 4H8',
+                        queued: 'M3 4h2',
+                        failed: 'M1 1l6 6M1 7l6-6',
+                        interrupted: 'M4 0v3M4 5v3',
+                        cancelled: 'M0 8L8 0',
+                      }[state]
+                    }
+                    stroke="var(--ink-2)"
+                    strokeWidth={state === 'queued' ? 2 : 1}
+                  />
+                </pattern>
+              ))}
+          </defs>
+          {[0, Math.floor(rows / 2), rows].map((row) => (
+            <g key={row}>
+              <text x="4" y={height - 38 - row * 12} className="matrix-axis">
+                {row * unit}
+              </text>
+            </g>
+          ))}
+          {days.map((day, i) => (
+            <g key={day.start} onPointerEnter={() => setActive(i)} onClick={() => setActive(i)}>
+              <rect
+                x={x(i) - (width - 80) / days.length / 2}
+                y="8"
+                width={(width - 80) / days.length}
+                height={rows * 12 + 28}
+                fill="transparent"
+              />
+              {matrixCells(day, unit, rows).map((state, j) => (
+                <rect
+                  key={j}
+                  x={x(i) - 5}
+                  y={height - 50 - j * 12}
+                  width="10"
+                  height="10"
+                  fill={
+                    state === 'succeeded'
+                      ? 'var(--mark)'
+                      : state
+                        ? 'url(#' + id + '-' + state + ')'
+                        : 'var(--cell-empty)'
+                  }
+                />
+              ))}
+              {axisLabelShown(i, active ?? days.length - 1, range) && (
+                <text
+                  x={x(i)}
+                  y={height - 15}
+                  textAnchor="middle"
+                  className={
+                    'matrix-axis' +
+                    (day.axisLabel === days[active ?? days.length - 1].axisLabel ? ' current' : '')
+                  }
+                >
+                  {day.axisLabel.toUpperCase()}
+                </text>
+              )}
+            </g>
+          ))}
+          {active !== null && (
+            <line
+              x1={x(active)}
+              x2={x(active)}
+              y1="8"
+              y2={height - 38}
+              stroke="var(--mark)"
+              strokeDasharray="2 4"
+              pointerEvents="none"
+            />
+          )}
+        </svg>
+        {tooltip && (
+          <div
+            className="chart-tooltip"
+            style={{ left: 'clamp(8px, ' + (x(active!) / width) * 100 + '%, calc(100% - 198px))' }}
+            aria-hidden="true"
+          >
+            <div className="tooltip-heading">
+              {tooltip.label}
+              <code>{tooltip.total} runs</code>
+            </div>
+            {tooltip.rows.map(({ state, value }) => (
+              <div className="tooltip-row" key={state}>
+                <svg className="matrix-key" width="10" height="10" aria-hidden="true">
+                  <rect
+                    width="10"
+                    height="10"
+                    fill={state === 'succeeded' ? 'var(--mark)' : 'url(#' + id + '-' + state + ')'}
+                  />
+                </svg>
+                <span>{state}</span>
+                <code>{value}</code>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="chart-legend">
+        {chartStates.map((state) => (
+          <span key={state}>
+            <svg className="matrix-key" width="10" height="10" aria-hidden="true">
+              <rect
+                width="10"
+                height="10"
+                fill={state === 'succeeded' ? 'var(--mark)' : 'url(#' + id + '-' + state + ')'}
+              />
+            </svg>
+            {state}
+          </span>
+        ))}
+      </div>
+      <p id={id + '-help'} className="hint chart-help">
+        {range === 7 ? 'Four buckets per day. ' : 'Daily buckets. '}Each cell represents{' '}
+        {unit === 1 ? '1 run' : 'up to ' + unit + ' runs'}. Focus the chart and use arrow keys;
+        Home/End jump to the first/last bucket. Escape dismisses the tooltip.
+      </p>
+      <span className="visually-hidden" role="status">
+        {focused && tooltip
+          ? tooltip.label + ': ' + tooltip.rows.map((row) => row.value + ' ' + row.state).join(', ')
+          : ''}
+      </span>
+      <details className="chart-data">
+        <summary>View activity data</summary>
+        <div className="table-wrap">
+          <table>
+            <caption>Sync activity by bucket, last {range} days</caption>
+            <thead>
+              <tr>
+                <th scope="col">Date</th>
+                {chartStates.map((state) => (
+                  <th key={state} scope="col">
+                    {state}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {days.map((day) => (
+                <tr key={day.start}>
+                  <th scope="row">{day.label}</th>
+                  {chartStates.map((state) => (
+                    <td key={state}>{day[state]}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </>
+  );
+}
 export default function Dashboard({
   datasets,
   runs,
   jobs,
   status,
+  backups,
   children,
   navigate,
   events,
@@ -15,157 +268,91 @@ export default function Dashboard({
   runs: Run[];
   jobs: Job[];
   status: Status | null;
+  backups: string[];
   children: React.ReactNode;
   navigate: (page: 'Jobs' | 'Data Map' | 'Backups', filter?: string) => void;
   events: import('./api').EngineEvent[];
   canNavigate: (page: 'Jobs' | 'Data Map' | 'Backups') => boolean;
 }) {
   const now = Date.now();
-  const cutoff = now - 86400000;
-  const recent = runs.filter(
-    (r) => r.available_at * 1000 >= cutoff && r.available_at * 1000 <= now,
+  const total = runKpi(runs, now);
+  const failed = runKpi(runs, now, 'failed');
+  const synced = datasets.filter(
+    (dataset) => dataset.source_id !== 'straton-local-lake' && dataset.last_synced_at,
   );
-  const failed = recent.filter((r) => r.state === 'failed').length;
-  const synced = datasets.filter((d) => d.source_id !== 'straton-local-lake' && d.last_synced_at);
   const backup = backupTime(status?.last_backup);
-  const days = bucketRuns(runs, now);
-  const max =
-    Math.ceil(
-      Math.max(3, ...days.map((d) => chartStates.reduce((sum, state) => sum + d[state], 0))) / 3,
-    ) * 3;
-  const colors = [
-    'var(--success)',
-    'var(--running)',
-    'var(--warning)',
-    'var(--danger)',
-    'var(--danger)',
-    'var(--ink-2)',
-  ];
+  const backupAge = backup
+    ? relativeTime(backup, now)
+        .replace('Just now', '<1m')
+        .replace(' min ago', 'm')
+        .replace(' h ago', 'h')
+        .replace(' d ago', 'd')
+    : status?.last_backup
+      ? 'Unknown'
+      : 'Never';
+  const deltaLabel = (delta: number) => (delta > 0 ? '+' : '') + delta + ' vs prior 24h';
   return (
     <>
-      <div className="telemetry-strip" aria-label="Engine overview">
-        <button disabled={!canNavigate('Data Map')} onClick={() => navigate('Data Map')}>
-          <code>{canNavigate('Data Map') ? synced.length : '—'}</code> datasets synced
-        </button>
-        <button disabled={!canNavigate('Jobs')} onClick={() => navigate('Jobs')}>
-          <code>{canNavigate('Jobs') ? recent.length : '—'}</code> runs in 24h
-        </button>
-        <button disabled={!canNavigate('Jobs')} onClick={() => navigate('Jobs', 'failed')}>
-          <code>{canNavigate('Jobs') ? failed : '—'}</code> failed in 24h
-        </button>
-        <button disabled={!canNavigate('Backups')} onClick={() => navigate('Backups')}>
-          Last backup <code>{relativeTime(backup)}</code>
-        </button>
+      <div className="kpi-grid" aria-label="Engine overview">
+        <KpiTile
+          caption="Datasets synced"
+          value={canNavigate('Data Map') ? synced.length.toLocaleString() : '—'}
+          unit="datasets"
+          series={timestampSeries(
+            synced.map((dataset) => Date.parse(dataset.last_synced_at!)),
+            now,
+          )}
+          seriesLabel="Latest dataset sync timestamps, twelve 2-hour buckets"
+          footer="Latest syncs · last 24h"
+          disabled={!canNavigate('Data Map')}
+          onClick={() => navigate('Data Map')}
+        />
+        <KpiTile
+          caption="Runs · 24h"
+          value={canNavigate('Jobs') ? total.current.toLocaleString() : '—'}
+          unit="runs"
+          series={runSparkline(runs, now)}
+          seriesLabel="Runs, twelve 2-hour buckets"
+          footer={canNavigate('Jobs') ? deltaLabel(total.delta) : 'Requires sync admin'}
+          tone={total.delta > 0 ? 'success' : total.delta < 0 ? 'danger' : 'neutral'}
+          disabled={!canNavigate('Jobs')}
+          onClick={() => navigate('Jobs')}
+        />
+        <KpiTile
+          caption="Failed · 24h"
+          value={canNavigate('Jobs') ? failed.current.toLocaleString() : '—'}
+          unit="runs"
+          series={runSparkline(runs, now, 'failed')}
+          seriesLabel="Failed runs, twelve 2-hour buckets"
+          footer={canNavigate('Jobs') ? deltaLabel(failed.delta) : 'Requires sync admin'}
+          tone={failed.delta > 0 ? 'danger' : failed.delta < 0 ? 'success' : 'neutral'}
+          disabled={!canNavigate('Jobs')}
+          onClick={() => navigate('Jobs', 'failed')}
+        />
+        <KpiTile
+          caption="Last backup"
+          value={canNavigate('Backups') ? backupAge : '—'}
+          unit={backup ? 'ago' : undefined}
+          series={timestampSeries(
+            backups.map((path) => Date.parse(backupTime(path) ?? '')),
+            now,
+            86400000,
+          )}
+          seriesLabel="Backups, twelve 24-hour buckets"
+          footer={canNavigate('Backups') ? 'Backup activity · last 12 days' : 'Requires admin'}
+          disabled={!canNavigate('Backups')}
+          onClick={() => navigate('Backups')}
+        />
       </div>
       <div className="dashboard-grid">
-        <Card>
-          <div className="section-heading">
-            <div>
-              <h2>Sync activity</h2>
-              <p className="hint">Last 7 days · by scheduled run time</p>
-            </div>
-            <Pill>7 days</Pill>
-          </div>
+        <Tray title="Sync activity">
           {canNavigate('Jobs') ? (
-            <>
-              <svg
-                className="activity-chart"
-                viewBox="0 0 560 240"
-                role="img"
-                aria-labelledby="activity-title activity-desc"
-              >
-                <title id="activity-title">Sync runs over the last seven days</title>
-                <desc id="activity-desc">
-                  Stacked bars show succeeded, running, queued, failed, interrupted and cancelled
-                  runs. Exact values follow in a data table.
-                </desc>
-                {[0, 1, 2, 3].map((i) => (
-                  <g key={i}>
-                    <line
-                      x1="32"
-                      x2="548"
-                      y1={196 - i * 55}
-                      y2={196 - i * 55}
-                      stroke="var(--line)"
-                      strokeDasharray="3 4"
-                    />
-                    <text x="4" y={200 - i * 55} fill="var(--muted)" fontSize="10">
-                      {Math.round((max * i) / 3)}
-                    </text>
-                  </g>
-                ))}
-                {days.map((day, i) => {
-                  let y = 196;
-                  return (
-                    <g key={day.start}>
-                      {chartStates.map((state, j) => {
-                        const height = (day[state] / max) * 165;
-                        y -= height;
-                        return (
-                          <rect
-                            key={state}
-                            x={52 + i * 71}
-                            y={y}
-                            width="30"
-                            height={height}
-                            rx="2"
-                            fill={colors[j]}
-                          >
-                            <title>{day.label + ': ' + day[state] + ' ' + state}</title>
-                          </rect>
-                        );
-                      })}
-                      <text
-                        x={67 + i * 71}
-                        y="223"
-                        textAnchor="middle"
-                        fill="var(--muted)"
-                        fontSize="11"
-                      >
-                        {day.label}
-                      </text>
-                    </g>
-                  );
-                })}
-              </svg>
-              <table className="visually-hidden">
-                <caption>Sync activity by day</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Date</th>
-                    {chartStates.map((s) => (
-                      <th scope="col" key={s}>
-                        {s}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {days.map((d) => (
-                    <tr key={d.start}>
-                      <th scope="row">{d.label}</th>
-                      {chartStates.map((s) => (
-                        <td key={s}>{d[s]}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="chart-legend">
-                {chartStates.map((s, i) => (
-                  <span key={s}>
-                    <i style={{ background: colors[i] }} />
-                    {s}
-                  </span>
-                ))}
-              </div>
-            </>
+            <SyncActivity runs={runs} />
           ) : (
             <p className="hint">Run history requires sync admin access.</p>
           )}
-        </Card>
-        <Card>
-          <h2>Events and failures</h2>
+        </Tray>
+        <Tray title="Events and failures">
           <p className="hint">The latest from your workspace</p>
           <div className="activity-list">
             {[...runs]
@@ -181,7 +368,7 @@ export default function Dashboard({
                     <Icon name={run.state === 'failed' ? 'warning' : 'jobs'} />
                   </span>
                   <div>
-                    <strong>{jobs.find((j) => j.id === run.job_id)?.name ?? 'Sync run'}</strong>
+                    <strong>{jobs.find((job) => job.id === run.job_id)?.name ?? 'Sync run'}</strong>
                     <small title={new Date(run.available_at * 1000).toLocaleString()}>
                       {relativeTime(run.available_at * 1000)}
                     </small>
@@ -207,19 +394,15 @@ export default function Dashboard({
               </EmptyState>
             )}
           </div>
-        </Card>
+        </Tray>
       </div>
-      <Card>
-        <div className="section-heading">
-          <h2>Latest runs</h2>
-          <Pill>{runs.length} total</Pill>
-        </div>
+      <Tray title="Latest runs" actions={<Pill>{runs.length} total</Pill>}>
         {canNavigate('Jobs') ? (
           children
         ) : (
           <p className="hint">Run history requires sync admin access.</p>
         )}
-      </Card>
+      </Tray>
     </>
   );
 }

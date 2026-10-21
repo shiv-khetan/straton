@@ -127,6 +127,7 @@ function Canvas({ models, lineages, jobs, runs, relationships, onSelect }: Canva
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [minimap, setMinimap] = useState(true);
   const [filter, setFilter] = useState('');
+  const [hoveredEdge, setHoveredEdge] = useState('');
   const [revision, setRevision] = useState(0);
   const [error, setError] = useState('');
   const { fitView, zoomIn, zoomOut } = useReactFlow();
@@ -233,6 +234,23 @@ function Canvas({ models, lineages, jobs, runs, relationships, onSelect }: Canva
       })),
     [nodes, filter, jobs, runs, relationships],
   );
+  const visibleEdges = edges.map((edge) => {
+    const active =
+      !!filter ||
+      edge.selected ||
+      hoveredEdge === edge.id ||
+      nodes.some(
+        (node) =>
+          (node.id === edge.source || node.id === edge.target) &&
+          (node.selected || state(node) === 'running'),
+      );
+    const stroke = active ? 'var(--edge-lineage)' : 'var(--edge-quiet)';
+    return {
+      ...edge,
+      style: { ...edge.style, stroke },
+      markerEnd: { type: 'arrowclosed' as const, width: 12, height: 12, color: stroke },
+    };
+  });
   return (
     <div className="map-canvas" role="region" aria-label="Model DAG canvas">
       {error && (
@@ -242,7 +260,9 @@ function Canvas({ models, lineages, jobs, runs, relationships, onSelect }: Canva
       )}
       <ReactFlow<GraphNode>
         nodes={visibleNodes}
-        edges={edges}
+        edges={visibleEdges}
+        onEdgeMouseEnter={(_, edge) => setHoveredEdge(edge.id)}
+        onEdgeMouseLeave={() => setHoveredEdge('')}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}

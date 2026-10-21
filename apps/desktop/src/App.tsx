@@ -26,11 +26,12 @@ import Dashboard from './Dashboard';
 import {
   Breadcrumb,
   Button,
-  Card,
+  Tray,
   Icon,
   Pill,
   RowMenu,
   Sheet,
+  SidebarNavItem,
   Toast,
   Table as UiTable,
   stateTone,
@@ -105,7 +106,7 @@ function AppContent() {
     } catch {
       /* Use system preference when storage is unavailable. */
     }
-    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   });
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -432,7 +433,7 @@ function AppContent() {
           aria-label="Search workspace (Ctrl or Command K)"
         >
           <Icon name="search" />
-          <span>Search workspace…</span>
+          <span>Search…</span>
           <kbd>{navigator.platform.includes('Mac') ? '⌘ K' : 'Ctrl K'}</kbd>
         </Button>
         <span
@@ -545,9 +546,20 @@ function AppContent() {
       </header>
       <aside className="sidebar">
         <div className="workspace-card">
-          <Icon name="server" size={20} />
-          <strong className="rail-hide">Engine</strong>
-          <Pill className="rail-hide">{status ? 'v' + status.version : 'Offline'}</Pill>
+          <span className="workspace-icon">
+            <Icon name="server" size={20} />
+          </span>
+          <div className="workspace-name rail-hide">
+            <small className="workspace-caption">
+              Engine <Pill>{status ? 'v' + status.version : 'Offline'}</Pill>
+            </small>
+            <strong title={connection?.url}>
+              {connection ? new URL(connection.url).host : 'Straton'}
+            </strong>
+          </div>
+          <span className="workspace-chevrons rail-hide" aria-hidden="true">
+            ⌃<br />⌄
+          </span>
         </div>
         {can(me, 'sync_admin') && (
           <Button
@@ -565,12 +577,17 @@ function AppContent() {
           {(
             [
               {
-                label: 'Workspace',
+                label: 'Main',
                 items: [
                   ['Dashboard', 'dashboard'],
                   ['Data Map', 'map'],
                   ['Models', 'model'],
                   ['SQL', 'sql'],
+                ],
+              },
+              {
+                label: 'Data',
+                items: [
                   ['Sources', 'source'],
                   ['Jobs', 'jobs'],
                 ],
@@ -584,35 +601,40 @@ function AppContent() {
                 ],
               },
             ] as { label: string; items: [Page, IconName][] }[]
-          ).map((group) => (
-            <div
-              className={'nav-group ' + (group.label === 'System' ? 'nav-footer' : '')}
-              key={group.label}
-            >
-              {group.items
-                .filter(([item]) => item === 'Connect' || canPage(me, item))
-                .map(([item, icon]) => (
-                  <button
-                    key={item}
-                    title={item === 'Dashboard' ? 'Overview' : item === 'SQL' ? 'SQL Studio' : item}
-                    aria-label={
-                      item === 'Dashboard' ? 'Overview' : item === 'SQL' ? 'SQL Studio' : item
-                    }
-                    aria-current={page === item ? 'page' : undefined}
-                    disabled={!connection && item !== 'Connect'}
-                    onClick={() => {
-                      setPage(item);
-                      setSelection('');
-                    }}
-                  >
-                    <Icon name={icon} />
-                    <span className="rail-hide">
+          )
+            .filter((group) =>
+              group.items.some(([item]) => item === 'Connect' || canPage(me, item)),
+            )
+            .map((group) => (
+              <div
+                className={'nav-group ' + (group.label === 'System' ? 'nav-footer' : '')}
+                key={group.label}
+              >
+                <span className="nav-label rail-hide">{group.label}</span>
+                {group.items
+                  .filter(([item]) => item === 'Connect' || canPage(me, item))
+                  .map(([item, icon]) => (
+                    <SidebarNavItem
+                      icon={icon}
+                      key={item}
+                      title={
+                        item === 'Dashboard' ? 'Overview' : item === 'SQL' ? 'SQL Studio' : item
+                      }
+                      aria-label={
+                        item === 'Dashboard' ? 'Overview' : item === 'SQL' ? 'SQL Studio' : item
+                      }
+                      aria-current={page === item ? 'page' : undefined}
+                      disabled={!connection && item !== 'Connect'}
+                      onClick={() => {
+                        setPage(item);
+                        setSelection('');
+                      }}
+                    >
                       {item === 'Dashboard' ? 'Overview' : item === 'SQL' ? 'SQL Studio' : item}
-                    </span>
-                  </button>
-                ))}
-            </div>
-          ))}
+                    </SidebarNavItem>
+                  ))}
+              </div>
+            ))}
         </nav>
         <div className="connection-state" role="status" title={live}>
           <span className={'connection-dot' + (live === 'Live' ? ' live' : '')} />
@@ -725,6 +747,7 @@ function AppContent() {
             )}
             {client && page === 'Dashboard' && (
               <Dashboard
+                backups={backups}
                 datasets={datasets}
                 runs={runs}
                 jobs={jobs}
@@ -799,7 +822,7 @@ function AppContent() {
                     <p className="hint">Engine snapshots, ready when you need them.</p>
                   </div>
                 </div>
-                <Card>
+                <Tray title="Engine backups">
                   <div
                     className="table-wrap"
                     tabIndex={0}
@@ -835,7 +858,7 @@ function AppContent() {
                       No backups yet. Create your first snapshot with Back up now.
                     </p>
                   )}
-                </Card>
+                </Tray>
                 {me?.privileges.admin && (
                   <Security
                     client={client}
@@ -1124,8 +1147,7 @@ function Sources({
           <p className="hint">Connect systems and discover their datasets.</p>
         </div>
       </div>
-      <Card>
-        <h2>Connected systems</h2>
+      <Tray title="Connected systems">
         <UiTable label="Sources">
           <thead>
             <tr>
@@ -1235,7 +1257,7 @@ function Sources({
         {!sources.length && (
           <p className="empty">Add a source, then Discover to populate your Data Map.</p>
         )}
-      </Card>
+      </Tray>
       <Sheet
         open={open || !!editing}
         title={editing ? 'Edit source' : 'Add source'}
@@ -1569,8 +1591,7 @@ function Jobs({
           <p className="hint">Keep your local lake in sync.</p>
         </div>
       </div>
-      <Card>
-        <h2>Sync jobs</h2>
+      <Tray title="Sync jobs">
         <UiTable label="Sync jobs">
           <thead>
             <tr>
@@ -1656,7 +1677,7 @@ function Jobs({
           </tbody>
         </UiTable>
         {!jobs.length && <p className="empty">Create a job after discovering a source.</p>}
-      </Card>
+      </Tray>
       <Sheet open={open} title="Create sync job" onClose={onClose}>
         <form
           onSubmit={(e) => {
@@ -1838,8 +1859,7 @@ function Jobs({
           </button>
         </form>
       </Sheet>
-      <Card>
-        <h2>Run history</h2>
+      <Tray title="Run history">
         <div className="toolbar">
           <Field label="Job">
             <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)}>
@@ -1869,9 +1889,8 @@ function Jobs({
           cancel={(id) => void action(() => client.cancelRun(id), 'Cancellation requested')}
           busy={busy}
         />
-      </Card>
-      <Card>
-        <h2>Live activity</h2>
+      </Tray>
+      <Tray title="Live activity">
         <p className="hint">
           Run state events from the engine. Historical log text is not exposed by this engine
           version.
@@ -1886,7 +1905,7 @@ function Jobs({
               </div>
             ))}
         </div>
-      </Card>
+      </Tray>
     </>
   );
 }
