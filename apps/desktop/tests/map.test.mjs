@@ -13,7 +13,7 @@ import {
   TABLE_HEADER_HEIGHT,
   TABLE_FOOTER_HEIGHT,
   TABLE_ROW_HEIGHT,
-} from '../src/map-model.ts';
+} from '../src/features/lineage/map-model.ts';
 const map = {
   nodes: [
     { type: 'source', id: 's1', name: 'Connected', kind: 'sqlite', connected: true },

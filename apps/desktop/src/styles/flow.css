@@ -1,0 +1,56 @@
+@layer components {
+  .react-flow {
+    --xy-background-color: var(--bg);
+    --xy-background-pattern-dots-color-default: var(--grid-dot);
+    --xy-node-color: var(--ink);
+    --xy-minimap-background-color: var(--panel);
+  }
+  .dataset-node.highlighted,
+  .react-flow__node.selected .dataset-node {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+  .react-flow__handle {
+    width: 6px;
+    height: 6px;
+    @apply bg-ink-3;
+    border: 1px solid var(--surface);
+  }
+  .map-canvas .react-flow__handle-left {
+    left: 0;
+  }
+  .map-canvas .react-flow__handle-right {
+    right: 0;
+  }
+  .react-flow__edge:hover .react-flow__edge-path,
+  .react-flow__edge.selected .react-flow__edge-path {
+    stroke-width: 2;
+  }
+  .react-flow__edge.animated .react-flow__edge-path {
+    animation: none;
+  }
+  .react-flow__minimap {
+    --xy-minimap-background-color-default: var(--bg-deep);
+    --xy-minimap-mask-background-color-default: color-mix(in srgb, var(--bg) 72%, transparent);
+    --xy-minimap-mask-stroke-color-default: var(--line);
+    --xy-minimap-node-background-color-default: var(--surface-3);
+    @apply bg-bg-deep border border-line;
+    border-radius: var(--radius-control);
+    @apply overflow-hidden;
+  }
+  .react-flow__minimap svg {
+    width: 168px;
+    height: 112px;
+  }
+  .react-flow__attribution {
+    @apply hidden;
+  }
+  .react-flow__edge.animated.edge-active .react-flow__edge-path {
+    animation: active-lineage var(--duration-pulse) linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .react-flow__edge.animated.edge-active .react-flow__edge-path {
+      animation: none;
+    }
+  }
+}

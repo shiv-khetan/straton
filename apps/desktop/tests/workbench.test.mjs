@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { rankCommands, statusChip, datasetJobs, datasetRun, datasetState, clampDrawerHeight, drawerBounds, eventLevel, formatEvent, modelGraph } from '../src/workbench-model.ts';
+import { rankCommands, statusChip, datasetJobs, datasetRun, datasetState, clampDrawerHeight, drawerBounds, eventLevel, formatEvent, modelGraph } from '../src/features/console/workbench-model.ts';
 const commands = [{id:'1',label:'orders_archive',kind:'dataset',detail:'lake'}, {id:'2',label:'orders',kind:'model'}, {id:'3',label:'customer_orders',kind:'dataset'}, {id:'4',label:'Run job',kind:'action',keywords:'orders'}, {id:'5',label:'Customers',kind:'source'}];
 assert.deepEqual(rankCommands(commands,'  ORDERS ').map(c=>c.id),['2','1','3','4']);
 assert.deepEqual(rankCommands(commands,'orders lake').map(c=>c.id),['1']);

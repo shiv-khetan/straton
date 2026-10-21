@@ -1,0 +1,15 @@
+export const queryKeys = {
+  all: ['engine'] as const,
+  me: ['engine', 'me'] as const,
+  status: ['engine', 'status'] as const,
+  sources: ['engine', 'sources'] as const,
+  jobs: ['engine', 'jobs'] as const,
+  runs: ['engine', 'runs'] as const,
+  datamap: ['engine', 'datamap'] as const,
+  models: ['engine', 'models'] as const,
+  catalog: ['engine', 'catalog'] as const,
+  backups: ['engine', 'backups'] as const,
+  roles: ['engine', 'roles'] as const,
+  access: ['engine', 'access'] as const,
+  keys: ['engine', 'keys'] as const,
+};

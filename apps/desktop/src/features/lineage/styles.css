@@ -1,0 +1,136 @@
+@layer components {
+  .map-section {
+    @apply flex h-full relative min-h-0 overflow-hidden;
+  }
+  .map-library {
+    width: 220px;
+    @apply shrink-0 overflow-auto bg-panel border-r border-line;
+  }
+  /* The collapsed rail holds only its toggle; never show scrollbars on it. */
+  .map-library[data-collapsed='true'] {
+    width: 36px;
+    @apply overflow-hidden;
+  }
+  .map-library[data-collapsed='true'] .panel-heading {
+    @apply p-1;
+  }
+  .map-library .panel-heading h2 {
+    @apply text-caption;
+  }
+  .library-content {
+    @apply p-3;
+  }
+  .schema-tree details {
+    margin: 0 0 4px;
+  }
+  .schema-tree summary {
+    @apply flex items-center gap-1.5;
+    cursor: pointer;
+    padding: 6px 8px;
+    @apply text-ink-2 text-caption;
+  }
+  .schema-tree summary::before {
+    content: '›';
+    transition: transform var(--duration-fast) var(--ease-out-quart);
+  }
+  .schema-tree details[open] > summary::before {
+    transform: rotate(90deg);
+  }
+  .schema-tree summary > span:not(.count) {
+    @apply flex-1 min-w-0;
+    overflow-wrap: anywhere;
+  }
+  .schema-tree ul {
+    padding: 0 4px 0 12px;
+    list-style: none;
+    @apply m-0;
+  }
+  .schema-tree li {
+    @apply flex items-center gap-1 flex-wrap;
+  }
+  .schema-tree li button {
+    @apply flex-1 min-w-0 justify-start text-left p-1.5;
+    border-color: transparent;
+    @apply bg-transparent;
+  }
+  .schema-tree li button span {
+    @apply min-w-0 overflow-hidden text-ellipsis whitespace-nowrap;
+    font: var(--code-sm) var(--font-mono);
+  }
+  .schema-tree button[aria-current] {
+    @apply bg-surface-2 text-primary;
+  }
+  .tree-columns {
+    @apply w-full pl-6 text-ink-3;
+  }
+  .tree-columns summary {
+    @apply text-caption;
+    padding: 4px 0;
+  }
+  .tree-columns li {
+    @apply justify-between text-caption;
+    padding: 4px 0;
+  }
+  .edge-filters {
+    @apply flex flex-col gap-3 border-0 border-t border-line;
+    margin: 12px 0 0;
+    @apply p-3;
+  }
+  .edge-filters label {
+    @apply flex items-center gap-1.5 text-caption;
+  }
+  .edge-sample {
+    width: 20px;
+    border-top: 1.5px solid var(--edge-fk);
+  }
+  .edge-sample.inferred {
+    border-color: var(--edge-inferred);
+    border-style: dashed;
+  }
+  .edge-sample.lineage {
+    border-color: var(--edge-lineage);
+    border-style: dashed;
+  }
+  .edge-sample.manual {
+    border-color: var(--edge-manual);
+    border-style: dotted;
+  }
+  .map-center {
+    @apply flex flex-col flex-1 min-w-0 min-h-0;
+  }
+  .map-canvas {
+    @apply flex-1 relative min-w-0;
+    min-height: 120px;
+    @apply bg-bg;
+  }
+  .tool-divider {
+    width: 1px;
+    height: 16px;
+    @apply bg-line;
+  }
+  .map-feedback {
+    @apply absolute;
+    top: 96px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: calc(100% - 64px);
+    z-index: var(--z-canvas-overlay);
+    @apply bg-panel border border-line;
+    border-radius: var(--radius-control);
+    @apply p-4;
+  }
+  @media (max-width: 900px) {
+    .map-library:not([data-collapsed='true']) {
+      @apply absolute;
+      inset: 0 auto 0 0;
+      z-index: var(--z-drawer);
+      @apply shadow-raised;
+    }
+  }
+  @media (pointer: coarse) {
+    .tabs button,
+    .schema-tree summary {
+      min-height: 44px;
+    }
+  }
+}

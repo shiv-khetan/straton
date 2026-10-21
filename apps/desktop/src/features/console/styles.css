@@ -1,0 +1,171 @@
+@layer components {
+  .console-drawer {
+    @apply relative bg-bg-deep border-t border-line shrink-0;
+    min-height: 36px;
+    @apply flex flex-col;
+    z-index: var(--z-drawer);
+  }
+  .drawer-splitter {
+    @apply absolute;
+    inset: -4px 0 auto;
+    height: 8px;
+    cursor: row-resize;
+    touch-action: none;
+    z-index: var(--z-drawer);
+  }
+  .drawer-splitter:hover {
+    background: var(--primary-tint);
+  }
+  .drawer-tabs {
+    height: 36px;
+    @apply flex items-center justify-between shrink-0 bg-panel;
+    padding: 0 8px;
+    @apply gap-2;
+  }
+  .drawer-tabs .tabs {
+    @apply border-0 m-0;
+    height: 32px;
+  }
+  .drawer-tabs .tabs button {
+    @apply text-caption;
+    padding: 6px 4px;
+  }
+  .drawer-panel {
+    @apply flex-1 min-h-0 overflow-auto;
+    padding: 0 12px;
+  }
+  .drawer-panel > .hint {
+    @apply mt-2;
+  }
+  .drawer-panel .table-wrap {
+    max-height: none;
+  }
+  .live-events {
+    @apply h-full flex flex-col relative;
+  }
+  .log-toolbar {
+    @apply flex items-center gap-3;
+    padding: 6px 0;
+    min-height: 40px;
+    @apply shrink-0;
+  }
+  .log-toolbar label {
+    @apply flex items-center gap-1.5 text-caption text-ink-2;
+  }
+  .log-toolbar select {
+    width: 100px;
+    @apply text-caption;
+    padding: 2px 4px;
+  }
+  .log-toolbar input {
+    width: 200px;
+    padding: 2px 6px;
+    @apply text-caption;
+  }
+  .log-toolbar .hint {
+    margin: 0 0 0 auto;
+    @apply whitespace-nowrap text-caption;
+  }
+  .event-log {
+    @apply flex-1 min-h-0 overflow-auto;
+    font: var(--code-sm)/1.9 var(--font-mono);
+  }
+  .log-line {
+    @apply grid;
+    grid-template-columns: 88px 44px minmax(80px, 120px) minmax(200px, 1fr);
+    @apply gap-2 text-ink-2;
+  }
+  .log-line time {
+    @apply text-ink-3;
+  }
+  .log-entity {
+    @apply whitespace-nowrap overflow-hidden text-ellipsis;
+  }
+  .log-line > span:last-child {
+    overflow-wrap: anywhere;
+  }
+  .level-INFO {
+    @apply text-info;
+  }
+  .level-RUN {
+    @apply text-info;
+  }
+  .level-WARN {
+    @apply text-warning;
+  }
+  .level-ERROR {
+    @apply text-danger;
+  }
+  .new-lines {
+    @apply absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    @apply bg-primary text-primary-foreground;
+    border-color: var(--primary);
+  }
+  @media (max-width: 900px) {
+    .log-toolbar .hint {
+      @apply hidden;
+    }
+    .log-toolbar input {
+      width: 160px;
+    }
+  }
+  @media (max-width: 640px) {
+    .log-toolbar {
+      @apply gap-1.5 flex-wrap;
+    }
+    .log-toolbar label {
+      @apply text-caption;
+    }
+    .log-toolbar input {
+      width: 120px;
+    }
+  }
+  @media (pointer: coarse) {
+    .drawer-tabs,
+    .drawer-tabs .tabs {
+      height: 44px;
+    }
+  }
+  .console-drawer > :not(:first-child) {
+    animation: drawer-fade var(--duration-shell) var(--ease-out-quart);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .console-drawer > :not(:first-child) {
+      animation: none;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .console-drawer {
+      transition: none !important;
+    }
+  }
+  .console-drawer {
+    @apply bg-panel;
+  }
+  .drawer-tabs .tabs {
+    @apply p-0.5;
+  }
+  .drawer-tabs .tabs button {
+    min-height: 26px;
+    padding: 2px 10px;
+    font-size: 0.8125rem;
+  }
+  .drawer-panel {
+    @apply bg-surface;
+    border-radius: 12px 12px 0 0;
+    @apply border-t border-line;
+  }
+  @media (pointer: coarse) {
+    .drawer-tabs,
+    .drawer-tabs .tabs {
+      height: auto;
+      min-height: 52px;
+    }
+    .console-drawer {
+      min-height: 52px;
+    }
+  }
+}

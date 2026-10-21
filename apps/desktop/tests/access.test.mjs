@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { can, canPage, setMask } from '../src/access-model.ts';
+import { can, canPage, setMask } from '../src/features/access/access-model.ts';
 const user={user:{id:'u',name:'User'},roles:[],privileges:{admin:false,read:true,sync_admin:false,grants:[{target_kind:'source',target_id:'s1',privilege:'read'}]}};
 assert.equal(can(null,'read'),false);
 assert.equal(canPage(null,'Connect'),true);

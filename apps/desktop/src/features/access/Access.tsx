@@ -1,0 +1,716 @@
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
+import { useCallback, useEffect, useState } from 'react';
+import type {
+  Api,
+  Dataset,
+  Grant,
+  MaskKind,
+  Policies,
+  Privilege,
+  Role,
+  Source,
+  TokenInfo,
+  User,
+} from '@/lib/api';
+import {
+  Button,
+  Tray,
+  EmptyState,
+  Pill,
+  Sheet,
+  Table,
+  Tabs,
+  Feedback,
+} from '@/components/workbench/primitives';
+import { Field } from '@/components/workbench/Field';
+import { Skeleton } from '@/features/console/ConsoleDrawer';
+import { setMask } from '@/features/access/access-model';
+import { datasetLabel, relativeTime } from '@/lib/view-model';
+const emptyPolicies: Policies = { row_filters: [], masks: [] };
+export default function Access({
+  client,
+  sources,
+  datasets,
+  onChanged,
+}: {
+  client: Api;
+  sources: Source[];
+  datasets: Dataset[];
+  onChanged: () => void;
+}) {
+  const [tab, setTab] = useState('Users');
+  const [loading, setLoading] = useState(true);
+  const [users, setUsers] = useState<User[]>([]),
+    [roles, setRoles] = useState<Role[]>([]),
+    [grants, setGrants] = useState<Grant[]>([]);
+  const [revision, setRevision] = useState(0),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(''),
+    [message, setMessage] = useState('');
+  const [userName, setUserName] = useState(''),
+    [roleName, setRoleName] = useState('');
+  const [selectedUser, setSelectedUser] = useState(''),
+    [tokens, setTokens] = useState<TokenInfo[]>([]);
+  const [tokenName, setTokenName] = useState(''),
+    [expires, setExpires] = useState(''),
+    [secret, setSecret] = useState('');
+  const [selectedRole, setSelectedRole] = useState(''),
+    [target, setTarget] = useState(''),
+    [privilege, setPrivilege] = useState<Privilege>('read');
+  const [dataset, setDataset] = useState(''),
+    [policies, setPolicies] = useState<Policies>(emptyPolicies),
+    [policyReady, setPolicyReady] = useState(false);
+  const [filters, setFilters] = useState<Record<string, string>>({}),
+    [validation, setValidation] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let active = true;
+    void Promise.all([client.users(), client.roles(), client.grants()])
+      .then(([u, r, g]) => {
+        if (active) {
+          setLoading(false);
+          setUsers(u);
+          setRoles(r);
+          setGrants(g);
+        }
+      })
+      .catch((e) => {
+        if (active) {
+          setLoading(false);
+          setError(String(e));
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [client, revision]);
+  useEffect(() => {
+    let active = true;
+    setTokens([]);
+    if (selectedUser)
+      void client
+        .tokens(selectedUser)
+        .then((t) => {
+          if (active) setTokens(t);
+        })
+        .catch((e) => {
+          if (active) setError(String(e));
+        });
+    return () => {
+      active = false;
+    };
+  }, [client, selectedUser, revision]);
+  useEffect(() => {
+    let active = true;
+    setPolicyReady(false);
+    setPolicies(emptyPolicies);
+    setFilters({});
+    setValidation({});
+    if (dataset)
+      void client
+        .policies(dataset)
+        .then((p) => {
+          if (active) {
+            setPolicies(p);
+            setFilters(Object.fromEntries(p.row_filters.map((f) => [f.role_id, f.predicate])));
+            setPolicyReady(true);
+          }
+        })
+        .catch((e) => {
+          if (active) setError(String(e));
+        });
+    return () => {
+      active = false;
+    };
+  }, [client, dataset, revision]);
+  const work = useCallback(
+    async (fn: () => Promise<unknown>, text: string, refresh = true) => {
+      setBusy(true);
+      setError('');
+      setMessage('');
+      try {
+        await fn();
+        setMessage(text);
+        if (refresh) {
+          setRevision((r) => r + 1);
+          onChanged();
+        }
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onChanged],
+  );
+  const selected = users.find((u) => u.id === selectedUser);
+  const currentDataset = datasets.find((d) => d.id === dataset);
+  const roleLabel = (id: string) => roles.find((r) => r.id === id)?.name ?? id;
+  const targetLabel = (g: Grant) =>
+    g.target_kind === 'source'
+      ? (sources.find((s) => s.id === g.target_id)?.name ?? g.target_id)
+      : datasetLabel(datasets.find((d) => d.id === g.target_id)) || g.target_id;
+  return (
+    <>
+      <div className="page-heading">
+        <div>
+          <h1>Access</h1>
+          <p className="hint">Manage people, their permissions, and the data they can see.</p>
+        </div>
+      </div>
+      {error && <Feedback error message={error} onClose={() => setError('')} />}
+      {message && <Feedback message={message} onClose={() => setMessage('')} />}
+      {loading && <Skeleton label="Loading access settings…" />}
+      <Tabs id="access" items={['Users', 'Roles', 'Policies']} value={tab} onChange={setTab} />
+      <section role="tabpanel" id={'access-panel-' + tab} aria-labelledby={'access-tab-' + tab}>
+        {tab === 'Users' && (
+          <Tray title="Users">
+            <form
+              className="access-inline"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void work(async () => {
+                  await client.createUser(userName);
+                  setUserName('');
+                }, 'User created');
+              }}
+            >
+              <Field label="New user name">
+                <Input
+                  required
+                  autoComplete="off"
+                  value={userName}
+                  onChange={(e) => setUserName(e.target.value)}
+                />
+              </Field>
+              <Button type="submit" variant="default" disabled={busy}>
+                Create user
+              </Button>
+            </form>
+            <Table label="Users">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Roles</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {users.map((u) => (
+                  <TableRow key={u.id}>
+                    <TableCell>{u.name}</TableCell>
+                    <TableCell>
+                      <Pill tone={u.disabled ? 'neutral' : 'success'}>
+                        {u.disabled ? 'Disabled' : 'Active'}
+                      </Pill>
+                    </TableCell>
+                    <TableCell>
+                      <fieldset className="access-roles">
+                        <legend className="visually-hidden">Roles for {u.name}</legend>
+                        {roles.map((r) => (
+                          <label key={r.id}>
+                            <input
+                              type="checkbox"
+                              disabled={busy || u.id === 'admin'}
+                              checked={u.role_ids.includes(r.id)}
+                              onChange={(e) =>
+                                void work(
+                                  () =>
+                                    client.assignRoles(
+                                      u.id,
+                                      e.target.checked
+                                        ? [...u.role_ids, r.id]
+                                        : u.role_ids.filter((id) => id !== r.id),
+                                    ),
+                                  'Roles updated',
+                                )
+                              }
+                            />
+                            {r.name}
+                          </label>
+                        ))}
+                      </fieldset>
+                    </TableCell>
+                    <TableCell>
+                      <div className="actions">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          disabled={busy}
+                          onClick={() => {
+                            setSelectedUser(u.id);
+                            setTokenName('');
+                            setExpires('');
+                            setSecret('');
+                          }}
+                        >
+                          Tokens
+                        </Button>
+                        {u.id !== 'admin' && (
+                          <Button
+                            type="button"
+                            disabled={busy}
+                            variant={u.disabled ? 'ghost' : 'destructive'}
+                            onClick={() =>
+                              void work(
+                                () => client.updateUser(u, !u.disabled),
+                                u.disabled ? 'User enabled' : 'User disabled',
+                              )
+                            }
+                          >
+                            {u.disabled ? 'Enable' : 'Disable'}
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Tray>
+        )}
+        {tab === 'Roles' && (
+          <Tray title="Roles">
+            <form
+              className="access-inline"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void work(async () => {
+                  await client.createRole(roleName);
+                  setRoleName('');
+                }, 'Role created');
+              }}
+            >
+              <Field label="New role name">
+                <Input required value={roleName} onChange={(e) => setRoleName(e.target.value)} />
+              </Field>
+              <Button type="submit" variant="default" disabled={busy}>
+                Create role
+              </Button>
+            </form>
+            <Table label="Roles">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Scope</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {roles.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell>{r.name}</TableCell>
+                    <TableCell>
+                      {r.is_admin
+                        ? 'Global administrator'
+                        : grants.filter((g) => g.role_id === r.id).length + ' grants'}
+                    </TableCell>
+                    <TableCell>
+                      <div className="actions">
+                        <Button type="button" variant="ghost" onClick={() => setSelectedRole(r.id)}>
+                          Edit grants
+                        </Button>
+                        {!r.is_admin && (
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            disabled={busy}
+                            onClick={() =>
+                              void work(async () => {
+                                await client.deleteRole(r.id);
+                                if (selectedRole === r.id) setSelectedRole('');
+                              }, 'Role deleted')
+                            }
+                          >
+                            Delete role
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            <h2>Grants</h2>
+            <Field label="Role">
+              <select value={selectedRole} onChange={(e) => setSelectedRole(e.target.value)}>
+                <option value="">Choose role</option>
+                {roles.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            {selectedRole && (
+              <>
+                <p className="hint">
+                  Source grants include every dataset in that source. Admin grants include read and
+                  sync administration on their target.
+                </p>
+                {roles.find((r) => r.id === selectedRole)?.is_admin && (
+                  <p className="hint">This built-in role already has global administration.</p>
+                )}
+                <form
+                  className="access-inline"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const [kind, ...id] = target.split(':');
+                    void work(
+                      () =>
+                        client.createGrant({
+                          role_id: selectedRole,
+                          target_kind: kind as 'source' | 'dataset',
+                          target_id: id.join(':'),
+                          privilege,
+                        }),
+                      'Grant created',
+                    );
+                  }}
+                >
+                  <Field label="Target">
+                    <select required value={target} onChange={(e) => setTarget(e.target.value)}>
+                      <option value="">Choose source or dataset</option>
+                      <optgroup label="Sources">
+                        {sources.map((s) => (
+                          <option key={s.id} value={'source:' + s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Datasets">
+                        {datasets.map((d) => (
+                          <option key={d.id} value={'dataset:' + d.id}>
+                            {datasetLabel(d)}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </Field>
+                  <Field label="Privilege">
+                    <select
+                      value={privilege}
+                      onChange={(e) => setPrivilege(e.target.value as Privilege)}
+                    >
+                      {['read', 'sync_admin', 'admin'].map((p) => (
+                        <option key={p}>{p}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Button type="submit" variant="default" disabled={busy}>
+                    Add grant
+                  </Button>
+                </form>
+                <Table label="Role grants">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Target</TableHead>
+                      <TableHead>Privilege</TableHead>
+                      <TableHead>Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {grants
+                      .filter((g) => g.role_id === selectedRole)
+                      .map((g) => (
+                        <TableRow key={g.id}>
+                          <TableCell>
+                            {g.target_kind}: {targetLabel(g)}
+                          </TableCell>
+                          <TableCell>
+                            <code>{g.privilege}</code>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              disabled={busy}
+                              onClick={() =>
+                                void work(() => client.deleteGrant(g.id), 'Grant removed')
+                              }
+                            >
+                              Remove grant
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              </>
+            )}
+          </Tray>
+        )}
+        {tab === 'Policies' && (
+          <Tray title="Policies">
+            <Field label="Dataset">
+              <select
+                value={dataset}
+                onChange={(e) => {
+                  setPolicyReady(false);
+                  setDataset(e.target.value);
+                }}
+              >
+                <option value="">Choose dataset</option>
+                {datasets.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {datasetLabel(d)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            {!dataset ? (
+              <EmptyState>Choose a dataset to edit its row filters and column masks.</EmptyState>
+            ) : !policyReady ? (
+              <p role="status">Loading policies…</p>
+            ) : (
+              <>
+                <h2>Row filters</h2>
+                <p className="hint">
+                  Filters from read-granting roles combine with OR. A read-granting role without a
+                  filter allows all rows.
+                </p>
+                {roles.map((r) => (
+                  <div className="access-policy" key={r.id}>
+                    <Field label={r.name + ' row predicate'}>
+                      <Textarea
+                        rows={2}
+                        className="mono"
+                        placeholder="No filter — all rows"
+                        value={filters[r.id] ?? ''}
+                        onChange={(e) => {
+                          setFilters((p) => ({ ...p, [r.id]: e.target.value }));
+                          setValidation((v) => ({ ...v, [r.id]: '' }));
+                        }}
+                      />
+                    </Field>
+                    <div className="actions">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        disabled={busy || !filters[r.id]?.trim()}
+                        onClick={() =>
+                          void work(
+                            async () => {
+                              const result = await client.validatePolicy(dataset, filters[r.id]);
+                              setValidation((v) => ({
+                                ...v,
+                                [r.id]: result.ok
+                                  ? 'Valid predicate'
+                                  : (result.error ?? 'Invalid predicate'),
+                              }));
+                            },
+                            '',
+                            false,
+                          )
+                        }
+                      >
+                        Validate
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="default"
+                        disabled={busy}
+                        onClick={() =>
+                          void work(
+                            () =>
+                              client.rowFilter(
+                                dataset,
+                                r.id,
+                                filters[r.id]?.trim() ? filters[r.id] : null,
+                              ),
+                            'Row filter saved',
+                          )
+                        }
+                      >
+                        Save filter
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        disabled={busy || !policies.row_filters.some((f) => f.role_id === r.id)}
+                        onClick={() =>
+                          void work(
+                            () => client.rowFilter(dataset, r.id, null),
+                            'Row filter removed',
+                          )
+                        }
+                      >
+                        Remove filter
+                      </Button>
+                    </div>
+                    {validation[r.id] && <p role="status">{validation[r.id]}</p>}
+                  </div>
+                ))}
+                <h2>Column masks</h2>
+                <p className="hint">
+                  A column is masked only when every read-granting role masks it. If all do, the
+                  strictest kind wins: null, redact, hash, then last4.
+                </p>
+                <Table label="Column masks by role">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Role</TableHead>
+                      {currentDataset?.columns.map((c) => (
+                        <TableHead key={c.name}>
+                          <code>{c.name}</code>
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {roles.map((r) => (
+                      <TableRow key={r.id}>
+                        <TableHead scope="row">{roleLabel(r.id)}</TableHead>
+                        {currentDataset?.columns.map((c) => (
+                          <TableCell key={c.name}>
+                            <select
+                              aria-label={r.name + ' mask for ' + c.name}
+                              disabled={busy}
+                              value={
+                                policies.masks.find(
+                                  (m) => m.role_id === r.id && m.column === c.name,
+                                )?.kind ?? ''
+                              }
+                              onChange={(e) => {
+                                const kind = e.target.value as MaskKind | '';
+                                void work(
+                                  async () => {
+                                    await client.mask(dataset, r.id, c.name, kind || null);
+                                    setPolicies((p) => ({
+                                      ...p,
+                                      masks: setMask(p.masks, r.id, c.name, kind || null),
+                                    }));
+                                    onChanged();
+                                  },
+                                  'Mask saved',
+                                  false,
+                                );
+                              }}
+                            >
+                              <option value="">Visible</option>
+                              {['null', 'redact', 'hash', 'last4'].map((k) => (
+                                <option key={k}>{k}</option>
+                              ))}
+                            </select>
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </>
+            )}
+          </Tray>
+        )}
+      </section>
+      <Sheet
+        open={!!selectedUser}
+        title={'Tokens · ' + (selected?.name ?? '')}
+        onClose={() => {
+          setSelectedUser('');
+          setSecret('');
+        }}
+      >
+        <p className="hint">
+          Issue a separate token for each client. Revocation takes effect on the next request or SQL
+          statement.
+        </p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void work(async () => {
+              const issued = await client.issueToken(
+                selectedUser,
+                tokenName,
+                expires ? Math.floor(new Date(expires).getTime() / 1000) : null,
+              );
+              setSecret(issued.token);
+              setTokenName('');
+            }, 'Token issued');
+          }}
+        >
+          <Field label="Token name">
+            <Input
+              required
+              value={tokenName}
+              onChange={(e) => setTokenName(e.target.value)}
+              autoComplete="off"
+            />
+          </Field>
+          <Field label="Expires at (optional, local time)">
+            <Input
+              type="datetime-local"
+              value={expires}
+              onChange={(e) => setExpires(e.target.value)}
+            />
+          </Field>
+          <Button type="submit" variant="default" disabled={busy || selected?.disabled}>
+            Issue token
+          </Button>
+        </form>
+        <h3>Existing tokens</h3>
+        <Table label="User tokens">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Name</TableHead>
+              <TableHead>Last used</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Action</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {tokens.map((t) => (
+              <TableRow key={t.id}>
+                <TableCell>{t.name}</TableCell>
+                <TableCell>
+                  {t.last_used_at ? relativeTime(t.last_used_at * 1000) : 'Never'}
+                </TableCell>
+                <TableCell>
+                  {t.revoked_at
+                    ? 'Revoked'
+                    : t.expires_at && t.expires_at * 1000 <= Date.now()
+                      ? 'Expired'
+                      : 'Active'}
+                </TableCell>
+                <TableCell>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    disabled={busy || !!t.revoked_at}
+                    onClick={() =>
+                      void work(() => client.revokeToken(selectedUser, t.id), 'Token revoked')
+                    }
+                  >
+                    Revoke
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Sheet>
+      <Sheet open={!!secret} title="Save your token" onClose={() => setSecret('')}>
+        <p role="alert">
+          Copy this token now. It is shown only once and cannot be recovered. Keep it secret.
+        </p>
+        <Field label="New token">
+          <Textarea readOnly rows={3} value={secret} autoComplete="off" spellCheck={false} />
+        </Field>
+        <Button
+          type="button"
+          variant="default"
+          onClick={() =>
+            void work(() => navigator.clipboard.writeText(secret), 'Token copied', false)
+          }
+        >
+          Copy token
+        </Button>
+        <Button type="button" variant="ghost" onClick={() => setSecret('')}>
+          I have saved the token
+        </Button>
+      </Sheet>
+    </>
+  );
+}

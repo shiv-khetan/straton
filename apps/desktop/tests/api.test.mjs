@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { normalizeUrl } from '../src/api.ts';
+import { normalizeUrl } from '../src/lib/api.ts';
 for (const value of [
   'http://127.0.0.1:8787/',
   'http://localhost:8787/',

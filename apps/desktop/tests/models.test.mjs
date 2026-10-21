@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { modelStatus, ruleDiffRows, normalizeModelLineage, modelGraph } from '../src/model-model.ts';
-import { tableSize } from '../src/map-model.ts';
+import { modelStatus, ruleDiffRows, normalizeModelLineage, modelGraph } from '../src/features/transformations/model-model.ts';
+import { tableSize } from '../src/features/lineage/map-model.ts';
 import ELK from 'elkjs/lib/elk.bundled.js';
 assert.deepEqual(modelStatus('broken','succeeded'),{label:'broken',tone:'danger'});
 assert.deepEqual(modelStatus('ready','failed'),{label:'failed',tone:'danger'});

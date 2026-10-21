@@ -1,0 +1,136 @@
+@layer base {
+  * {
+    @apply border-line;
+    box-sizing: border-box;
+  }
+  html {
+    font-size: 16px;
+    font-family: var(--font-ui);
+    color: var(--ink);
+    background: var(--bg);
+  }
+  body {
+    @apply m-0 text-body;
+    line-height: 1.55;
+    font-kerning: normal;
+    font-optical-sizing: auto;
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+  button {
+    cursor: pointer;
+  }
+  button:disabled,
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
+  }
+  :focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+  h1,
+  h2,
+  h3 {
+    @apply m-0 font-semibold;
+    text-wrap: balance;
+    letter-spacing: -0.015em;
+  }
+  h1 {
+    font-size: var(--headline-lg);
+    line-height: 1.35;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+  h2 {
+    font-size: var(--headline-sm);
+  }
+  h3 {
+    font-size: var(--body-md);
+  }
+  p {
+    max-width: 75ch;
+    text-wrap: pretty;
+  }
+  small {
+    @apply block text-caption text-ink-3;
+    overflow-wrap: anywhere;
+  }
+  code,
+  pre,
+  kbd,
+  .mono {
+    @apply font-mono tabular-nums;
+  }
+  code,
+  .mono {
+    font-size: var(--code-sm);
+    overflow-wrap: anywhere;
+  }
+  code {
+    font-variant-ligatures: none;
+  }
+  pre {
+    @apply overflow-auto text-caption;
+    white-space: pre;
+  }
+  kbd {
+    @apply text-caption text-ink-3;
+  }
+  svg {
+    @apply shrink-0;
+  }
+  select {
+    @apply min-h-9 w-full min-w-0 rounded-control border border-line bg-surface px-2 py-1.5 text-body text-ink disabled:opacity-50;
+  }
+  select:hover {
+    border-color: var(--ink-3);
+  }
+  input[type='checkbox'] {
+    @apply m-0 size-3.5 shrink-0;
+    accent-color: var(--primary);
+  }
+  ::selection {
+    color: var(--on-primary);
+    background: var(--primary);
+  }
+}
+@keyframes overlay-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes overlay-exit {
+  to {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (pointer: coarse) {
+  button,
+  [role='tab'],
+  [role='menuitem'],
+  .schema-tree summary {
+    min-height: 44px;
+  }
+}

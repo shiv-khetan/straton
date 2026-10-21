@@ -1,0 +1,82 @@
+@layer components {
+  .models-workbench {
+    @apply h-full flex flex-col min-h-0;
+  }
+  .models-toolbar {
+    @apply flex items-center gap-3;
+    min-height: 40px;
+    padding: 0 12px;
+    @apply border-b border-line;
+  }
+  .models-toolbar .tabs {
+    @apply m-0 border-0;
+  }
+  .models-toolbar .hint {
+    @apply m-0;
+  }
+  .models-toolbar > [data-slot='button'] {
+    @apply ml-auto;
+  }
+  .models-body {
+    @apply flex flex-1 min-h-0 relative;
+  }
+  .model-list {
+    @apply flex-1 min-h-0 overflow-auto p-0 m-0;
+  }
+  .model-list .table-wrap {
+    max-height: none;
+  }
+  .model-sql {
+    font: var(--code-sm)/1.8 var(--font-mono);
+    min-height: 240px;
+    resize: vertical;
+    tab-size: 2;
+  }
+  .model-actions {
+    @apply mt-4;
+  }
+  .model-name {
+    @apply text-left bg-transparent;
+    border-color: transparent;
+  }
+  .model-lineage {
+    @apply flex flex-wrap gap-4;
+  }
+  .model-lineage > section {
+    flex: 1 1 200px;
+    @apply min-w-0;
+  }
+  .model-plan {
+    @apply mt-3;
+  }
+  .model-plan summary {
+    cursor: pointer;
+    @apply text-ink-2;
+  }
+  .model-plan pre {
+    max-height: 360px;
+    @apply p-3 bg-bg border border-line;
+    border-radius: var(--radius-control);
+  }
+  .rule-before {
+    @apply bg-danger-soft;
+  }
+  .rule-after {
+    @apply bg-success-soft;
+  }
+  @media (max-width: 640px) {
+    .models-toolbar .hint {
+      @apply hidden;
+    }
+  }
+  .models-toolbar {
+    min-height: 48px;
+    @apply bg-surface;
+  }
+  .models-toolbar .tabs {
+    padding: 3px;
+  }
+  .model-list {
+    @apply border-0 rounded-none p-0;
+  }
+}

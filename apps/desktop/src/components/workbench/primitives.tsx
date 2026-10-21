@@ -1,0 +1,493 @@
+import { Table as DataTable } from '@/components/ui/table';
+
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
+import { Sheet as SheetRoot, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Tabs as TabsRoot, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Breadcrumb as BreadcrumbRoot,
+  BreadcrumbList,
+  BreadcrumbItem,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { toast } from 'sonner';
+import { Icon } from './Icon';
+import type { IconName } from './Icon';
+import { useReadOnly } from './ReadOnlyScope';
+export { Icon } from './Icon';
+export type { IconName } from './Icon';
+import { Children, Fragment, isValidElement, useEffect, useId, useRef, useState } from 'react';
+import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
+export type Tone = 'neutral' | 'primary' | 'success' | 'warning' | 'danger' | 'info';
+export { Button } from '@/components/ui/button';
+
+export function Pill({
+  tone = 'neutral',
+  className = '',
+  ...props
+}: HTMLAttributes<HTMLSpanElement> & { tone?: Tone }) {
+  return (
+    <Badge
+      variant="secondary"
+      className={
+        'pill ' +
+        {
+          neutral: 'bg-panel text-ink-2',
+          primary: 'bg-primary-soft text-primary',
+          success: 'bg-success-soft text-success',
+          warning: 'bg-warning-soft text-warning',
+          danger: 'bg-danger-soft text-danger',
+          info: 'bg-info-soft text-info',
+        }[tone] +
+        ' ' +
+        className
+      }
+      {...props}
+    />
+  );
+}
+
+export function stateTone(state: string): Tone {
+  return ['succeeded', 'Live', 'Connected', 'Enabled'].includes(state)
+    ? 'success'
+    : ['failed', 'interrupted'].includes(state)
+      ? 'danger'
+      : ['queued', 'Stale data'].includes(state)
+        ? 'warning'
+        : state === 'running'
+          ? 'info'
+          : 'neutral';
+}
+export function Card({ children, className = '', ...props }: HTMLAttributes<HTMLElement>) {
+  return (
+    <section className={'card ' + className} {...props}>
+      {children}
+    </section>
+  );
+}
+export function Table({ children, label }: { children: ReactNode; label: string }) {
+  return (
+    <div className="table-wrap" role="region" aria-label={label} tabIndex={0}>
+      <DataTable>{children}</DataTable>
+    </div>
+  );
+}
+
+export function Inspector({
+  entityId,
+  title,
+  label,
+  onClose,
+  children,
+}: {
+  entityId: string;
+  title: string;
+  label: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const panel = useRef<HTMLElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [closing, setClosing] = useState(false);
+  useEffect(() => {
+    const previous = document.activeElement;
+    setClosing(false);
+    panel.current?.focus();
+    return () => {
+      clearTimeout(timer.current);
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
+  }, [entityId]);
+  const close = () => {
+    if (closing) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      onClose();
+      return;
+    }
+    setClosing(true);
+    timer.current = setTimeout(onClose, 150);
+  };
+  return (
+    <aside
+      ref={panel}
+      className={'map-inspector' + (closing ? ' is-closing' : '')}
+      aria-label={label}
+      tabIndex={-1}
+      inert={closing}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          close();
+        }
+      }}
+    >
+      <div className="panel-heading">
+        <h2 title={title}>{title}</h2>
+        <Button type="button" variant="ghost" aria-label="Close inspector" onClick={close}>
+          <Icon name="close" />
+        </Button>
+      </div>
+      {children}
+    </aside>
+  );
+}
+function menuChildren(children: ReactNode): ReactNode {
+  return Children.map(children, (child) => {
+    if (!isValidElement<{ children?: ReactNode; disabled?: boolean }>(child)) return null;
+    if (child.type === Fragment) return menuChildren(child.props.children);
+    return (
+      <DropdownMenuItem asChild disabled={child.props.disabled}>
+        {child}
+      </DropdownMenuItem>
+    );
+  });
+}
+export function RowMenu({ children, label }: { children: ReactNode; label: string }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label={label}>
+          <Icon name="more" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" aria-label={label}>
+        {menuChildren(children)}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+export function Sheet({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const readOnly = useReadOnly();
+  return (
+    <SheetRoot
+      open={open}
+      onOpenChange={(value) => {
+        if (!value) onClose();
+      }}
+    >
+      <SheetContent
+        className="w-[480px] max-w-[calc(100vw-24px)] gap-0 overflow-y-auto bg-panel p-0 sm:max-w-[480px]"
+        aria-describedby={undefined}
+      >
+        <SheetHeader className="sticky top-0 z-sticky border-b border-line bg-panel p-4 pr-12">
+          <SheetTitle>{title}</SheetTitle>
+        </SheetHeader>
+        <fieldset disabled={readOnly} className="min-w-0 border-0 p-4">
+          {open && children}
+        </fieldset>
+      </SheetContent>
+    </SheetRoot>
+  );
+}
+
+export function Tabs({
+  items,
+  value,
+  onChange,
+  id,
+}: {
+  items: string[];
+  value: string;
+  onChange: (value: string) => void;
+  id: string;
+}) {
+  return (
+    <TabsRoot value={value} onValueChange={onChange} className="contents">
+      <TabsList className="tabs segmented-control" aria-label={id}>
+        {items.map((item) => (
+          <TabsTrigger
+            key={item}
+            value={item}
+            id={id + '-tab-' + item}
+            aria-controls={id + '-panel-' + item}
+          >
+            {item}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </TabsRoot>
+  );
+}
+
+export function Breadcrumb({ items }: { items: string[] }) {
+  return (
+    <BreadcrumbRoot>
+      <BreadcrumbList className="text-[0.9375rem]">
+        {items.map((item, index) => (
+          <Fragment key={index}>
+            {index > 0 && <BreadcrumbSeparator />}
+            <BreadcrumbItem className="min-w-0 truncate">
+              {index === items.length - 1 ? (
+                <BreadcrumbPage className="truncate">{item}</BreadcrumbPage>
+              ) : (
+                <span className="truncate">{item}</span>
+              )}
+            </BreadcrumbItem>
+          </Fragment>
+        ))}
+      </BreadcrumbList>
+    </BreadcrumbRoot>
+  );
+}
+
+export function EmptyState({
+  icon = 'table',
+  children,
+  action,
+}: {
+  icon?: IconName;
+  children: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="empty-state">
+      <span className="icon-tile">
+        <Icon name={icon} size={24} />
+      </span>
+      <p>{children}</p>
+      {action}
+    </div>
+  );
+}
+export function Feedback({
+  message,
+  error = false,
+  onClose,
+}: {
+  message: string;
+  error?: boolean;
+  onClose: () => void;
+}) {
+  const close = useRef(onClose);
+  useEffect(() => {
+    close.current = onClose;
+  }, [onClose]);
+  useEffect(() => {
+    const id = error
+      ? toast.error(message, { duration: Infinity, onDismiss: () => close.current() })
+      : toast.success(message, {
+          onDismiss: () => close.current(),
+          onAutoClose: () => close.current(),
+        });
+    return () => {
+      toast.dismiss(id);
+    };
+  }, [message, error]);
+  return null;
+}
+
+export type TreeGroup = {
+  id: string;
+  label: string;
+  items: {
+    id: string;
+    label: string;
+    subtitle?: string;
+    columns?: { name: string; type: string }[];
+  }[];
+};
+export function SchemaTree({
+  groups,
+  hidden = [],
+  onToggle,
+  onSelect,
+  selected,
+}: {
+  groups: TreeGroup[];
+  hidden?: string[];
+  onToggle?: (id: string) => void;
+  onSelect: (id: string) => void;
+  selected?: string;
+}) {
+  return (
+    <div className="schema-tree">
+      {groups.map((group) => (
+        <details key={group.id} open>
+          <summary>
+            <Icon name="source" />
+            {onToggle && (
+              <input
+                type="checkbox"
+                aria-label={'Show ' + group.label}
+                checked={!hidden.includes(group.id)}
+                onClick={(e) => e.stopPropagation()}
+                onChange={() => onToggle(group.id)}
+              />
+            )}
+            <span>{group.label}</span>
+            <span className="count">{group.items.length}</span>
+          </summary>
+          <ul>
+            {group.items.map((item) => (
+              <li key={item.id}>
+                {onToggle && (
+                  <input
+                    type="checkbox"
+                    aria-label={'Show ' + item.label}
+                    checked={!hidden.includes(item.id)}
+                    onChange={() => onToggle(item.id)}
+                  />
+                )}
+                <Button
+                  variant="outline"
+                  type="button"
+                  aria-current={selected === item.id ? 'true' : undefined}
+                  onClick={() => onSelect(item.id)}
+                  title={item.label}
+                >
+                  <Icon name="table" />
+                  <span>
+                    {item.label}
+                    {item.subtitle && <small>{item.subtitle}</small>}
+                  </span>
+                </Button>
+                {item.columns && (
+                  <details className="tree-columns">
+                    <summary>{item.columns.length} columns</summary>
+                    <ul>
+                      {item.columns.map((column, i) => (
+                        <li key={i}>
+                          <code>{column.name}</code>
+                          <small>{column.type}</small>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+export function Tray({
+  title,
+  actions,
+  children,
+  className = '',
+  ...props
+}: HTMLAttributes<HTMLElement> & { title: string; actions?: ReactNode }) {
+  const id = useId();
+  return (
+    <section className={'tray ' + className} aria-labelledby={id} {...props}>
+      <header className="tray-heading">
+        <h2 id={id} className="mono-caption">
+          {title}
+        </h2>
+        {actions}
+      </header>
+      <div className="tray-surface">{children}</div>
+    </section>
+  );
+}
+export function SegmentedControl({
+  items,
+  value,
+  onChange,
+  label,
+}: {
+  items: string[];
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+}) {
+  return (
+    <ToggleGroup
+      type="single"
+      className="segmented-control"
+      value={value}
+      onValueChange={(next) => {
+        if (next) onChange(next);
+      }}
+      aria-label={label}
+    >
+      {items.map((item) => (
+        <ToggleGroupItem key={item} value={item} aria-label={item}>
+          {item}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  );
+}
+
+export function KpiTile({
+  caption,
+  value,
+  unit,
+  series,
+  seriesLabel,
+  footer,
+  tone = 'neutral',
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  caption: string;
+  value: ReactNode;
+  unit?: string;
+  series: number[];
+  seriesLabel: string;
+  footer: string;
+  tone?: Tone;
+}) {
+  const max = Math.max(1, ...series);
+  return (
+    <Button
+      variant="outline"
+      type="button"
+      className="kpi-tile h-auto flex-col items-stretch justify-between gap-0 overflow-hidden rounded-tray border border-line bg-panel p-0 text-left whitespace-normal"
+      {...props}
+    >
+      <span className="kpi-top">
+        <span className="mono-caption">{caption}</span>
+        <span className="kpi-reading">
+          <span className="kpi-value">{value}</span>
+          {unit && <span className="kpi-unit">{unit}</span>}
+          <svg className="sparkline" viewBox="0 0 62 40" role="img" aria-label={seriesLabel}>
+            <title>{seriesLabel + ': ' + series.join(', ')}</title>
+            {series.map((n, i) => (
+              <rect
+                key={i}
+                x={i * 5 + 1}
+                y={38 - (n / max) * 34}
+                width="2"
+                height={(n / max) * 34}
+                fill={i === series.length - 1 ? 'var(--mark)' : 'var(--line)'}
+              />
+            ))}
+          </svg>
+        </span>
+      </span>
+      <span className="kpi-footer">
+        <span className={'kpi-glyph tone-' + tone}>
+          <Icon
+            name={tone === 'danger' ? 'warning' : tone === 'success' ? 'check' : 'clock'}
+            size={12}
+          />
+        </span>
+        <span className={tone === 'neutral' ? '' : 'delta-' + tone}>{footer}</span>
+      </span>
+    </Button>
+  );
+}

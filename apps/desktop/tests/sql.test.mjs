@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { tableReference, cellText } from '../src/sql-model.ts';
+import { tableReference, cellText } from '../src/features/sql/sql-model.ts';
 assert.equal(tableReference('app_db', 'public.users'), '"app_db"."public.users"');
 assert.equal(tableReference('select', 'a"b'), '"select"."a""b"');
 assert.equal(tableReference('local_lake', 'source/users'), '"local_lake"."source/users"');

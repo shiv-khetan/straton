@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { datasetLabel, relativeTime, backupTime, bucketRuns, isLoopback, matrixLayout, matrixCells, navigateBucket, bucketTooltip, timestampSeries, runSparkline, runKpi, axisLabelShown } from '../src/view-model.ts';
+import { datasetLabel, relativeTime, backupTime, bucketRuns, isLoopback, matrixLayout, matrixCells, navigateBucket, bucketTooltip, timestampSeries, runSparkline, runKpi, axisLabelShown } from '../src/lib/view-model.ts';
 const now = Date.UTC(2026, 9, 20, 12);
 assert.equal(relativeTime(null, now), 'Never');
 assert.equal(relativeTime('bad', now), 'Unknown');
@@ -29,7 +29,7 @@ console.log('Relative times, backup filenames, loopback detection and chart boun
 
 // Check the light default, dark toggle, status chips, and UI marks.
 const { readFile } = await import('node:fs/promises');
-const css = await readFile(new URL('../src/style.css', import.meta.url), 'utf8');
+const css = await readFile(new URL('../src/styles/tailwind.css', import.meta.url), 'utf8');
 const declarations = block => Object.fromEntries([...block.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
 const light = declarations(css.match(/:root\s*\{([^}]+)\}/)[1]);
 const dark = { ...light, ...declarations(css.match(/\[data-theme=['"]dark['"]\]\s*\{([^}]+)\}/)[1]) };
@@ -47,7 +47,7 @@ function resolve(palette, name) {
 function luminance(rgb) { const [r,g,b] = rgb.map(c => c/255).map(c => c<=.04045 ? c/12.92 : ((c+.055)/1.055)**2.4); return .2126*r+.7152*g+.0722*b; }
 function contrast(a,b) { const x=luminance(a),y=luminance(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05); }
 let pairs = 0;
-const surfaces = ['bg','bg-deep','panel','surface','surface-2','surface-3'];
+const surfaces = ['bg','bg-deep','panel','surface','surface-2','surface-3','panel-2'];
 for (const [theme,palette] of [['dark',dark],['light',light]]) {
   const check = (text, background, minimum = 4.5, label = background) => {
     const ratio = contrast(resolve(palette,'--'+text),Array.isArray(background) ? background : resolve(palette,'--'+background));
@@ -60,7 +60,7 @@ for (const [theme,palette] of [['dark',dark],['light',light]]) {
     check('mark', bg, 3);
     check('primary',bg); check('running',bg,3); check('success',bg,3); check('warning',bg,3); check('danger',bg,3);
   }
-  check('on-primary','primary');check('on-primary-hover','primary-hover');
+  check('on-primary','primary');check('tooltip-ink','tooltip-bg');check('on-danger','danger-ink');check('on-primary-hover','primary-hover');
   for(const [text,bg] of [['primary','primary-50'],['primary','surface-2'],['success-ink','success-50'],['warning-ink','warning-50'],['danger-ink','danger-50'],['info-ink','info-50']]) check(text,bg);
   if (theme === 'light') check('primary', 'primary-tint');
   for(const color of ['running','success','warning','danger']) {

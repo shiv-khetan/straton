@@ -1,0 +1,212 @@
+@layer components {
+  .delta-success {
+    @apply text-success;
+  }
+  .delta-danger {
+    @apply text-danger;
+  }
+  .dashboard-grid {
+    @apply grid;
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+    @apply gap-6;
+  }
+  .activity-chart {
+    @apply w-full block;
+    max-height: 256px;
+    @apply font-mono;
+  }
+  .chart-legend {
+    @apply flex gap-4 justify-center text-caption text-ink-2;
+  }
+  .chart-legend span {
+    @apply flex items-center gap-1.5;
+  }
+  .activity-item {
+    @apply flex items-center gap-2;
+    padding: 8px 0;
+    @apply border-b border-line;
+  }
+  .activity-item > div {
+    @apply flex-1 min-w-0;
+  }
+  .activity-item strong {
+    @apply text-caption font-medium;
+  }
+  @media (max-width: 900px) {
+    .dashboard-grid {
+      grid-template-columns: minmax(0, 1fr);
+      @apply gap-0;
+    }
+  }
+  .kpi-grid {
+    @apply grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    @apply gap-3 mb-5;
+  }
+  .kpi-tile {
+    @apply flex flex-col items-stretch justify-between gap-0 min-w-0 p-0 overflow-hidden rounded-tray bg-panel text-left;
+  }
+  .kpi-tile:hover:not(:disabled) {
+    @apply bg-panel-2;
+    border-color: var(--ink-3);
+  }
+  .kpi-top {
+    padding: 16px 16px 14px;
+    @apply bg-surface border-b border-line rounded-card;
+  }
+  .kpi-reading {
+    @apply flex items-baseline gap-1.5 mt-3;
+    min-height: 44px;
+    @apply flex-wrap;
+  }
+  .kpi-value {
+    @apply text-ink;
+    font: 600 1.875rem/1.3 var(--font-mono);
+    @apply tabular-nums;
+    letter-spacing: -0.02em;
+    overflow-wrap: anywhere;
+  }
+  .kpi-unit {
+    font-size: 0.8125rem;
+    @apply text-ink-2;
+  }
+  .sparkline {
+    width: 62px;
+    height: 40px;
+    @apply ml-auto self-center;
+  }
+  .kpi-footer {
+    @apply flex gap-2 items-center justify-between;
+    padding: 10px 12px;
+    min-height: 42px;
+    font-size: 0.75rem;
+    @apply text-ink-2;
+  }
+  .kpi-glyph {
+    @apply inline-grid;
+    place-items: center;
+    @apply rounded-full;
+    width: 20px;
+    height: 20px;
+    @apply shrink-0;
+  }
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
+    @apply gap-4;
+    align-items: start;
+  }
+  .chart-toolbar {
+    @apply flex gap-3 items-center justify-between flex-wrap mb-4;
+  }
+  .chart-toolbar p {
+    @apply m-0 text-ink-2;
+  }
+  .chart-toolbar code {
+    font-size: 1.5rem;
+    @apply font-semibold text-ink;
+  }
+  .matrix-container {
+    @apply relative;
+  }
+  .activity-chart {
+    max-height: none;
+    @apply rounded-control;
+  }
+  .matrix-axis {
+    fill: var(--ink-3);
+    font: 0.75rem var(--font-mono);
+  }
+  .matrix-axis.current {
+    fill: var(--ink);
+  }
+  .chart-legend {
+    gap: 8px 12px;
+    @apply flex-wrap justify-start;
+    font: 0.75rem var(--font-mono);
+    @apply uppercase;
+  }
+  .matrix-key {
+    @apply inline-block;
+    width: 10px;
+    height: 10px;
+    border: 1px solid var(--ink-2);
+    @apply bg-panel-2 shrink-0;
+  }
+  .chart-tooltip {
+    @apply absolute;
+    top: 28px;
+    width: 190px;
+    max-width: 90%;
+    @apply border border-line rounded-card bg-surface shadow-raised pointer-events-none;
+    z-index: var(--z-tooltip);
+    animation: drawer-fade var(--duration-tooltip) var(--ease-out-quart);
+    @apply overflow-hidden;
+  }
+  .tooltip-heading {
+    @apply flex justify-between gap-2;
+    padding: 10px 12px;
+    @apply bg-panel;
+    font-size: 0.75rem;
+    @apply text-ink-2;
+  }
+  .tooltip-row {
+    @apply flex items-center gap-2;
+    padding: 4px 12px;
+    font-size: 0.8125rem;
+  }
+  .tooltip-row:last-child {
+    @apply pb-3;
+  }
+  .tooltip-row:first-of-type {
+    @apply pt-3;
+  }
+  .tooltip-row code {
+    @apply ml-auto;
+  }
+  .chart-help {
+    font-size: 0.75rem;
+    margin: 12px 0;
+  }
+  .chart-data summary {
+    cursor: pointer;
+    @apply text-ink-2;
+    font-size: 0.8125rem;
+  }
+  .chart-data .table-wrap {
+    @apply mt-3;
+  }
+  .chart-data caption {
+    @apply text-left p-2 text-ink-2;
+  }
+  .activity-list {
+    max-height: 410px;
+    @apply overflow-auto;
+  }
+  .activity-item:last-child {
+    border-bottom: 0;
+  }
+  @media (max-width: 1100px) {
+    .dashboard-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  @media (max-width: 640px) {
+    .kpi-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .chart-tooltip {
+      left: 4% !important;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chart-tooltip {
+      animation: none;
+    }
+  }
+  .kpi-top {
+    @apply flex-1;
+  }
+  .chart-legend {
+    @apply text-caption;
+  }
+}

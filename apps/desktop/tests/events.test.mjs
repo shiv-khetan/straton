@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import WebSocket from '@tauri-apps/plugin-websocket';
-import { subscribe } from '../src/api.ts';
+import { subscribe } from '../src/lib/api.ts';
 const originalConnect = WebSocket.connect;
 const originalSet = globalThis.setTimeout,
   originalClear = globalThis.clearTimeout;
