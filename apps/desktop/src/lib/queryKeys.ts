@@ -8,6 +8,8 @@ export const queryKeys = {
   datamap: ['engine', 'datamap'] as const,
   models: ['engine', 'models'] as const,
   catalog: ['engine', 'catalog'] as const,
+  explorer: ['engine', 'explorer'] as const,
+  storage: ['engine', 'storage'] as const,
   backups: ['engine', 'backups'] as const,
   roles: ['engine', 'roles'] as const,
   access: ['engine', 'access'] as const,

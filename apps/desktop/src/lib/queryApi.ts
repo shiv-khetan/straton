@@ -2,6 +2,9 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import type { Api } from './api';
 import { queryKeys } from './queryKeys.ts';
 const reads: Partial<Record<keyof Api, QueryKey>> = {
+  explorerTree: ['engine', 'explorer', 'tree'],
+  storage: ['engine', 'storage'],
+  savedQueries: ['engine', 'saved-queries'],
   me: queryKeys.me,
   status: queryKeys.status,
   health: ['engine', 'health'],
@@ -23,6 +26,9 @@ const reads: Partial<Record<keyof Api, QueryKey>> = {
   tokens: queryKeys.access,
 };
 const transient = new Set<keyof Api>([
+  'explorerRows',
+  'explorerExport',
+  'cancelSql',
   'verifyAudit',
   'sqlQuery',
   'sqlExplain',

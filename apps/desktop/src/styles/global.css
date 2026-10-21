@@ -134,3 +134,29 @@
     min-height: 44px;
   }
 }
+
+/* v3.1 scrollbars: the native scrollbar, thin and colour-matched to the theme (no custom widget).
+   Compact chrome (sidebar rail, tab strips, breadcrumbs, toolbars) hides it but stays scrollable
+   by wheel, trackpad and keyboard; the expanded sidebar shows it only while hovered or focused. */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scroll-thumb) transparent;
+  }
+  *:hover {
+    scrollbar-color: var(--scroll-thumb-hover) transparent;
+  }
+}
+@utility scrollbar-hidden {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+@utility scrollbar-on-hover {
+  scrollbar-width: none;
+  &:hover,
+  &:focus-within {
+    scrollbar-width: thin;
+  }
+}

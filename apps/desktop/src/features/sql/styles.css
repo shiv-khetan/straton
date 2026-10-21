@@ -1,133 +1,245 @@
 @layer components {
   .sql-layout {
-    @apply h-full grid;
-    grid-template-columns: 220px minmax(0, 1fr);
-    @apply min-h-0;
+    display: flex;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
   }
   .sql-workspace {
-    grid-column: 2;
-    grid-row: 1;
-    @apply flex flex-col min-w-0 min-h-0;
-  }
-  .sql-workspace > .card {
-    @apply flex-1;
-    min-height: 120px;
-    @apply p-3 m-0 border-0 flex flex-col;
-  }
-  .sql-workspace .field {
-    @apply flex-1 min-h-0;
-  }
-  .sql-workspace .field > span {
-    @apply text-caption;
-  }
-  .sql-workspace > .card > h2 {
-    @apply hidden;
-  }
-  .editor-with-gutter {
-    @apply flex flex-1 min-h-0 overflow-hidden bg-bg border border-line;
-    border-radius: var(--radius-control);
-  }
-  .line-numbers {
-    @apply text-ink-3 shrink-0;
-    width: 44px;
-    @apply text-right overflow-hidden;
-    padding: 12px 8px;
-    @apply m-0 select-none border-r border-line;
-  }
-  .sql-workspace textarea {
-    @apply flex-1 h-full;
-    min-height: 80px;
-    resize: none;
-    @apply border-0 rounded-none bg-bg whitespace-pre p-3;
-    tab-size: 2;
-  }
-  .sql-workspace textarea,
-  .line-numbers {
-    font: var(--code-sm)/1.8 var(--font-mono);
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
   }
   .sql-tables {
-    grid-column: 1;
-    grid-row: 1;
-    @apply min-w-0 overflow-auto bg-panel border-r border-line;
+    width: 232px;
+    flex-shrink: 0;
+    min-width: 0;
+    overflow: auto;
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+    padding: 12px;
+  }
+  .sql-tables > label {
+    margin: 12px 0 20px;
+  }
+  .sql-side-tabs {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .sql-tables summary {
+    padding: 8px 0;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+  }
+  .catalog-column {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    font-size: var(--code-sm);
+    overflow-wrap: anywhere;
+  }
+  .saved-query {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .saved-query > button:first-child {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: flex-start;
+    flex-direction: column;
+    height: auto;
     padding: 12px 8px;
   }
-  .sql-tables > h2,
-  .sql-tables > p,
-  .sql-tables > .field {
-    @apply ml-1 mr-1;
+  .saved-query span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .sql-results {
-    @apply overflow-auto;
+  .saved-query small {
+    color: var(--ink-3);
   }
-  .sql-results th,
-  .sql-results td {
-    @apply whitespace-pre;
-    max-width: none;
-    @apply font-mono;
+  .save-query {
+    padding: 12px 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
-  .sql-null {
-    @apply text-ink-3;
-    font-style: italic;
+  .save-query .checkbox-label {
+    flex-direction: row;
+    align-items: center;
+  }
+  .query-tabs {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding: 6px;
+    flex-shrink: 0;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  .query-tabs > div {
+    display: flex;
+    align-items: center;
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    flex-shrink: 0;
+  }
+  .query-tabs > div.active {
+    background: var(--surface);
+    border-color: var(--line);
+  }
+  .query-tabs > div > button:first-child {
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sql-toolbar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .sql-output {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+  .results-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .sql-plans {
+    padding: 16px;
+    overflow: auto;
   }
   .sql-plans pre {
-    @apply p-3 bg-bg;
+    white-space: pre;
+    padding: 12px 0;
   }
-  .sql-plans h2 {
-    margin: 12px 0;
+  .sql-error {
+    padding: 16px;
+    background: var(--danger-tint);
+    overflow: auto;
   }
-  .schema-toggle {
-    @apply hidden;
+  .sql-error h3 {
+    color: var(--danger);
+    margin-bottom: 8px;
+  }
+  .sql-error pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .shortcut-hint {
+    flex-shrink: 0;
+    border-top: 1px solid var(--line);
+    padding: 6px 12px;
+    font-size: var(--body-sm);
+    color: var(--ink-2);
+  }
+  .shortcut-hint summary {
+    cursor: pointer;
+  }
+  .shortcut-hint > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    padding: 12px 0;
+  }
+  .shortcut-hint kbd {
+    font-family: var(--font-code);
+    border: 1px solid var(--line);
+    padding: 2px 4px;
+    border-radius: 4px;
+    background: var(--surface-2);
+  }
+  .truncated-notice {
+    padding: 8px 12px;
+    color: var(--warning-ink);
+    background: var(--warning-tint);
+  }
+  .empty-copy {
+    padding: 32px;
+    text-align: center;
+    color: var(--ink-2);
+  }
+  .query-history {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .history-toolbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    align-items: flex-end;
+  }
+  .history-toolbar label {
+    flex: 1;
+    max-width: 440px;
+  }
+  .history-list article {
+    padding: 16px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .history-list article > div {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .history-list time {
+    font: var(--code-sm) var(--font-code);
+    color: var(--ink-2);
+  }
+  .history-list pre {
+    max-height: 180px;
+    overflow: auto;
+    padding: 12px;
+    margin-top: 12px;
+    background: var(--surface-2);
+    border-radius: var(--radius-control);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .query-status {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-chip);
+    padding: 2px 8px;
+  }
+  .query-status.failed {
+    color: var(--danger);
   }
   @media (max-width: 900px) {
-    .sql-layout {
-      grid-template-columns: 180px minmax(0, 1fr);
+    .sql-tables {
+      width: 180px;
+      padding: 8px;
     }
   }
-  @media (max-width: 640px) {
+  @media (max-width: 700px) {
     .sql-layout {
-      grid-template-columns: 36px minmax(0, 1fr);
+      flex-direction: column;
     }
     .sql-tables {
-      @apply p-1;
+      width: 100%;
+      max-height: 180px;
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
     }
-    .sql-tables > :not(.schema-toggle) {
-      @apply hidden;
-    }
-    .sql-tables .schema-toggle {
-      @apply flex p-1;
-    }
-    .sql-tables[data-open='true'] {
-      @apply absolute;
-      width: 220px;
-      height: calc(100% - 104px);
-      z-index: var(--z-drawer);
-    }
-    .sql-tables[data-open='true'] > :not(.schema-toggle) {
-      @apply block;
-    }
-  }
-  .sql-results td {
-    font-size: 0.8125rem;
-  }
-  .panel-heading h2,
-  .sql-tables > h2 {
-    font: 400 0.8125rem var(--font-mono);
-    @apply text-ink-2 uppercase;
-    letter-spacing: 0.04em;
-  }
-  .sql-workspace > .card {
-    @apply bg-panel p-1;
-  }
-  .sql-editor-panel > .field {
-    @apply p-3 bg-surface border border-line rounded-card mb-1;
-  }
-  .sql-workspace > .sql-editor-panel > h2 {
-    @apply block p-3 mb-0;
-  }
-  .sql-editor-panel > .actions {
-    padding: 8px 12px;
-  }
-  .line-numbers {
-    @apply bg-panel;
   }
 }

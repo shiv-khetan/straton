@@ -42,11 +42,16 @@ pub mod wire;
 // Readers pin the resolved snapshot until execution ends; publication must not delete it.
 pub static SNAPSHOTS: RwLock<()> = RwLock::const_new(());
 
+type RunningQueries = Arc<
+    std::sync::Mutex<std::collections::HashMap<uuid::Uuid, (String, futures::future::AbortHandle)>>,
+>;
+
 #[derive(Clone)]
 pub struct Sql {
     pub(crate) pool: SqlitePool,
     principal: Option<crate::access::Principal>,
-    data_dir: PathBuf,
+    pub(crate) data_dir: PathBuf,
+    pub(crate) running: RunningQueries,
     pub config: config::Sql,
     runtime: Arc<RuntimeEnv>,
 }
@@ -253,6 +258,7 @@ impl Sql {
         Ok(Self {
             pool,
             principal: None,
+            running: Default::default(),
             data_dir: config.data_dir.clone(),
             config: config.sql.clone(),
             runtime,
@@ -654,7 +660,7 @@ pub fn preview(out: &Output, limit: usize) -> std::result::Result<Value, Error> 
         json!({"columns":columns(&out.schema),"rows":rows,"row_count":out.row_count,"truncated_preview":out.row_count>limit,"elapsed_ms":out.elapsed_ms}),
     )
 }
-fn cell(array: &dyn Array, row: usize) -> std::result::Result<Value, Error> {
+pub(crate) fn cell(array: &dyn Array, row: usize) -> std::result::Result<Value, Error> {
     if array.is_null(row) {
         return Ok(Value::Null);
     }

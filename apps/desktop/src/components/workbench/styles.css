@@ -58,8 +58,13 @@
   .tone-info {
     @apply bg-info-soft text-info;
   }
+  /* v3.1: Atlassian-style lozenge — compact, uppercase sans, tinted, 2px corners. */
   .status-chip {
-    @apply whitespace-nowrap text-caption;
+    @apply whitespace-nowrap font-sans font-semibold uppercase;
+    font-size: 0.6875rem;
+    letter-spacing: 0.03em;
+    line-height: 1rem;
+    padding: 1px 6px;
   }
   .status-chip.state-running .status-dot {
     animation: live-pulse var(--duration-pulse) var(--ease-out-quart) infinite;
@@ -161,7 +166,7 @@
   .dataset-title {
     @apply relative flex flex-col justify-center gap-1;
     padding: 6px 8px;
-    border-radius: 12px 12px 0 0;
+    border-radius: 6px 6px 0 0;
     @apply bg-surface;
   }
   .node-heading-row {
@@ -244,7 +249,7 @@
   }
   .map-legend button[aria-pressed='true'] {
     border-color: var(--line);
-    @apply bg-surface text-ink shadow-raised;
+    @apply bg-surface text-ink;
   }
   .map-legend .pill {
     @apply bg-transparent p-0;
@@ -334,21 +339,23 @@
     padding: 6px 0;
     overflow-wrap: anywhere;
   }
+  /* v3.1: page-level tabs use an underline (Atlassian), not capsules. */
   .tabs {
-    @apply flex gap-1 p-1 border border-line rounded-full bg-panel mb-4 min-w-0 overflow-x-auto;
+    @apply flex gap-4 border-b border-line mb-4 min-w-0 overflow-x-auto;
     /* Still scrolls (wheel, keyboard focus) on narrow widths, without scrollbar chrome. */
     scrollbar-width: none;
   }
   .tabs button {
-    border: 1px solid transparent;
-    @apply rounded-full;
-    padding: 4px 12px;
-    @apply bg-transparent text-ink-2 whitespace-nowrap;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    @apply rounded-none;
+    padding: 8px 2px 6px;
+    margin-bottom: -1px;
+    @apply bg-transparent text-ink-2 whitespace-nowrap hover:text-ink;
   }
   .tabs button[aria-selected='true'] {
-    @apply text-ink bg-surface;
-    border-color: var(--line);
-    @apply shadow-raised;
+    @apply text-ink font-medium;
+    border-bottom-color: var(--primary);
   }
   .model-node .dataset-title {
     height: 64px;
@@ -532,7 +539,7 @@
     min-height: 44px;
   }
   .tray-heading [data-slot='button'] {
-    @apply rounded-full;
+    @apply rounded-sm;
   }
   .tray-surface {
     @apply min-w-0 p-4 bg-surface border border-line rounded-card;
@@ -550,20 +557,20 @@
   }
   .segmented-control {
     @apply inline-flex items-center gap-0.5;
-    padding: 3px;
-    @apply bg-panel border border-line rounded-full;
+    padding: 2px;
+    @apply bg-panel border border-line rounded-sm;
   }
   .segmented-control button {
     border: 1px solid transparent;
-    @apply rounded-full bg-transparent text-ink-2;
-    padding: 4px 12px;
+    @apply rounded-xs bg-transparent text-ink-2;
+    padding: 3px 10px;
     @apply whitespace-nowrap;
   }
   .segmented-control button[aria-pressed='true'],
   .segmented-control button[aria-selected='true'] {
     @apply bg-surface;
     border-color: var(--line);
-    @apply text-ink shadow-raised;
+    @apply text-ink;
   }
   .sheet-actions {
     @apply flex;
@@ -582,11 +589,11 @@
   }
   .map-tools,
   .map-legend {
-    @apply rounded-full shadow-none;
+    @apply rounded-md shadow-none;
   }
   .map-tools button,
   .map-legend button {
-    @apply rounded-full;
+    @apply rounded-sm;
   }
   .map-tools button[aria-pressed='true'] {
     @apply bg-surface;

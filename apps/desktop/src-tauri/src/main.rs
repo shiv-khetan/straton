@@ -3,6 +3,7 @@
 mod salesforce;
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
+use tauri_plugin_fs::FsExt;
 
 #[derive(Serialize, Deserialize)]
 struct Connection {
@@ -59,11 +60,29 @@ fn forget_connection() -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+async fn save_export(app: tauri::AppHandle, path: String, bytes: Vec<u8>) -> Result<(), String> {
+    let target = std::path::PathBuf::from(path);
+    if !target.is_absolute() || !app.fs_scope().is_allowed(&target) {
+        return Err("Choose the export path in the Save dialog first".into());
+    }
+    if std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_symlink()) {
+        return Err("Export path must be a regular file".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || std::fs::write(target, bytes))
+        .await
+        .map_err(|_| "Export writer stopped".to_string())?
+        .map_err(|e| format!("Could not save export: {e}"))
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_websocket::init())
         .invoke_handler(tauri::generate_handler![
+            save_export,
             save_connection,
             load_connection,
             forget_connection,

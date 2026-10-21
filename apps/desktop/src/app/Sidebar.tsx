@@ -92,7 +92,10 @@ export function Sidebar({
         </Tooltip>
       )}
       <nav
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden"
+        className={
+          'min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden ' +
+          (rail ? 'scrollbar-hidden' : 'scrollbar-on-hover')
+        }
         aria-label="Main navigation"
         onKeyDown={(event) => {
           if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
@@ -141,11 +144,11 @@ export function Sidebar({
                       type="button"
                       data-nav-focus
                       className={
-                        'flex min-h-9 w-full items-center gap-2.5 rounded-full border px-3 py-1.5 text-left text-nav font-normal transition-colors duration-fast ease-workbench disabled:opacity-50 ' +
+                        'flex min-h-9 w-full items-center gap-2.5 rounded-sm border border-transparent px-3 py-1.5 text-left text-nav font-normal transition-colors duration-fast ease-workbench disabled:opacity-50 ' +
                         (rail ? 'justify-center px-1 ' : '') +
                         (page === route
-                          ? 'border-line bg-surface text-ink shadow-raised dark:bg-surface-2'
-                          : 'border-transparent text-ink-2 hover:bg-surface-2 hover:text-ink')
+                          ? 'bg-primary-soft font-medium text-primary'
+                          : 'text-ink-2 hover:bg-surface-2 hover:text-ink')
                       }
                       aria-current={page === route ? 'page' : undefined}
                       aria-label={routeLabels[route]}

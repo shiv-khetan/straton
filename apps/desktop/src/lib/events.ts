@@ -4,7 +4,14 @@ import { eventLevel, formatEvent } from '../features/console/workbench-model.ts'
 export function eventQueryKeys(event: EngineEvent): readonly (readonly string[])[] {
   if (event.type === 'resync_required') return [queryKeys.all];
   if (/^(catalog|source|dataset|relationship)\./.test(event.type))
-    return [queryKeys.sources, queryKeys.catalog, queryKeys.datamap, queryKeys.models];
+    return [
+      queryKeys.sources,
+      queryKeys.catalog,
+      queryKeys.datamap,
+      queryKeys.models,
+      queryKeys.explorer,
+      queryKeys.storage,
+    ];
   if (/^(run|job)\./.test(event.type))
     return [
       queryKeys.runs,
@@ -13,8 +20,17 @@ export function eventQueryKeys(event: EngineEvent): readonly (readonly string[])
       queryKeys.models,
       queryKeys.catalog,
       queryKeys.status,
+      queryKeys.explorer,
+      queryKeys.storage,
     ];
-  if (/^model\./.test(event.type)) return [queryKeys.models, queryKeys.datamap, queryKeys.catalog];
+  if (/^model\./.test(event.type))
+    return [
+      queryKeys.models,
+      queryKeys.datamap,
+      queryKeys.catalog,
+      queryKeys.explorer,
+      queryKeys.storage,
+    ];
   return [];
 }
 export function notificationList(events: EngineEvent[], limit = 30) {

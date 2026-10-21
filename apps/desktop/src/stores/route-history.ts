@@ -68,8 +68,6 @@ export const routeLabels: Record<Route, string> = {
 };
 export const laterRoutes: readonly Route[] = [
   'Activity',
-  'Explorer',
-  'Query History',
   'Pipelines',
   'Schedules',
   'Analytics',

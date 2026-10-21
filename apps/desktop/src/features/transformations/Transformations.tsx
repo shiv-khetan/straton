@@ -1,3 +1,4 @@
+import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
@@ -789,9 +790,9 @@ export default function Models({
                       type="button"
                       variant="destructive"
                       disabled={busy}
-                      onClick={() => {
+                      onClick={async () => {
                         if (
-                          window.confirm(
+                          await confirmDialog(
                             'Delete ' + selected.name + '? Historical runs will be retained.',
                           )
                         )

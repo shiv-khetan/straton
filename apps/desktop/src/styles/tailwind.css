@@ -6,6 +6,7 @@
 @import '../features/overview/styles.css';
 @import '../features/lineage/styles.css';
 @import '../features/sql/styles.css';
+@import '../features/explorer/styles.css';
 @import '../features/transformations/styles.css';
 @import '../features/access/styles.css';
 @import '../features/connections/styles.css';
@@ -73,9 +74,10 @@
   --headline-sm: 0.9375rem;
   --headline-md: 1.125rem;
   --headline-lg: 1.75rem;
-  --radius-chip: 999px;
-  --radius-control: 8px;
-  --radius-drawer: 12px;
+  /* v3.1: crisp console geometry (GCP / Atlassian) — no pills. */
+  --radius-chip: 2px;
+  --radius-control: 4px;
+  --radius-drawer: 8px;
   --space-xs: 4px;
   --space-sm: 6px;
   --space-md: 8px;
@@ -90,10 +92,11 @@
   --z-tooltip: 70;
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
   --shadow-raised: var(--depth-raised);
-  --control-radius: 8px;
-  --card-radius: 12px;
-  --tray-radius: 14px;
-  --depth-raised: 0 1px 2px rgb(11 15 23 / 6%);
+  --control-radius: 4px;
+  --card-radius: 6px;
+  --tray-radius: 6px;
+  /* v3.1: elevation is reserved for floating layers (menus, popovers, overlays, toasts). */
+  --depth-raised: 0 2px 8px rgb(11 15 23 / 12%);
   --duration-fast: 150ms;
   --duration-pulse: 1800ms;
   --duration-shell: 180ms;
@@ -102,6 +105,8 @@
   --z-modal-backdrop: 40;
   --on-danger: #ffffff;
   --scrim: rgb(6 14 32 / 55%);
+  --scroll-thumb: #c3cedf;
+  --scroll-thumb-hover: #9eadc4;
   --tooltip-bg: #0b0f17;
   --tooltip-ink: #ffffff;
   --popover: var(--surface);
@@ -111,6 +116,8 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
+    --scroll-thumb: #3a4660;
+    --scroll-thumb-hover: #52617f;
     --bg: #0b1326;
     --bg-deep: #060e20;
     --panel: #131b2e;
@@ -162,6 +169,8 @@
 }
 [data-theme='dark'] {
   color-scheme: dark;
+  --scroll-thumb: #3a4660;
+  --scroll-thumb-hover: #52617f;
   --bg: #0b1326;
   --bg-deep: #060e20;
   --panel: #131b2e;
@@ -267,11 +276,11 @@
   --text-caption: var(--code-sm);
   --text-nav: 0.9375rem;
   --text-page: var(--headline-lg);
-  --radius-xs: 4px;
+  --radius-xs: 2px;
   --radius-sm: var(--control-radius);
   --radius-md: var(--control-radius);
-  --radius-lg: var(--card-radius);
-  --radius-xl: var(--tray-radius);
+  --radius-lg: 8px;
+  --radius-xl: 8px;
   --radius-control: var(--control-radius);
   --radius-card: var(--card-radius);
   --radius-tray: var(--tray-radius);

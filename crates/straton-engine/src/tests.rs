@@ -4162,3 +4162,495 @@ async fn security_endpoints_require_global_admin_and_rotation_waits_for_runs() {
     drop(a);
     f.close().await;
 }
+
+fn explorer_body() -> serde_json::Value {
+    json!({"schema":"app_db","table":"users","sort":[{"column":"id","dir":"asc"}],"filters":[],"limit":100,"offset":0})
+}
+async fn export_bytes(a: &axum::Router, token: &str, body: serde_json::Value) -> Vec<u8> {
+    let response = a
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/explorer/export")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap()
+        .to_vec()
+}
+#[tokio::test]
+async fn phase2_explorer_typed_reads_paging_search_and_injection() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let mut q = explorer_body();
+    q["sort"][0]["dir"] = json!("desc");
+    q["limit"] = json!(1);
+    let (s, v) = request(&a, "POST", "/v1/explorer/rows", q.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], json!([[2, "Bob"]]));
+    assert_eq!(v["total"], 2);
+    assert_eq!(v["total_exact"], true);
+    q["offset"] = json!(1);
+    assert_eq!(
+        request(&a, "POST", "/v1/explorer/rows", q).await.1["rows"],
+        json!([[1, "Alice"]])
+    );
+    for (filters, expected) in [
+        (
+            json!([{"column":"id","op":"gt","value":"1"}]),
+            json!([[2, "Bob"]]),
+        ),
+        (
+            json!([{"column":"id","op":"in","value":[1]}]),
+            json!([[1, "Alice"]]),
+        ),
+        (
+            json!([{"column":"name","op":"starts_with","value":"Al"}]),
+            json!([[1, "Alice"]]),
+        ),
+        (
+            json!([{"column":"name","op":"contains","value":"%"}]),
+            json!([]),
+        ),
+        (
+            json!([{"column":"name","op":"eq","value":"' OR 1=1; DROP TABLE users; --"}]),
+            json!([]),
+        ),
+    ] {
+        let mut q = explorer_body();
+        q["filters"] = filters;
+        let (s, v) = request(&a, "POST", "/v1/explorer/rows", q).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["rows"], expected);
+        assert_eq!(v["total"], expected.as_array().unwrap().len());
+    }
+    let mut q = explorer_body();
+    q["search"] = json!("ALi");
+    q["columns"] = json!(["name"]);
+    assert_eq!(
+        request(&a, "POST", "/v1/explorer/rows", q).await.1["rows"],
+        json!([["Alice"]])
+    );
+    for patch in [
+        json!({"columns":["missing"]}),
+        json!({"sort":[{"column":"missing","dir":"asc"}]}),
+        json!({"filters":[{"column":"missing","op":"eq","value":"1"}]}),
+        json!({"filters":[{"column":"id","op":"drop","value":1}]}),
+        json!({"filters":[{"column":"id","op":"eq","value":"1 OR 1=1"}]}),
+        json!({"table":"users; DROP TABLE users"}),
+    ] {
+        let mut q = explorer_body();
+        q.as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        assert_eq!(
+            request(&a, "POST", "/v1/explorer/rows", q).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let mut q = explorer_body();
+    q["limit"] = json!(999);
+    assert_eq!(
+        request(&a, "POST", "/v1/explorer/rows", q).await.1["limit"],
+        500
+    );
+    let details: Vec<String> =
+        sqlx::query_scalar("SELECT detail FROM audit_log WHERE action='explorer.read'")
+            .fetch_all(&f.pool)
+            .await
+            .unwrap();
+    for detail in details {
+        assert!(!detail.contains("Alice"));
+        assert!(!detail.contains("DROP"));
+        let d: serde_json::Value = serde_json::from_str(&detail).unwrap();
+        assert_eq!(d["query_shape_hash"].as_str().unwrap().len(), 64);
+    }
+    drop(a);
+    f.close().await;
+}
+#[tokio::test]
+async fn phase2_explorer_policies_exports_storage_and_encryption() {
+    use datafusion::{
+        arrow::csv::ReaderBuilder, parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
+    };
+    let mut f = sql_fixture().await;
+    f.config.encryption.enabled = true;
+    let snapshot = sql_sync(&f).await;
+    assert!(
+        f.dir
+            .join("data/source/users")
+            .join(&snapshot)
+            .join("_key")
+            .is_file()
+    );
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    let role = access_role(&a, "explorer-reader").await;
+    access_grant(&a, &role, "dataset", &did, "read").await;
+    let (_, token) = access_user(&a, "explorer", &[&role]).await;
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/row-filters/{role}"),
+        json!({"predicate":"id=1"}),
+    )
+    .await;
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/masks/{role}/name"),
+        json!({"kind":"redact"}),
+    )
+    .await;
+    let (s, v) = request_as(&a, &token, "POST", "/v1/explorer/rows", explorer_body()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], json!([[1, "***"]]));
+    assert_eq!(v["total"], 1);
+    let (_, tree) = request_as(&a, &token, "GET", "/v1/explorer/tree", json!(null)).await;
+    assert_eq!(tree["sources"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        tree["sources"][0]["schemas"][0]["tables"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        tree["sources"][0]["schemas"][0]["tables"][0]["row_filtered"],
+        true
+    );
+    let mut q = explorer_body();
+    q["search"] = json!("Alice");
+    assert_eq!(
+        request_as(&a, &token, "POST", "/v1/explorer/rows", q)
+            .await
+            .1["rows"],
+        json!([])
+    );
+    for format in ["csv", "parquet"] {
+        let mut q = explorer_body();
+        q["format"] = json!(format);
+        q["max_rows"] = json!(1);
+        let bytes = export_bytes(&a, &token, q.clone()).await;
+        if format == "csv" {
+            let schema = std::sync::Arc::new(datafusion::arrow::datatypes::Schema::new(vec![
+                datafusion::arrow::datatypes::Field::new(
+                    "id",
+                    datafusion::arrow::datatypes::DataType::Int64,
+                    false,
+                ),
+                datafusion::arrow::datatypes::Field::new(
+                    "name",
+                    datafusion::arrow::datatypes::DataType::Utf8,
+                    true,
+                ),
+            ]));
+            let batch = ReaderBuilder::new(schema)
+                .with_header(true)
+                .build(std::io::Cursor::new(bytes))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(batch.num_rows(), 1);
+            assert_eq!(
+                crate::sql::cell(batch.column(1).as_ref(), 0).unwrap(),
+                json!("***")
+            );
+        } else {
+            let file = f.dir.join("export.parquet");
+            std::fs::write(&file, bytes).unwrap();
+            let mut reader =
+                ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(file).unwrap())
+                    .unwrap()
+                    .build()
+                    .unwrap();
+            let batch = reader.next().unwrap().unwrap();
+            assert_eq!(batch.num_rows(), 1);
+            assert_eq!(
+                crate::sql::cell(batch.column(1).as_ref(), 0).unwrap(),
+                json!("***")
+            );
+            assert!(reader.next().is_none());
+        }
+        let bytes = export_bytes(&a, "good-token", q).await;
+        if format == "csv" {
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(text.contains("Alice"));
+            assert!(!text.contains("Bob"));
+        }
+    }
+    let (_, storage) = request_as(&a, &token, "GET", "/v1/storage", json!(null)).await;
+    assert_eq!(storage["sources"].as_array().unwrap().len(), 1);
+    assert_eq!(storage["sources"][0]["datasets"][0]["dataset_id"], did);
+    let physical: u64 = std::fs::read_dir(f.dir.join("data/source/users").join(&snapshot))
+        .unwrap()
+        .map(|e| e.unwrap().metadata().unwrap().len())
+        .sum();
+    assert_eq!(storage["lake_bytes"], physical);
+    assert_eq!(storage["sources"][0]["bytes"], physical);
+    assert_eq!(
+        storage["total_bytes"].as_u64().unwrap(),
+        storage["lake_bytes"].as_u64().unwrap()
+            + storage["models_bytes"].as_u64().unwrap()
+            + storage["state_db_bytes"].as_u64().unwrap()
+            + storage["backups_bytes"].as_u64().unwrap()
+    );
+    let old = f.dir.join("data/source/users").join(store::id());
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(old.join("old.parquet"), [0; 100]).unwrap();
+    assert_eq!(
+        request(&a, "GET", "/v1/storage", json!(null)).await.1["lake_bytes"],
+        physical
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_log WHERE action='explorer.export'"
+        )
+        .fetch_one(&f.pool)
+        .await
+        .unwrap(),
+        4
+    );
+    drop(a);
+    f.close().await;
+}
+#[tokio::test]
+async fn phase2_saved_queries_visibility_and_mutation_matrix() {
+    let f = Fixture::new().await;
+    let a = app(&f);
+    let role = access_role(&a, "query-readers").await;
+    access_grant(&a, &role, "source", "source", "read").await;
+    let (_, alice) = access_user(&a, "alice", &[&role]).await;
+    let (_, bob) = access_user(&a, "bob", &[&role]).await;
+    let (_, no_read) = access_user(&a, "no-read", &[]).await;
+    let mut ids = Vec::new();
+    for (token, name, shared) in [
+        (alice.as_str(), "private-a", false),
+        (alice.as_str(), "shared-a", true),
+        (bob.as_str(), "private-b", false),
+        ("good-token", "admin-private", false),
+    ] {
+        let (s, v) = request_as(
+            &a,
+            token,
+            "POST",
+            "/v1/saved-queries",
+            json!({"name":name,"sql":"SELECT 1","shared":shared}),
+        )
+        .await;
+        assert_eq!(s, StatusCode::CREATED, "{v}");
+        ids.push(v["id"].as_str().unwrap().to_owned());
+    }
+    for (token, count) in [(alice.as_str(), 2), (bob.as_str(), 2), ("good-token", 4)] {
+        let (s, v) = request_as(&a, token, "GET", "/v1/saved-queries", json!(null)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v.as_array().unwrap().len(), count);
+    }
+    assert_eq!(
+        request_as(&a, &no_read, "GET", "/v1/saved-queries", json!(null))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    for (i, id) in ids.iter().enumerate() {
+        let path = format!("/v1/saved-queries/{id}");
+        let get = request_as(&a, &bob, "GET", &path, json!(null)).await.0;
+        assert_eq!(
+            get,
+            if i == 1 || i == 2 {
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            }
+        );
+        if i != 2 {
+            for method in ["PUT", "DELETE"] {
+                assert_eq!(
+                    request_as(
+                        &a,
+                        &bob,
+                        method,
+                        &path,
+                        json!({"name":"stolen","sql":"SELECT 2","shared":false})
+                    )
+                    .await
+                    .0,
+                    StatusCode::FORBIDDEN
+                );
+            }
+        }
+    }
+    let path = format!("/v1/saved-queries/{}", ids[0]);
+    assert_eq!(
+        request_as(
+            &a,
+            &alice,
+            "PUT",
+            &path,
+            json!({"name":"renamed","sql":"SELECT 2","shared":true})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&a, "DELETE", &path, json!(null)).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(&a, "GET", &path, json!(null)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_log WHERE action LIKE 'saved_query.%'"
+        )
+        .fetch_one(&f.pool)
+        .await
+        .unwrap(),
+        6
+    );
+    drop(a);
+    f.close().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn phase2_cancel_owner_admin_and_registry_cleanup() {
+    let f = Fixture::new().await;
+    let sql = crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap();
+    let a = api::router(api::App {
+        pool: f.pool.clone(),
+        sql: sql.clone(),
+        events: f.events.clone(),
+        backups: backup::Backups::new(f.config.clone()),
+        started: Instant::now(),
+    });
+    let role = access_role(&a, "cancellers").await;
+    access_grant(&a, &role, "source", "source", "read").await;
+    let (_, owner) = access_user(&a, "owner", &[&role]).await;
+    let (_, other) = access_user(&a, "other", &[&role]).await;
+    for canceller in [&owner, "good-token"] {
+        let id = uuid::Uuid::new_v4();
+        let router = a.clone();
+        let token = owner.clone();
+        let query = tokio::spawn(async move {
+            request_as(&router,&token,"POST","/v1/sql",json!({"query_id":id.to_string(),"query":"SELECT sum(value) FROM generate_series(1, 1000000000000)"})).await
+        });
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if sql.running.lock().unwrap().contains_key(&id) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let path = format!("/v1/sql/cancel/{id}");
+        assert_eq!(
+            request_as(&a, &other, "POST", &path, json!(null)).await.0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            request_as(&a, canceller, "POST", &path, json!(null))
+                .await
+                .0,
+            StatusCode::NO_CONTENT
+        );
+        let (s, v) = tokio::time::timeout(Duration::from_secs(5), query)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(s, StatusCode::CONFLICT, "{v}");
+        assert_eq!(v, json!({"error":"cancelled"}));
+        assert!(sql.running.lock().unwrap().is_empty());
+        assert_eq!(
+            request_as(&a, &owner, "POST", &path, json!(null)).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    let id = store::id();
+    assert_eq!(
+        request_as(
+            &a,
+            &owner,
+            "POST",
+            "/v1/sql",
+            json!({"query_id":id,"query":"SELECT 1"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert!(sql.running.lock().unwrap().is_empty());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log WHERE action='sql.cancel'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap(),
+        2
+    );
+    drop(a);
+    drop(sql);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn phase2_explorer_count_budget_and_empty_exports() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    create_model(
+        &a,
+        "large_view",
+        "SELECT value FROM generate_series(1, 1000000000000) WHERE value % 2 = 0",
+        "view",
+        "manual",
+    )
+    .await;
+    let (s, v) = request(
+        &a,
+        "POST",
+        "/v1/explorer/rows",
+        json!({"schema":"models","table":"large_view","limit":1}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], json!([[2]]));
+    assert_eq!(v["total_exact"], false);
+    for format in ["csv", "parquet"] {
+        let mut q = explorer_body();
+        q["filters"] = json!([{"column":"id","op":"lt","value":0}]);
+        q["format"] = json!(format);
+        let bytes = export_bytes(&a, "good-token", q).await;
+        if format == "csv" {
+            assert_eq!(String::from_utf8(bytes).unwrap().trim(), "id,name");
+        } else {
+            let path = f.dir.join("empty.parquet");
+            std::fs::write(&path, bytes).unwrap();
+            let builder =
+                datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+                    std::fs::File::open(path).unwrap(),
+                )
+                .unwrap();
+            assert_eq!(builder.schema().fields().len(), 2);
+            assert_eq!(builder.metadata().file_metadata().num_rows(), 0);
+        }
+    }
+    let guard = tokio::time::timeout(Duration::from_secs(2), crate::sql::SNAPSHOTS.write())
+        .await
+        .unwrap();
+    drop(guard);
+    drop(a);
+    f.close().await;
+}

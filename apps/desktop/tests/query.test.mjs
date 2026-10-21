@@ -25,3 +25,19 @@ try {
   await client.models(); assert.equal(reads,3);
 } finally { cache.clear(); }
 console.log('Query reads deduplicate/cache, mutations invalidate, SQL remains uncached, and connection cache clearing reloads data.');
+// Regression: a view's own query key must differ from the proxy's cache key, otherwise
+// fetchQuery inside the view's queryFn awaits itself and never settles (SQL catalog panel).
+{
+  const deadlockCache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const proxied = queryApi({ sqlTables: async () => ({ tables: [{ schema: 's', name: 't', columns: [] }] }) }, deadlockCache);
+  const settled = await Promise.race([
+    deadlockCache.fetchQuery({
+      queryKey: ['engine', 'catalog', 'sql-workspace-tables'],
+      queryFn: () => proxied.sqlTables(),
+    }),
+    new Promise((resolve) => setTimeout(() => resolve('timeout'), 1000)),
+  ]);
+  assert.notEqual(settled, 'timeout');
+  assert.equal(settled.tables.length, 1);
+  console.log('SQL catalog query key does not deadlock with the client cache.');
+}

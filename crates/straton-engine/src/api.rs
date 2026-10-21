@@ -20,8 +20,11 @@ use sqlx::{Row, SqlitePool};
 use std::time::Instant;
 use straton_core::{IncrementalStyle, Job, SourceKind};
 mod access_api;
+mod explorer_api;
 mod models_api;
+mod saved_queries_api;
 mod security_api;
+mod storage_api;
 
 #[derive(Clone)]
 pub struct App {
@@ -34,11 +37,15 @@ pub struct App {
 pub fn router(app: App) -> Router {
     Router::new()
         .merge(access_api::routes())
+        .merge(explorer_api::routes())
+        .merge(saved_queries_api::routes())
+        .merge(storage_api::routes())
         .merge(models_api::routes())
         .merge(security_api::routes())
         .route("/v1/me", get(me))
         .route("/v1/status", get(status))
         .route("/v1/sql", post(sql_query))
+        .route("/v1/sql/cancel/{query_id}", post(sql_cancel))
         .route("/v1/sql/explain", post(sql_explain))
         .route("/v1/sql/tables", get(sql_tables))
         .route("/v1/sources", get(sources).post(create_source))
@@ -90,7 +97,12 @@ async fn auth(State(app): State<App>, mut req: Request<axum::body::Body>, next: 
         || path.starts_with("/v1/models")
     {
         true
-    } else if path.starts_with("/v1/sql") || path == "/v1/datamap" {
+    } else if path.starts_with("/v1/sql")
+        || path.starts_with("/v1/explorer")
+        || path.starts_with("/v1/saved-queries")
+        || path == "/v1/storage"
+        || path == "/v1/datamap"
+    {
         p.has("read")
     } else if path.starts_with("/v1/jobs") || path.starts_with("/v1/runs") {
         p.has("sync_admin")
@@ -888,13 +900,14 @@ impl From<crate::sql::Error> for ApiError {
 struct SqlQuery {
     query: String,
     limit: Option<usize>,
+    query_id: Option<String>,
 }
 async fn sql_query(
     State(mut a): State<App>,
     Extension(p): Extension<Principal>,
     Json(q): Json<SqlQuery>,
 ) -> ApiResult<Json<Value>> {
-    a.sql = a.sql.for_principal(p);
+    a.sql = a.sql.for_principal(p.clone());
     let limit = q.limit.unwrap_or(1000);
     if limit > 1000 {
         a.sql
@@ -902,7 +915,31 @@ async fn sql_query(
             .await?;
         return Err(bad("SQL preview limit must be at most 1000"));
     }
-    let result = a.sql.query(&q.query).await?;
+    let id = q
+        .query_id
+        .as_deref()
+        .map(uuid::Uuid::try_parse)
+        .transpose()
+        .map_err(|_| bad("query_id must be a UUID"))?
+        .unwrap_or_else(uuid::Uuid::new_v4);
+    let (handle, registration) = futures::future::AbortHandle::new_pair();
+    {
+        let mut running = a.sql.running.lock().unwrap();
+        if running.contains_key(&id) {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "query_id is already running".into(),
+            ));
+        }
+        running.insert(id, (p.user.id.clone(), handle));
+    }
+    let guard = QueryGuard {
+        sql: a.sql.clone(),
+        id,
+    };
+    let result = futures::future::Abortable::new(a.sql.query(&q.query), registration).await;
+    drop(guard);
+    let result = result.map_err(|_| ApiError(StatusCode::CONFLICT, "cancelled".into()))??;
     Ok(Json(crate::sql::preview(&result, limit)?))
 }
 #[derive(Deserialize)]
@@ -1065,4 +1102,38 @@ async fn require_dataset_admin(pool: &SqlitePool, p: &Principal, id: &str) -> Ap
         },
     )
     .map_err(|_| forbidden())
+}
+
+struct QueryGuard {
+    sql: crate::sql::Sql,
+    id: uuid::Uuid,
+}
+impl Drop for QueryGuard {
+    fn drop(&mut self) {
+        if let Some((_, handle)) = self.sql.running.lock().unwrap().remove(&self.id) {
+            handle.abort();
+        }
+    }
+}
+async fn sql_cancel(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let id = uuid::Uuid::try_parse(&id).map_err(|_| bad("query_id must be a UUID"))?;
+    let handle = {
+        let running = a.sql.running.lock().unwrap();
+        let (owner, handle) = running
+            .get(&id)
+            .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "query not found".into()))?;
+        if owner != &p.user.id && !p.admin() {
+            return Err(forbidden());
+        }
+        handle.clone()
+    };
+    let mut tx = a.pool.begin().await?;
+    store::audit(&mut tx, "sql.cancel", &id.to_string(), "").await?;
+    tx.commit().await?;
+    handle.abort();
+    Ok(StatusCode::NO_CONTENT)
 }

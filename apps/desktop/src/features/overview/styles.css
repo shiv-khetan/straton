@@ -85,7 +85,7 @@
   .kpi-glyph {
     @apply inline-grid;
     place-items: center;
-    @apply rounded-full;
+    @apply rounded-sm;
     width: 20px;
     height: 20px;
     @apply shrink-0;
@@ -208,5 +208,96 @@
   }
   .chart-legend {
     @apply text-caption;
+  }
+}
+
+@layer components {
+  .overview-core {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    gap: 32px;
+    margin: 24px 0 32px;
+  }
+  .overview-core section,
+  .failed-jobs {
+    min-width: 0;
+  }
+  .overview-core h2,
+  .failed-jobs h2 {
+    font-size: var(--headline-md);
+    margin-bottom: 16px;
+  }
+  .section-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 12px;
+  }
+  .section-toolbar h2 {
+    margin: 0;
+  }
+  .overview-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+    min-width: 0;
+  }
+  .overview-row > span:first-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .overview-row small {
+    display: block;
+    color: var(--ink-3);
+    padding-top: 4px;
+  }
+  .recent-query {
+    min-width: 0;
+    justify-content: flex-start;
+    flex: 1;
+  }
+  .recent-query code {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .storage-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 0;
+  }
+  .storage-row > span {
+    width: 120px;
+    flex-shrink: 0;
+  }
+  .storage-row meter {
+    flex: 1;
+    height: 8px;
+    min-width: 40px;
+  }
+  .storage-row meter::-webkit-meter-bar {
+    background: var(--panel);
+    border: 0;
+  }
+  .storage-row meter::-webkit-meter-optimum-value {
+    background: var(--mark);
+  }
+  .storage-row code {
+    width: 90px;
+    text-align: right;
+  }
+  .failed-jobs {
+    margin: 24px 0 32px;
+  }
+  @media (max-width: 900px) {
+    .overview-core {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 24px;
+    }
   }
 }

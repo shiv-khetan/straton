@@ -183,7 +183,7 @@ export function TitleBar({
       </div>
       <Button
         variant="ghost"
-        className="ml-auto h-8 w-56 justify-start rounded-full border border-line bg-panel px-3 text-ink-3 hover:bg-panel-2 max-[850px]:w-44 max-[680px]:w-8 max-[680px]:px-2"
+        className="ml-auto h-8 w-56 justify-start rounded-sm border border-line bg-panel px-3 text-ink-3 hover:bg-panel-2 max-[850px]:w-44 max-[680px]:w-8 max-[680px]:px-2"
         onClick={onSearch}
         aria-label="Search workspace (Ctrl or Command K)"
       >

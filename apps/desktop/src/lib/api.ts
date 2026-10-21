@@ -18,6 +18,72 @@ export interface SqlResult {
   truncated_preview: boolean;
   elapsed_ms: number;
 }
+export type FilterOp =
+  | 'eq'
+  | 'ne'
+  | 'lt'
+  | 'lte'
+  | 'gt'
+  | 'gte'
+  | 'contains'
+  | 'starts_with'
+  | 'is_null'
+  | 'not_null'
+  | 'in';
+export interface ExplorerFilter {
+  column: string;
+  op: FilterOp;
+  value?: SqlCell | SqlCell[];
+}
+export interface ExplorerRequest {
+  schema: string;
+  table: string;
+  columns?: string[];
+  sort: { column: string; dir: 'asc' | 'desc' }[];
+  filters: ExplorerFilter[];
+  search?: string;
+  limit: number;
+  offset: number;
+}
+export interface ExplorerRows {
+  columns: SqlColumn[];
+  rows: SqlCell[][];
+  offset: number;
+  limit: number;
+  total: number;
+  total_exact: boolean;
+}
+export interface ExplorerTree {
+  sources: {
+    source_id: string;
+    name: string;
+    kind: SourceKind;
+    schemas: { name: string; tables: Dataset[] }[];
+  }[];
+}
+export interface SavedQuery {
+  id: string;
+  owner_id: string;
+  name: string;
+  sql: string;
+  shared: boolean;
+  created_at: number;
+  updated_at: number;
+}
+export type SavedQueryInput = Pick<SavedQuery, 'name' | 'sql' | 'shared'>;
+export interface StorageUsage {
+  total_bytes: number;
+  state_db_bytes: number;
+  backups_bytes: number;
+  lake_bytes: number;
+  models_bytes: number;
+  sources: {
+    source_id: string;
+    name: string;
+    bytes: number;
+    datasets: { dataset_id: string; name: string; bytes: number; snapshot: string | null }[];
+  }[];
+}
 export interface SqlExplain {
   logical: string;
   physical: string;
@@ -239,7 +305,12 @@ export function normalizeUrl(value: string): string {
 }
 const idPath = (id: string) => encodeURIComponent(id);
 export function api(connection: Connection) {
-  async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  async function request<T>(
+    path: string,
+    method = 'GET',
+    body?: unknown,
+    binary = false,
+  ): Promise<T> {
     const response = await fetch(connection.url + path, {
       method,
       headers: {
@@ -256,6 +327,7 @@ export function api(connection: Connection) {
     }
     if (response.status === 204 || (response.status === 202 && path.endsWith('/cancel')))
       return undefined as T;
+    if (binary) return response.arrayBuffer() as Promise<T>;
     return response.json() as Promise<T>;
   }
   return {
@@ -314,8 +386,21 @@ export function api(connection: Connection) {
         dataset_id,
         predicate,
       }),
-    sqlQuery: (query: string, limit = 1000) =>
-      request<SqlResult>('/v1/sql', 'POST', { query, limit }),
+    explorerTree: () => request<ExplorerTree>('/v1/explorer/tree'),
+    explorerRows: (body: ExplorerRequest) =>
+      request<ExplorerRows>('/v1/explorer/rows', 'POST', body),
+    explorerExport: (body: ExplorerRequest & { format: 'csv' | 'parquet'; max_rows?: number }) =>
+      request<ArrayBuffer>('/v1/explorer/export', 'POST', body, true),
+    storage: () => request<StorageUsage>('/v1/storage'),
+    savedQueries: () => request<SavedQuery[]>('/v1/saved-queries'),
+    createSavedQuery: (body: SavedQueryInput) =>
+      request<SavedQuery>('/v1/saved-queries', 'POST', body),
+    updateSavedQuery: (id: string, body: SavedQueryInput) =>
+      request<SavedQuery>('/v1/saved-queries/' + idPath(id), 'PUT', body),
+    deleteSavedQuery: (id: string) => request<void>('/v1/saved-queries/' + idPath(id), 'DELETE'),
+    cancelSql: (id: string) => request<void>('/v1/sql/cancel/' + idPath(id), 'POST'),
+    sqlQuery: (query: string, limit = 1000, query_id?: string) =>
+      request<SqlResult>('/v1/sql', 'POST', { query, limit, ...(query_id ? { query_id } : {}) }),
     sqlExplain: (query: string) => request<SqlExplain>('/v1/sql/explain', 'POST', { query }),
     sqlTables: () => request<{ tables: SqlTable[] }>('/v1/sql/tables'),
     health: () => request<{ ok: boolean }>('/health'),

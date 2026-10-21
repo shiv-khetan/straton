@@ -7,6 +7,7 @@ import {
   TableBody,
   TableCell,
 } from '@/components/ui/table';
+import { SourceHealth, ActiveWork, RecentQueries, Storage } from './CoreOverview';
 import { useId, useState } from 'react';
 import type { Dataset, Job, Run, Status } from '@/lib/api';
 import {
@@ -280,7 +281,21 @@ export default function Dashboard({
   navigate,
   events,
   canNavigate,
+  client,
+  me,
+  sources,
+  models,
+  scope,
+  readOnly,
+  onQuery,
 }: {
+  client: import('@/lib/api').Api;
+  me: import('@/lib/api').Me;
+  sources: import('@/lib/api').MapSource[];
+  models: import('@/lib/api').Model[];
+  scope: string;
+  readOnly: boolean;
+  onQuery: (sql: string) => void;
   datasets: Dataset[];
   runs: Run[];
   jobs: Job[];
@@ -361,6 +376,17 @@ export default function Dashboard({
           onClick={() => navigate('Backups')}
         />
       </div>
+      <div className="overview-core">
+        <SourceHealth
+          sources={sources}
+          jobs={jobs}
+          runs={runs}
+          client={client}
+          me={me}
+          readOnly={readOnly}
+        />
+        <ActiveWork runs={runs} jobs={jobs} models={models} />
+      </div>
       <div className="dashboard-grid">
         <Tray title="Sync activity">
           {canNavigate('Jobs') ? (
@@ -369,30 +395,9 @@ export default function Dashboard({
             <p className="hint">Run history requires sync admin access.</p>
           )}
         </Tray>
-        <Tray title="Events and failures">
+        <Tray title="Recent activity">
           <p className="hint">The latest from your workspace</p>
           <div className="activity-list">
-            {[...runs]
-              .sort(
-                (a, b) =>
-                  Number(b.state === 'failed') - Number(a.state === 'failed') ||
-                  b.available_at - a.available_at,
-              )
-              .slice(0, 5)
-              .map((run) => (
-                <div className="activity-item" key={run.id}>
-                  <span className={'icon-tile tone-' + stateTone(run.state)}>
-                    <Icon name={run.state === 'failed' ? 'warning' : 'jobs'} />
-                  </span>
-                  <div>
-                    <strong>{jobs.find((job) => job.id === run.job_id)?.name ?? 'Sync run'}</strong>
-                    <small title={new Date(run.available_at * 1000).toLocaleString()}>
-                      {relativeTime(run.available_at * 1000)}
-                    </small>
-                  </div>
-                  <Pill tone={stateTone(run.state)}>{run.state}</Pill>
-                </div>
-              ))}
             {events.slice(0, 4).map((event, i) => (
               <div className="activity-item" key={'event-' + i}>
                 <Icon name="console" />
@@ -403,16 +408,49 @@ export default function Dashboard({
                 {event.state && <Pill tone={stateTone(event.state)}>{event.state}</Pill>}
               </div>
             ))}
-            {!runs.length && !events.length && (
+            {!events.length && (
               <EmptyState icon="clock">
                 {canNavigate('Jobs')
-                  ? 'Your sync activity will appear after the first run.'
+                  ? 'Live engine events will appear here as work progresses.'
                   : 'Live engine events will appear here.'}
               </EmptyState>
             )}
           </div>
         </Tray>
       </div>
+      <div className="overview-core">
+        <RecentQueries scope={scope} onQuery={onQuery} />
+        {me.privileges.read || me.privileges.admin ? (
+          <Storage client={client} readOnly={readOnly} />
+        ) : (
+          <section>
+            <h2>Storage usage</h2>
+            <p className="hint">Storage usage requires read access.</p>
+          </section>
+        )}
+      </div>
+      <section className="failed-jobs">
+        <h2>Failed jobs</h2>
+        {runs
+          .filter((r) => r.state === 'failed')
+          .slice(0, 5)
+          .map((r) => (
+            <div className="overview-row" key={r.id}>
+              <span>
+                {jobs.find((j) => j.id === r.job_id)?.name ?? r.job_id}
+                <small>{r.error ?? 'Run failed'}</small>
+              </span>
+              <Pill tone="danger">Failed</Pill>
+            </div>
+          ))}
+        {!runs.some((r) => r.state === 'failed') && (
+          <p className="hint">
+            {canNavigate('Jobs')
+              ? 'No failed runs in the loaded history.'
+              : 'Job history requires sync admin access.'}
+          </p>
+        )}
+      </section>
       <Tray title="Latest runs" actions={<Pill>{runs.length} total</Pill>}>
         {canNavigate('Jobs') ? (
           children

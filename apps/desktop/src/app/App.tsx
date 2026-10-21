@@ -4,7 +4,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Star } from 'lucide-react';
 import { api, normalizeUrl, subscribe } from '@/lib/api';
 import type { Connection, Dataset, EngineEvent, Source } from '@/lib/api';
-import SqlView from '@/features/sql/SqlWorkspace';
+
+import Explorer from '@/features/explorer/Explorer';
+import QueryHistory from '@/features/sql/QueryHistory';
+import { useSqlWorkspace } from '@/stores/sql-workspace';
 import Models from '@/features/transformations/Transformations';
 import Access from '@/features/access/Access';
 import BackupsView from '@/features/security/Backups';
@@ -39,6 +42,7 @@ import type { LibraryEntry } from '@/stores/library';
 import { LibraryPage } from '@/features/library/LibraryPage';
 import { LaterPage } from '@/features/library/LaterPage';
 import { safeStorage } from '@/stores/storage';
+const SqlView = lazy(() => import('@/features/sql/SqlWorkspace'));
 const DataMapView = lazy(() => import('@/features/lineage/Lineage'));
 export default function App() {
   return (
@@ -67,7 +71,8 @@ function AppContent() {
   const [jobStateFilter, setJobStateFilter] = useState('');
   const [sheet, setSheet] = useState<'source' | 'job' | null>(null);
   const [jobSeed, setJobSeed] = useState<Dataset | null>(null);
-  const [querySeed, setQuerySeed] = useState('SELECT 1;');
+  const querySeed = 'SELECT 1;';
+  const setQuerySeed = (sql: string) => useSqlWorkspace.getState().add(sql);
   const [selection, setSelection] = useState('');
   const [selectionId, setSelectionId] = useState('');
   const selectEntity = useCallback((name: string, id = '') => {
@@ -111,7 +116,6 @@ function AppContent() {
     setLive(next ? 'Connecting' : 'Disconnected');
     selectEntity('');
     setMapFocus('');
-    setQuerySeed('SELECT 1;');
     setModelRequest(null);
     setSheet(null);
     setConnection(next);
@@ -517,7 +521,7 @@ function AppContent() {
           <div
             className={
               'page-content' +
-              (graphPage || page === 'SQL' ? ' workbench-page' : '') +
+              (graphPage || page === 'SQL' || page === 'Explorer' ? ' workbench-page' : '') +
               (page === 'Connect' ? ' connect-page' : '')
             }
           >
@@ -553,6 +557,16 @@ function AppContent() {
               )}
               {client && !loading && page === 'Dashboard' && (
                 <Dashboard
+                  client={client}
+                  me={me!}
+                  sources={map.nodes.filter((n) => n.type === 'source')}
+                  models={models}
+                  scope={scope}
+                  readOnly={!online}
+                  onQuery={(sql) => {
+                    useSqlWorkspace.getState().add(sql);
+                    setPage('SQL');
+                  }}
                   backups={backups}
                   datasets={datasets}
                   runs={runs}
@@ -665,15 +679,39 @@ function AppContent() {
                   busy={busy}
                 />
               )}
-              {client && !loading && can(me, 'read') && page === 'SQL' && (
-                <SqlView
+              {client && !loading && can(me, 'read') && page === 'Explorer' && (
+                <Explorer
                   client={client}
-                  revision={revision}
-                  initialQuery={querySeed}
-                  consoleCollapsed={consoleCollapsed}
-                  onConsoleCollapsed={setConsoleCollapsed}
+                  scope={scope}
                   readOnly={!online}
+                  onQuery={(sql) => {
+                    useSqlWorkspace.getState().add(sql);
+                    setPage('SQL');
+                  }}
                 />
+              )}
+              {can(me, 'read') && page === 'Query History' && (
+                <QueryHistory
+                  scope={scope}
+                  onOpen={(sql) => {
+                    useSqlWorkspace.getState().add(sql);
+                    setPage('SQL');
+                  }}
+                />
+              )}
+              {client && !loading && can(me, 'read') && page === 'SQL' && (
+                <Suspense fallback={<Skeleton label="Loading SQL Workspace…" />}>
+                  <SqlView
+                    scope={scope}
+                    me={me!}
+                    client={client}
+                    revision={revision}
+                    initialQuery={querySeed}
+                    consoleCollapsed={consoleCollapsed}
+                    onConsoleCollapsed={setConsoleCollapsed}
+                    readOnly={!online}
+                  />
+                </Suspense>
               )}
               {client && !loading && can(me, 'admin') && page === 'Access' && (
                 <Access client={client} sources={sources} datasets={datasets} onChanged={refresh} />

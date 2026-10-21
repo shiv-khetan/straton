@@ -1,3 +1,4 @@
+import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
@@ -185,8 +186,8 @@ export default function Sources({
                             <Button
                               variant="outline"
                               disabled={busy}
-                              onClick={() => {
-                                if (window.confirm('Delete source “' + source.name + '”?'))
+                              onClick={async () => {
+                                if (await confirmDialog('Delete source “' + source.name + '”?'))
                                   void action(
                                     () => client.deleteSource(source.id),
                                     'Source deleted',
