@@ -34,6 +34,42 @@ pub async fn state(
     store::audit(&mut tx, &format!("run.{actual}"), id, error.unwrap_or("")).await?;
     tx.commit().await?;
     event(events, id, &actual);
+    if actual == "failed" {
+        crate::notify::emit(
+            pool,
+            events,
+            crate::notify::Notice {
+                severity: "error",
+                kind: "run.failed",
+                title: "Job run failed",
+                entity_kind: "run",
+                entity_id: id,
+                user_id: None,
+            },
+        )
+        .await?;
+        let builtin: bool = sqlx::query_scalar(
+            "SELECT j.builtin FROM runs r JOIN jobs j ON j.id=r.job_id WHERE r.id=?",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+        if builtin {
+            crate::notify::emit(
+                pool,
+                events,
+                crate::notify::Notice {
+                    severity: "error",
+                    kind: "backup.failed",
+                    title: "Backup failed",
+                    entity_kind: "run",
+                    entity_id: id,
+                    user_id: None,
+                },
+            )
+            .await?;
+        }
+    }
     Ok(())
 }
 pub async fn recover(pool: &SqlitePool, events: &Events, max_attempts: u32) -> Result<()> {

@@ -20,8 +20,14 @@ use sqlx::{Row, SqlitePool};
 use std::time::Instant;
 use straton_core::{IncrementalStyle, Job, SourceKind};
 mod access_api;
+mod activity_api;
+mod analytics_api;
 mod explorer_api;
+mod lineage_api;
 mod models_api;
+mod notifications_api;
+mod pipelines_api;
+mod quality_api;
 mod saved_queries_api;
 mod security_api;
 mod storage_api;
@@ -37,6 +43,12 @@ pub struct App {
 pub fn router(app: App) -> Router {
     Router::new()
         .merge(access_api::routes())
+        .merge(activity_api::routes())
+        .merge(analytics_api::routes())
+        .merge(lineage_api::routes())
+        .merge(notifications_api::routes())
+        .merge(pipelines_api::routes())
+        .merge(quality_api::routes())
         .merge(explorer_api::routes())
         .merge(saved_queries_api::routes())
         .merge(storage_api::routes())
@@ -95,11 +107,19 @@ async fn auth(State(app): State<App>, mut req: Request<axum::body::Body>, next: 
         || path == "/v1/status"
         || path == "/v1/events"
         || path.starts_with("/v1/models")
+        || path.starts_with("/v1/pipelines")
+        || path.starts_with("/v1/pipeline-runs")
+        || path.starts_with("/v1/quality")
+        || path.starts_with("/v1/notifications")
+        || path == "/v1/activity"
     {
         true
     } else if path.starts_with("/v1/sql")
         || path.starts_with("/v1/explorer")
         || path.starts_with("/v1/saved-queries")
+        || path.starts_with("/v1/charts")
+        || path.starts_with("/v1/dashboards")
+        || path.starts_with("/v1/lineage/")
         || path == "/v1/storage"
         || path == "/v1/datamap"
     {
@@ -623,7 +643,9 @@ async fn backups(State(a): State<App>) -> ApiResult<Json<Value>> {
 async fn backup(State(a): State<App>) -> ApiResult<(StatusCode, Json<Value>)> {
     Ok((
         StatusCode::CREATED,
-        Json(json!({"file":a.backups.create(&a.pool).await?})),
+        Json(
+            json!({"file": match a.backups.create(&a.pool).await { Ok(file)=>file, Err(e)=>{ crate::notify::emit(&a.pool,&a.events,crate::notify::Notice{severity:"error",kind:"backup.failed",title:"Backup failed",entity_kind:"backup",entity_id:"",user_id:None}).await?; return Err(e.into()); } }}),
+        ),
     ))
 }
 async fn events(
@@ -636,7 +658,12 @@ async fn events(
         loop {
             tokio::select! {
                 event=rx.recv() => match event {
-                    Ok(value) => if socket.send(axum::extract::ws::Message::Text((if p.admin(){value}else{json!({"type":"resync_required"})}).to_string().into())).await.is_err() { break; },
+                    Ok(value) => {
+                        let notification=value["type"]=="notification";
+                        let visible=if value["user_id"].is_null(){p.admin()}else{value["user_id"]==p.user.id};
+                        if notification&&!visible{continue}
+                        if socket.send(axum::extract::ws::Message::Text((if p.admin()||notification{value}else{json!({"type":"resync_required"})}).to_string().into())).await.is_err() { break; }
+                    },
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         if socket.send(axum::extract::ws::Message::Text(json!({"type":"resync_required"}).to_string().into())).await.is_err() { break; }
                     },

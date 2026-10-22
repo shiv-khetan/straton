@@ -47,5 +47,7 @@ async fn verify(
     Extension(p): Extension<Principal>,
 ) -> ApiResult<Json<Value>> {
     admin(&p)?;
-    Ok(Json(json!(store::verify_audit(&a.pool).await?)))
+    Ok(Json(json!(
+        crate::notify::verify_audit(&a.pool, &a.events).await?
+    )))
 }

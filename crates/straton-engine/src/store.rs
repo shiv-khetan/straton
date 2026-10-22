@@ -40,8 +40,24 @@ pub async fn audit(
 ) -> Result<()> {
     let mut actor = ACTOR.try_with(Clone::clone).ok();
     // Worker and recovery tasks retain the initiator recorded by the original enqueue.
-    if actor.is_none() && action.starts_with("run.") {
-        actor=sqlx::query_scalar::<_,Option<String>>("SELECT principal_id FROM audit_log WHERE action='run.queued' AND entity_id=? ORDER BY id LIMIT 1").bind(entity).fetch_optional(&mut **tx).await?.flatten();
+    if actor.is_none()
+        && (action.starts_with("run.")
+            || action.starts_with("pipeline.")
+            || action.starts_with("pipeline_node."))
+    {
+        let queued = if action.starts_with("run.") {
+            "run.queued"
+        } else {
+            "pipeline.queued"
+        };
+        actor = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT principal_id FROM audit_log WHERE action=? AND entity_id=? ORDER BY id LIMIT 1",
+        )
+        .bind(queued)
+        .bind(entity)
+        .fetch_optional(&mut **tx)
+        .await?
+        .flatten();
     }
     audit_as(tx, action, entity, detail, actor.as_deref()).await
 }

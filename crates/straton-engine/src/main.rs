@@ -6,8 +6,11 @@ mod config;
 mod credentials;
 mod keys;
 mod models;
+mod notify;
 mod optimizer;
+mod pipeline;
 mod policies;
+mod quality;
 mod runner;
 mod scheduler;
 mod security;
@@ -59,7 +62,8 @@ async fn main() -> Result<()> {
         Command::VerifyAudit => {
             let _lock = security::lock(&config.data_dir)?;
             let pool = store::open(&config.data_dir).await?;
-            let result = store::verify_audit(&pool).await?;
+            let (events, _) = tokio::sync::broadcast::channel(256);
+            let result = notify::verify_audit(&pool, &events).await?;
             println!("{}", serde_json::to_string(&result)?);
             pool.close().await;
             anyhow::ensure!(result.ok, "audit chain verification failed");
@@ -88,8 +92,10 @@ async fn run(config: config::Config) -> Result<()> {
     keys::initialize(&pool).await?;
     access::bootstrap(&pool, secrecy::ExposeSecret::expose_secret(token.as_ref())).await?;
     let (events, _) = tokio::sync::broadcast::channel(256);
+    notify::verify_audit(&pool, &events).await?;
     let backups = backup::Backups::new(config.clone());
     scheduler::seed_backup(&pool, &config.backup.cron).await?;
+    pipeline::recover(&pool, &events).await?;
     runner::recover(&pool, &events, config.max_attempts).await?;
     let mut runner = runner::Runner::new(
         pool.clone(),
@@ -101,7 +107,7 @@ async fn run(config: config::Config) -> Result<()> {
     let mut sql_server = sql::wire::Server::start(sql.clone(), token.clone(), &config).await?;
     let router = api::router(api::App {
         pool: pool.clone(),
-        sql,
+        sql: sql.clone(),
         events: events.clone(),
         backups,
         started: Instant::now(),
@@ -139,7 +145,7 @@ async fn run(config: config::Config) -> Result<()> {
             result = &mut sql_server.task => { break match result { Ok(result) => result, Err(e) => Err(e.into()) }; },
             result = &mut server => { break match result { Ok(Ok(())) => Ok(()), Ok(Err(e)) => Err(e.into()), Err(e) => Err(e.into()) }; },
             _ = tick.tick() => {
-                match scheduler::tick(&pool).await {
+                match scheduler::tick(&pool, &sql, &events).await {
                     Ok(ids) => for id in ids { runner::event(&events,&id,"queued"); },
                     Err(e) => tracing::error!(error=%e,"scheduler tick failed"),
                 }

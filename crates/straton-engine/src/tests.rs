@@ -81,8 +81,27 @@ async fn scheduler_due_and_misfire_run_once() {
         .unwrap();
     sqlx::query("INSERT INTO jobs(id,name,source_id,dataset,cron,enabled,last_scheduled) VALUES('bad-job','Bad','source','test','invalid cron',1,0)")
         .execute(&f.pool).await.unwrap();
-    assert_eq!(scheduler::tick(&f.pool).await.unwrap().len(), 1);
-    assert!(scheduler::tick(&f.pool).await.unwrap().is_empty());
+    assert_eq!(
+        scheduler::tick(
+            &f.pool,
+            &crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap(),
+            &f.events
+        )
+        .await
+        .unwrap()
+        .len(),
+        1
+    );
+    assert!(
+        scheduler::tick(
+            &f.pool,
+            &crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap(),
+            &f.events
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM runs")
         .fetch_one(&f.pool)
         .await
@@ -3821,8 +3840,27 @@ async fn models_delete_recreate_never_reuses_old_output_and_cron_schedules() {
         .execute(&f.pool)
         .await
         .unwrap();
-    assert_eq!(scheduler::tick(&f.pool).await.unwrap().len(), 1);
-    assert!(scheduler::tick(&f.pool).await.unwrap().is_empty());
+    assert_eq!(
+        scheduler::tick(
+            &f.pool,
+            &crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap(),
+            &f.events
+        )
+        .await
+        .unwrap()
+        .len(),
+        1
+    );
+    assert!(
+        scheduler::tick(
+            &f.pool,
+            &crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap(),
+            &f.events
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
     let view = create_model(&a, "no_run", "SELECT * FROM app_db.users", "view", "manual").await;
     assert_eq!(
         request(&a, "POST", &format!("/v1/models/{view}/run"), json!(null))
@@ -4651,6 +4689,977 @@ async fn phase2_explorer_count_budget_and_empty_exports() {
         .await
         .unwrap();
     drop(guard);
+    drop(a);
+    f.close().await;
+}
+
+fn quality_input(
+    name: &str,
+    kind: &str,
+    dataset: &str,
+    column: Option<&str>,
+    config: serde_json::Value,
+) -> serde_json::Value {
+    json!({"name":name,"kind":kind,"dataset_id":dataset,"column_name":column,"config":config,"severity":"error","enabled":true})
+}
+async fn create_check(a: &axum::Router, q: serde_json::Value) -> String {
+    let (s, v) = request(a, "POST", "/v1/quality/checks", q).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    v["id"].as_str().unwrap().into()
+}
+#[tokio::test]
+async fn phase3_quality_all_kinds_scores_and_validation() {
+    let f = sql_fixture().await;
+    let input = sqlx::sqlite::SqlitePoolOptions::new()
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new().filename(f.dir.join("sql-input.db")),
+        )
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO users VALUES(3,NULL),(4,'Alice')")
+        .execute(&input)
+        .await
+        .unwrap();
+    input.close().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    for (kind, column, pass, fail) in [
+        ("not_null", Some("name"), json!({}), json!({})),
+        ("unique", Some("name"), json!({}), json!({})),
+        (
+            "range",
+            Some("id"),
+            json!({"min":1,"max":4}),
+            json!({"min":1,"max":1}),
+        ),
+        (
+            "freshness",
+            None,
+            json!({"max_age_seconds":3600}),
+            json!({"max_age_seconds":1}),
+        ),
+        (
+            "row_count",
+            None,
+            json!({"min":4,"max":4}),
+            json!({"min":5}),
+        ),
+        (
+            "custom_sql",
+            None,
+            json!({"sql":"SELECT * FROM app_db.users WHERE id<0"}),
+            json!({"sql":"SELECT * FROM app_db.users WHERE id=1"}),
+        ),
+    ] {
+        for (config, expected) in [(pass, "passed"), (fail, "failed")] {
+            let col = if expected == "passed" && ["not_null", "unique"].contains(&kind) {
+                Some("id")
+            } else {
+                column
+            };
+            let id = create_check(
+                &a,
+                quality_input(&format!("{kind}-{expected}"), kind, &did, col, config),
+            )
+            .await;
+            if kind == "freshness" && expected == "failed" {
+                sqlx::query("UPDATE datasets SET last_synced_at='2000-01-01T00:00:00Z' WHERE id=?")
+                    .bind(&did)
+                    .execute(&f.pool)
+                    .await
+                    .unwrap();
+            }
+            let (s, v) = request(
+                &a,
+                "POST",
+                &format!("/v1/quality/checks/{id}/run"),
+                json!(null),
+            )
+            .await;
+            assert_eq!(s, StatusCode::OK, "{kind}: {v}");
+            assert_eq!(v["status"], expected, "{kind}: {v}");
+            if kind == "not_null" && expected == "failed" {
+                assert_eq!(v["failing_rows"], 1);
+            }
+            if kind == "unique" && expected == "failed" {
+                assert_eq!(v["failing_rows"], 2);
+            }
+            assert!(!v.to_string().contains("Alice"));
+            let (_, history) = request(
+                &a,
+                "GET",
+                &format!("/v1/quality/checks/{id}/runs?limit=1"),
+                json!(null),
+            )
+            .await;
+            assert_eq!(history.as_array().unwrap().len(), 1);
+        }
+    }
+    let (_, v) = request(&a, "GET", "/v1/quality/summary", json!(null)).await;
+    assert_eq!(v["score"], 50.0);
+    assert_eq!(v["counts"], json!({"passed":6,"failed":6,"error":0}));
+    assert_eq!(v["datasets"][0]["score"], 50.0);
+    assert_eq!(v["daily"].as_array().unwrap().len(), 30);
+    assert_eq!(
+        request(&a, "GET", "/v1/quality/runs?limit=3", json!(null))
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    for q in [
+        quality_input("bad", "range", &did, Some("id"), json!({"min":5,"max":2})),
+        quality_input("bad", "not_null", &did, Some("missing"), json!({})),
+        quality_input(
+            "bad",
+            "custom_sql",
+            &did,
+            None,
+            json!({"sql":"DELETE FROM app_db.users"}),
+        ),
+        quality_input(
+            "bad",
+            "custom_sql",
+            &did,
+            None,
+            json!({"sql":"SELECT 1; SELECT 2"}),
+        ),
+    ] {
+        assert_eq!(
+            request(&a, "POST", "/v1/quality/checks", q).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let id = create_check(
+        &a,
+        quality_input("error", "not_null", &did, Some("id"), json!({})),
+    )
+    .await;
+    sqlx::query("UPDATE quality_checks SET column_name='missing' WHERE id=?")
+        .bind(&id)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        request(
+            &a,
+            "POST",
+            &format!("/v1/quality/checks/{id}/run"),
+            json!(null)
+        )
+        .await
+        .1["status"],
+        "error"
+    );
+    drop(a);
+    f.close().await;
+}
+fn pipeline_input(model: &str, check: &str) -> serde_json::Value {
+    json!({"name":"Flow","nodes":[{"node_id":"sync","kind":"sync","ref_id":"job"},{"node_id":"model","kind":"transform","ref_id":model},{"node_id":"check","kind":"validate","ref_id":check},{"node_id":"later","kind":"transform","ref_id":model}],"edges":[{"from_node":"sync","to_node":"model"},{"from_node":"model","to_node":"check"},{"from_node":"check","to_node":"later"}]})
+}
+async fn pipeline_done(
+    f: &Fixture,
+    a: &axum::Router,
+    id: &str,
+    dispatch: bool,
+) -> serde_json::Value {
+    let mut runner = runner::Runner::new(
+        f.pool.clone(),
+        f.events.clone(),
+        backup::Backups::new(f.config.clone()),
+        4,
+    );
+    let result = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if dispatch {
+                runner.dispatch().await.unwrap();
+            }
+            let (s, v) = request(a, "GET", &format!("/v1/pipeline-runs/{id}"), json!(null)).await;
+            assert_eq!(s, StatusCode::OK, "{v}");
+            if ["succeeded", "failed", "cancelled", "interrupted"]
+                .iter()
+                .any(|s| v["state"] == *s)
+            {
+                if v["state"] == "succeeded" || v["state"] == "failed" {
+                    let notified: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM notifications WHERE entity_id=?)",
+                    )
+                    .bind(id)
+                    .fetch_one(&f.pool)
+                    .await
+                    .unwrap();
+                    if !notified {
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
+                }
+                break v;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("pipeline completed");
+    runner.drain().await;
+    result
+}
+#[tokio::test]
+async fn phase3_pipeline_validation_execute_skip_warning_cancel_and_recovery() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let model = create_model(
+        &a,
+        "flow_model",
+        "SELECT * FROM app_db.users",
+        "table",
+        "manual",
+    )
+    .await;
+    let check=create_check(&a,json!({"name":"Built rows","model_id":model,"kind":"row_count","config":{"min":2,"max":2},"severity":"error"})).await;
+    let q = pipeline_input(&model, &check);
+    let mut invalid = q.clone();
+    invalid["edges"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"from_node":"later","to_node":"sync"}));
+    assert_eq!(
+        request(&a, "POST", "/v1/pipelines/validate", invalid.clone())
+            .await
+            .1["valid"],
+        false
+    );
+    let (s, v) = request(&a, "POST", "/v1/pipelines", invalid).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(v["valid"], false);
+    for variation in ["ref", "duplicate", "self", "edge", "missing_edge"] {
+        let mut invalid = q.clone();
+        match variation {
+            "ref" => invalid["nodes"][0]["ref_id"] = json!("missing"),
+            "duplicate" => invalid["nodes"][1]["node_id"] = json!("sync"),
+            "self" => invalid["edges"][0]["to_node"] = json!("sync"),
+            "edge" => {
+                let e = invalid["edges"][0].clone();
+                invalid["edges"].as_array_mut().unwrap().push(e);
+            }
+            _ => invalid["edges"][0]["to_node"] = json!("missing"),
+        };
+        assert_eq!(
+            request(&a, "POST", "/v1/pipelines/validate", invalid)
+                .await
+                .1["valid"],
+            false,
+            "{variation}"
+        );
+    }
+    let (s, v) = request(&a, "POST", "/v1/pipelines", q.clone()).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let id = v["id"].as_str().unwrap();
+    let (s, r) = request(&a, "POST", &format!("/v1/pipelines/{id}/run"), json!(null)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{r}");
+    let run = r["id"].as_str().unwrap();
+    assert_eq!(
+        request(&a, "POST", &format!("/v1/pipelines/{id}/run"), json!(null))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        request(&a, "PUT", &format!("/v1/pipelines/{id}"), q.clone())
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let done = pipeline_done(&f, &a, run, true).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert!(
+        done["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n["state"] == "succeeded")
+    );
+    sqlx::query("UPDATE quality_checks SET config=? WHERE id=?")
+        .bind(json!({"min":3}).to_string())
+        .bind(&check)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let (_, r) = request(&a, "POST", &format!("/v1/pipelines/{id}/run"), json!(null)).await;
+    let done = pipeline_done(&f, &a, r["id"].as_str().unwrap(), true).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert_eq!(
+        done["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["node_id"] == "later")
+            .unwrap()["state"],
+        "skipped"
+    );
+    sqlx::query("UPDATE quality_checks SET severity='warn' WHERE id=?")
+        .bind(&check)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let (_, r) = request(&a, "POST", &format!("/v1/pipelines/{id}/run"), json!(null)).await;
+    assert_eq!(
+        pipeline_done(&f, &a, r["id"].as_str().unwrap(), true).await["state"],
+        "succeeded"
+    );
+    let (_, r) = request(&a, "POST", &format!("/v1/pipelines/{id}/run"), json!(null)).await;
+    let run = r["id"].as_str().unwrap();
+    tokio::time::timeout(Duration::from_secs(3),async{loop{let child:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pipeline_run_nodes WHERE run_id=? AND child_run_id IS NOT NULL)").bind(run).fetch_one(&f.pool).await.unwrap();if child{break}tokio::time::sleep(Duration::from_millis(10)).await;}}).await.unwrap();
+    assert_eq!(
+        request(
+            &a,
+            "POST",
+            &format!("/v1/pipeline-runs/{run}/cancel"),
+            json!(null)
+        )
+        .await
+        .0,
+        StatusCode::ACCEPTED
+    );
+    let done = pipeline_done(&f, &a, run, false).await;
+    assert_eq!(done["state"], "cancelled");
+    assert!(
+        done["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n["state"] == "cancelled")
+    );
+    let cancelled:bool=sqlx::query_scalar("SELECT cancel_requested FROM runs WHERE id=(SELECT child_run_id FROM pipeline_run_nodes WHERE run_id=? AND child_run_id IS NOT NULL LIMIT 1)").bind(run).fetch_one(&f.pool).await.unwrap();
+    assert!(cancelled);
+    for state in ["queued", "running"] {
+        let mut tx = f.pool.begin().await.unwrap();
+        let run = crate::pipeline::enqueue(&mut tx, id, "manual")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        sqlx::query("UPDATE pipeline_runs SET state=? WHERE id=?")
+            .bind(state)
+            .bind(&run)
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        crate::pipeline::recover(&f.pool, &f.events).await.unwrap();
+        let done = pipeline_done(&f, &a, &run, false).await;
+        assert_eq!(done["state"], "interrupted");
+        assert!(
+            done["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|n| n["state"] == "cancelled")
+        );
+    }
+    assert_eq!(
+        request(
+            &a,
+            "GET",
+            &format!("/v1/pipelines/{id}/runs?limit=2"),
+            json!(null)
+        )
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .len(),
+        2
+    );
+    drop(a);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn phase3_analytics_access_ranges_drill_visibility_and_lineage() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    let role = access_role(&a, "chart-reader").await;
+    access_grant(&a, &role, "dataset", &did, "read").await;
+    let (_, token) = access_user(&a, "chart-user", &[&role]).await;
+    assert_eq!(
+        request(
+            &a,
+            "PUT",
+            &format!("/v1/datasets/{did}/row-filters/{role}"),
+            json!({"predicate":"id=1"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &a,
+            "PUT",
+            &format!("/v1/datasets/{did}/masks/{role}/name"),
+            json!({"kind":"redact"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (s, owned_check) = request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/quality/checks",
+        quality_input(
+            "Owner-scoped counts",
+            "row_count",
+            &did,
+            None,
+            json!({"min":1,"max":1}),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{owned_check}");
+    let (s, v) = request_as(
+        &a,
+        &token,
+        "POST",
+        &format!(
+            "/v1/quality/checks/{}/run",
+            owned_check["id"].as_str().unwrap()
+        ),
+        json!(null),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "passed");
+    // Row filter id=1 applies: the owner's check must not count hidden rows.
+    assert_eq!(v["observed"], 1.0);
+    let query = "SELECT id,name,CAST('2026-10-22T00:00:00' AS TIMESTAMP) AS at FROM app_db.users ORDER BY id";
+    let body = json!({"name":"Users","sql":query,"kind":"table","config":{"x":"id","y":["id"],"time_column":"at"},"shared":true});
+    let (s, chart) = request(&a, "POST", "/v1/charts", body.clone()).await;
+    assert_eq!(s, StatusCode::CREATED, "{chart}");
+    let id = chart["id"].as_str().unwrap();
+    let path = format!("/v1/charts/{id}/data");
+    let (s, v) = request_as(&a, &token, "POST", &path, json!({})).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(v["rows"][0][1], "***");
+    let (_, v) = request_as(
+        &a,
+        &token,
+        "POST",
+        &path,
+        json!({"from":"2027-01-01T00:00:00","to":"2027-02-01T00:00:00"}),
+    )
+    .await;
+    assert_eq!(v["rows"], json!([]));
+    let(s,v)=request_as(&a,&token,"POST","/v1/charts/preview",json!({"sql":query,"config":body["config"],"from":"2026-10-21T00:00:00","to":"2026-10-23T00:00:00"})).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"][0][1], "***");
+    let (_, v) = request_as(
+        &a,
+        &token,
+        "POST",
+        &format!("/v1/charts/{id}/drill"),
+        json!({"x_value":2}),
+    )
+    .await;
+    assert_eq!(v["rows"], json!([]));
+    let (s, v) = request_as(
+        &a,
+        &token,
+        "POST",
+        &format!("/v1/charts/{id}/drill"),
+        json!({"x_value":1}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"][0][1], "***");
+    assert_eq!(
+        request_as(&a, &token, "PUT", &format!("/v1/charts/{id}"), body.clone())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let(s,grouped)=request(&a,"POST","/v1/charts",json!({"name":"Grouped","sql":"SELECT name AS person,count(*) AS n FROM app_db.users GROUP BY name","kind":"bar","config":{"x":"person","y":["n"]},"shared":true})).await;
+    assert_eq!(s, StatusCode::CREATED, "{grouped}");
+    let (s, v) = request_as(
+        &a,
+        &token,
+        "POST",
+        &format!("/v1/charts/{}/drill", grouped["id"].as_str().unwrap()),
+        json!({"x_value":"***"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(
+        v["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["name"] == "id")
+    );
+    assert_eq!(v["rows"][0][1], "***");
+    let mut private = body.clone();
+    private["name"] = json!("Private");
+    private["shared"] = json!(false);
+    let (_, private) = request(&a, "POST", "/v1/charts", private).await;
+    let private_id = private["id"].as_str().unwrap();
+    assert_eq!(
+        request_as(
+            &a,
+            &token,
+            "GET",
+            &format!("/v1/charts/{private_id}"),
+            json!(null)
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let(s,dashboard)=request(&a,"POST","/v1/dashboards",json!({"name":"Dashboard","shared":true,"layout":[{"chart_id":id,"x":0,"y":0,"w":6,"h":3},{"chart_id":private_id,"x":6,"y":0,"w":6,"h":3}]})).await;
+    assert_eq!(s, StatusCode::CREATED, "{dashboard}");
+    let dashboard_id = dashboard["id"].as_str().unwrap();
+    assert_eq!(
+        request_as(
+            &a,
+            &token,
+            "GET",
+            &format!("/v1/dashboards/{dashboard_id}"),
+            json!(null)
+        )
+        .await
+        .1["layout"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        request_as(
+            &a,
+            &token,
+            "DELETE",
+            &format!("/v1/dashboards/{dashboard_id}"),
+            json!(null)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (_, private_dash) = request(
+        &a,
+        "POST",
+        "/v1/dashboards",
+        json!({"name":"Private","layout":[],"shared":false}),
+    )
+    .await;
+    assert_eq!(
+        request_as(
+            &a,
+            &token,
+            "GET",
+            &format!("/v1/dashboards/{}", private_dash["id"].as_str().unwrap()),
+            json!(null)
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request_as(&a, &token, "GET", "/v1/charts", json!(null))
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        request(&a, "GET", "/v1/charts", json!(null))
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    let model = create_model(
+        &a,
+        "impact_model",
+        "SELECT * FROM app_db.users",
+        "table",
+        "manual",
+    )
+    .await;
+    let check=create_check(&a,json!({"name":"Impact check","model_id":model,"kind":"row_count","config":{"min":1},"severity":"error"})).await;
+    let (s, pipeline) = request(&a, "POST", "/v1/pipelines", pipeline_input(&model, &check)).await;
+    assert_eq!(s, StatusCode::CREATED, "{pipeline}");
+    let (s, impact) = request(
+        &a,
+        "GET",
+        &format!("/v1/lineage/impact?node=dataset:{did}&direction=downstream"),
+        json!(null),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{impact}");
+    for kind in ["models", "pipelines", "checks", "charts", "dashboards"] {
+        assert!(
+            impact["summary"][kind].as_u64().unwrap() > 0,
+            "{kind}: {impact}"
+        );
+    }
+    let (_, limited) = request(
+        &a,
+        "GET",
+        &format!("/v1/lineage/impact?node=dataset:{did}&depth=0"),
+        json!(null),
+    )
+    .await;
+    assert_eq!(limited["nodes"].as_array().unwrap().len(), 1);
+    let (_, impact) = request_as(
+        &a,
+        &token,
+        "GET",
+        &format!("/v1/lineage/impact?node=dataset:{did}&direction=both"),
+        json!(null),
+    )
+    .await;
+    assert!(
+        !impact["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["id"] == format!("chart:{private_id}"))
+    );
+    assert_eq!(impact["summary"]["pipelines"], 0);
+    let (_, up) = request(
+        &a,
+        "GET",
+        &format!("/v1/lineage/impact?node=model:{model}&direction=upstream"),
+        json!(null),
+    )
+    .await;
+    assert!(
+        up["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["id"] == format!("dataset:{did}"))
+    );
+    drop(a);
+    f.close().await;
+}
+#[tokio::test]
+async fn phase3_activity_paging_notifications_per_user_and_failures() {
+    let mut f = Fixture::new().await;
+    let a = app(&f);
+    let role = access_role(&a, "activity-reader").await;
+    access_grant(&a, &role, "source", "source", "read").await;
+    let (user, token) = access_user(&a, "activity-user", &[&role]).await;
+    let (_, admin_token) = access_user(&a, "second-admin", &["admin"]).await;
+    for name in ["First", "Second", "Third"] {
+        assert_eq!(
+            request_as(
+                &a,
+                &token,
+                "POST",
+                "/v1/saved-queries",
+                json!({"name":name,"sql":"SELECT 'private value'"})
+            )
+            .await
+            .0,
+            StatusCode::CREATED
+        );
+    }
+    let (_, rows) = request_as(
+        &a,
+        &token,
+        "GET",
+        "/v1/activity?limit=2&action_prefix=saved_query",
+        json!(null),
+    )
+    .await;
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|r| r["actor_id"] == user));
+    assert!(!json!(rows).to_string().contains("private value"));
+    let before = rows[1]["id"].as_i64().unwrap();
+    let (_, page) = request_as(
+        &a,
+        &token,
+        "GET",
+        &format!("/v1/activity?limit=2&before_id={before}&action_prefix=saved_query"),
+        json!(null),
+    )
+    .await;
+    assert_eq!(page.as_array().unwrap().len(), 1);
+    assert!(page[0]["id"].as_i64().unwrap() < before);
+    assert!(
+        request(&a, "GET", "/v1/activity?limit=200", json!(null))
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len()
+            > 3
+    );
+    assert_eq!(
+        request_as(&a, &token, "GET", "/v1/activity?actor=admin", json!(null))
+            .await
+            .1,
+        json!([])
+    );
+    let mut rx = f.events.subscribe();
+    crate::notify::emit(
+        &f.pool,
+        &f.events,
+        crate::notify::Notice {
+            severity: "info",
+            kind: "test",
+            title: "For user",
+            entity_kind: "test",
+            entity_id: "entity",
+            user_id: Some(&user),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(rx.recv().await.unwrap()["type"], "notification");
+    let id = f.enqueue().await;
+    runner::state(
+        &f.pool,
+        &f.events,
+        &id,
+        "failed",
+        Some("private failure value"),
+    )
+    .await
+    .unwrap();
+    let (_, rows) = request(&a, "GET", "/v1/notifications", json!(null)).await;
+    let admin_id = rows[0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["kind"], "run.failed");
+    assert!(!rows.to_string().contains("private failure"));
+    assert_eq!(
+        request(
+            &a,
+            "POST",
+            "/v1/notifications/read",
+            json!({"ids":[admin_id]})
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(&a, "GET", "/v1/notifications/unread-count", json!(null))
+            .await
+            .1["count"],
+        0
+    );
+    assert_eq!(
+        request_as(
+            &a,
+            &admin_token,
+            "GET",
+            "/v1/notifications/unread-count",
+            json!(null)
+        )
+        .await
+        .1["count"],
+        1
+    );
+    assert_eq!(
+        request_as(
+            &a,
+            &token,
+            "GET",
+            "/v1/notifications?unread=true",
+            json!(null)
+        )
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .len(),
+        1
+    );
+    request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/notifications/read",
+        json!({"ids":[admin_id]}),
+    )
+    .await;
+    assert_eq!(
+        request_as(
+            &a,
+            &token,
+            "GET",
+            "/v1/notifications/unread-count",
+            json!(null)
+        )
+        .await
+        .1["count"],
+        1
+    );
+    request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/notifications/read",
+        json!({"all":true}),
+    )
+    .await;
+    assert_eq!(
+        request_as(
+            &a,
+            &token,
+            "GET",
+            "/v1/notifications?unread=true",
+            json!(null)
+        )
+        .await
+        .1,
+        json!([])
+    );
+    assert_eq!(
+        request_as(&a, &token, "GET", "/v1/notifications", json!(null))
+            .await
+            .1[0]["read"],
+        true
+    );
+    drop(a);
+    f.config.backup.dir = f.dir.join("blocked-backup");
+    std::fs::write(&f.config.backup.dir, b"file").unwrap();
+    let a = app(&f);
+    assert_eq!(
+        request(&a, "POST", "/v1/backups", json!(null)).await.0,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert!(
+        request(&a, "GET", "/v1/notifications", json!(null))
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["kind"] == "backup.failed")
+    );
+    sqlx::query("DROP TRIGGER audit_log_no_update")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE audit_log SET detail='tampered' WHERE id=1")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        request(&a, "GET", "/v1/audit/verify", json!(null)).await.1["ok"],
+        false
+    );
+    assert!(
+        request(&a, "GET", "/v1/notifications", json!(null))
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["kind"] == "audit.failed")
+    );
+    drop(a);
+    f.close().await;
+}
+#[tokio::test]
+async fn phase3_scheduler_pipelines_checks_and_notification_retention() {
+    let f = Fixture::new().await;
+    let a = app(&f);
+    let(s,p)=request(&a,"POST","/v1/pipelines",json!({"name":"Scheduled","cron":"0 0 0 1 1 * 2000","nodes":[{"node_id":"sync","kind":"sync","ref_id":"job"}]})).await;
+    assert_eq!(s, StatusCode::CREATED, "{p}");
+    let check=create_check(&a,json!({"name":"Scheduled","kind":"custom_sql","config":{"sql":"SELECT 1 WHERE false"},"severity":"error","cron":"0 0 0 1 1 * 2000"})).await;
+    sqlx::query("UPDATE pipelines SET last_scheduled=0")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE quality_checks SET last_scheduled=0")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    crate::notify::emit(
+        &f.pool,
+        &f.events,
+        crate::notify::Notice {
+            severity: "info",
+            kind: "old",
+            title: "Old",
+            entity_kind: "test",
+            entity_id: "",
+            user_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO notification_reads SELECT id,'admin' FROM notifications")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE notifications SET created_at=?")
+        .bind(store::now() - 91 * 86400)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let sql = crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap();
+    scheduler::tick(&f.pool, &sql, &f.events).await.unwrap();
+    scheduler::tick(&f.pool, &sql, &f.events).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM pipeline_runs")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap(),
+        1
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if sqlx::query_scalar::<_, i64>("SELECT count(*) FROM quality_runs WHERE check_id=?")
+                .bind(&check)
+                .fetch_one(&f.pool)
+                .await
+                .unwrap()
+                == 1
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM notifications WHERE kind='old'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM notification_reads")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    let run: String = sqlx::query_scalar("SELECT id FROM pipeline_runs")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    crate::pipeline::cancel(&f.pool, &f.events, &run)
+        .await
+        .unwrap();
     drop(a);
     f.close().await;
 }
