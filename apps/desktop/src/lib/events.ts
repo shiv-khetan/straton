@@ -3,8 +3,29 @@ import { queryKeys } from './queryKeys.ts';
 import { eventLevel, formatEvent } from '../features/console/workbench-model.ts';
 export function eventQueryKeys(event: EngineEvent): readonly (readonly string[])[] {
   if (event.type === 'resync_required') return [queryKeys.all];
+  if (event.type === 'pipeline_run' || event.type === 'pipeline_node')
+    return [
+      queryKeys.pipelines,
+      queryKeys.quality,
+      queryKeys.impact,
+      queryKeys.activity,
+      queryKeys.charts,
+    ];
+  if (event.type === 'notification')
+    return [
+      queryKeys.notifications,
+      queryKeys.quality,
+      queryKeys.pipelines,
+      queryKeys.activity,
+      queryKeys.impact,
+    ];
+  if (/^quality[._]/.test(event.type))
+    return [queryKeys.quality, queryKeys.activity, queryKeys.impact];
   if (/^(catalog|source|dataset|relationship)\./.test(event.type))
     return [
+      queryKeys.impact,
+      queryKeys.charts,
+      queryKeys.activity,
       queryKeys.sources,
       queryKeys.catalog,
       queryKeys.datamap,
@@ -14,6 +35,10 @@ export function eventQueryKeys(event: EngineEvent): readonly (readonly string[])
     ];
   if (/^(run|job)\./.test(event.type))
     return [
+      queryKeys.impact,
+      queryKeys.charts,
+      queryKeys.quality,
+      queryKeys.activity,
       queryKeys.runs,
       queryKeys.jobs,
       queryKeys.datamap,
@@ -25,6 +50,10 @@ export function eventQueryKeys(event: EngineEvent): readonly (readonly string[])
     ];
   if (/^model\./.test(event.type))
     return [
+      queryKeys.impact,
+      queryKeys.charts,
+      queryKeys.quality,
+      queryKeys.activity,
       queryKeys.models,
       queryKeys.datamap,
       queryKeys.catalog,

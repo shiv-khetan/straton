@@ -17,7 +17,19 @@ export function can(
 }
 export function canPage(me: Me | null, page: string): boolean {
   if (page === 'Connect') return true;
-  if (page === 'Dashboard' || page === 'Models') return me !== null;
+  if (
+    [
+      'Dashboard',
+      'Models',
+      'Activity',
+      'Pipelines',
+      'Schedules',
+      'Analytics',
+      'Dashboards',
+      'Data Quality',
+    ].includes(page)
+  )
+    return me !== null;
   if (page === 'Sources')
     return (
       can(me, 'admin') ||

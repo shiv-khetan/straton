@@ -42,6 +42,12 @@ import type { LibraryEntry } from '@/stores/library';
 import { LibraryPage } from '@/features/library/LibraryPage';
 import { LaterPage } from '@/features/library/LaterPage';
 import { safeStorage } from '@/stores/storage';
+const Pipelines = lazy(() => import('@/features/pipelines/Pipelines'));
+const Quality = lazy(() => import('@/features/quality/Quality'));
+const Analytics = lazy(() => import('@/features/analytics/Analytics'));
+const Dashboards = lazy(() => import('@/features/dashboards/Dashboards'));
+const Activity = lazy(() => import('@/features/activity/Activity'));
+const Schedules = lazy(() => import('@/features/schedules/Schedules'));
 const SqlView = lazy(() => import('@/features/sql/SqlWorkspace'));
 const DataMapView = lazy(() => import('@/features/lineage/Lineage'));
 export default function App() {
@@ -66,6 +72,12 @@ function AppContent() {
   const [modelRequest, setModelRequest] = useState<{ id: string | null; nonce: number } | null>(
     null,
   );
+  const [entityRequest, setEntityRequest] = useState<{
+    kind: string;
+    id: string;
+    runId?: string;
+    nonce: number;
+  } | null>(null);
   const [mapFocus, setMapFocus] = useState('');
   const [mapStatusFilter, setMapStatusFilter] = useState('');
   const [jobStateFilter, setJobStateFilter] = useState('');
@@ -117,6 +129,7 @@ function AppContent() {
     selectEntity('');
     setMapFocus('');
     setModelRequest(null);
+    setEntityRequest(null);
     setSheet(null);
     setConnection(next);
     resetRoute(next ? 'Dashboard' : 'Connect');
@@ -344,6 +357,26 @@ function AppContent() {
       });
     }
   }
+  async function openNotificationEntity(kind: string, id: string) {
+    if (!client) return;
+    if (kind === 'pipeline_run') {
+      const run = await client.pipelineRun(id);
+      setEntityRequest({ kind: 'pipeline', id: run.pipeline_id, runId: id, nonce: Date.now() });
+      setPage('Pipelines');
+    } else if (kind === 'check') {
+      await client.qualityCheck(id);
+      setEntityRequest({ kind, id, nonce: Date.now() });
+      setPage('Data Quality');
+    } else if (kind === 'run') {
+      if (!canPage(me, 'Jobs')) throw new Error('Job history requires sync admin access.');
+      setEntityRequest({ kind, id, nonce: Date.now() });
+      setJobStateFilter('failed');
+      setPage('Jobs');
+    } else if (kind === 'backup' || kind === 'audit') {
+      if (!canPage(me, 'Backups')) throw new Error('Security and backups require admin access.');
+      setPage('Backups');
+    } else setPage('Activity');
+  }
   const selectedModel =
     page === 'Models' ? models.find((model) => model.id === selectionId) : undefined;
   const selectedDataset =
@@ -390,7 +423,8 @@ function AppContent() {
         me={me}
         online={online}
         live={live}
-        events={events}
+        client={me ? client : null}
+        onEntity={openNotificationEntity}
         onSearch={() => setPaletteOpen(true)}
         onConnect={() => setPage('Connect')}
         onForget={() => void forget()}
@@ -555,10 +589,66 @@ function AppContent() {
                   forget={forget}
                 />
               )}
-              {client && !loading && page === 'Dashboard' && (
+              {client &&
+                !loading &&
+                me &&
+                [
+                  'Pipelines',
+                  'Data Quality',
+                  'Analytics',
+                  'Dashboards',
+                  'Activity',
+                  'Schedules',
+                ].includes(page) && (
+                  <Suspense fallback={<Skeleton label={'Loading ' + pageLabel + '…'} />}>
+                    {page === 'Pipelines' && (
+                      <Pipelines
+                        client={client}
+                        me={me}
+                        jobs={jobs}
+                        models={models}
+                        readOnly={!online}
+                        request={entityRequest?.kind === 'pipeline' ? entityRequest : null}
+                      />
+                    )}
+                    {page === 'Data Quality' && (
+                      <Quality
+                        client={client}
+                        me={me}
+                        datasets={datasets}
+                        models={models}
+                        readOnly={!online}
+                        request={entityRequest?.kind === 'check' ? entityRequest : null}
+                      />
+                    )}
+                    {page === 'Analytics' && (
+                      <Analytics client={client} me={me} scope={scope} readOnly={!online} />
+                    )}
+                    {page === 'Dashboards' && (
+                      <Dashboards
+                        client={client}
+                        me={me}
+                        scope={scope}
+                        readOnly={!online}
+                        onAnalytics={() => setPage('Analytics')}
+                      />
+                    )}
+                    {page === 'Activity' && <Activity client={client} me={me} />}
+                    {page === 'Schedules' && (
+                      <Schedules
+                        client={client}
+                        jobs={jobs}
+                        models={models}
+                        canSeeJobs={can(me, 'sync_admin')}
+                        onNavigate={setPage}
+                      />
+                    )}
+                  </Suspense>
+                )}
+              {client && !loading && me && page === 'Dashboard' && (
                 <Dashboard
                   client={client}
-                  me={me!}
+                  me={me}
                   sources={map.nodes.filter((n) => n.type === 'source')}
                   models={models}
                   scope={scope}
@@ -670,6 +760,7 @@ function AppContent() {
                   jobs={jobs}
                   runs={runs}
                   events={events}
+                  focusRun={entityRequest?.kind === 'run' ? entityRequest : null}
                   initialStateFilter={jobStateFilter}
                   open={sheet === 'job'}
                   onClose={() => setSheet(null)}

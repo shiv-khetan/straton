@@ -1,0 +1,32 @@
+.pipeline-canvas {
+  height: 440px;
+  min-height: 300px;
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  background: var(--surface);
+}
+.pipeline-node {
+  width: 224px;
+  min-height: 112px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.pipeline-node strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.pipeline-node.invalid {
+  border-color: var(--danger);
+}
+
+.react-flow__node.selected .pipeline-node {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}

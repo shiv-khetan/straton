@@ -2,6 +2,25 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import type { Api } from './api';
 import { queryKeys } from './queryKeys.ts';
 const reads: Partial<Record<keyof Api, QueryKey>> = {
+  pipelines: queryKeys.pipelines,
+  pipeline: queryKeys.pipelines,
+  pipelineRuns: queryKeys.pipelines,
+  pipelineRun: queryKeys.pipelines,
+  qualityChecks: queryKeys.quality,
+  qualityCheck: queryKeys.quality,
+  qualityCheckRuns: queryKeys.quality,
+  qualityRuns: queryKeys.quality,
+  qualitySummary: queryKeys.quality,
+  charts: queryKeys.charts,
+  chart: queryKeys.charts,
+  chartData: queryKeys.charts,
+  drillChart: queryKeys.charts,
+  dashboards: queryKeys.dashboards,
+  dashboard: queryKeys.dashboards,
+  lineageImpact: queryKeys.impact,
+  activity: queryKeys.activity,
+  notifications: queryKeys.notifications,
+  notificationCount: queryKeys.notifications,
   explorerTree: ['engine', 'explorer', 'tree'],
   storage: ['engine', 'storage'],
   savedQueries: ['engine', 'saved-queries'],
@@ -26,6 +45,8 @@ const reads: Partial<Record<keyof Api, QueryKey>> = {
   tokens: queryKeys.access,
 };
 const transient = new Set<keyof Api>([
+  'validatePipeline',
+  'previewChart',
   'explorerRows',
   'explorerExport',
   'cancelSql',

@@ -1,6 +1,13 @@
 export const queryKeys = {
   all: ['engine'] as const,
   me: ['engine', 'me'] as const,
+  pipelines: ['engine', 'pipelines'] as const,
+  quality: ['engine', 'quality'] as const,
+  charts: ['engine', 'charts'] as const,
+  dashboards: ['engine', 'dashboards'] as const,
+  impact: ['engine', 'impact'] as const,
+  activity: ['engine', 'activity'] as const,
+  notifications: ['engine', 'notifications'] as const,
   status: ['engine', 'status'] as const,
   sources: ['engine', 'sources'] as const,
   jobs: ['engine', 'jobs'] as const,

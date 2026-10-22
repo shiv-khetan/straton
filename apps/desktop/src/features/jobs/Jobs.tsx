@@ -16,6 +16,7 @@ export default function Jobs({
   runs,
   events,
   initialStateFilter,
+  focusRun,
   client,
   action,
   busy,
@@ -29,6 +30,7 @@ export default function Jobs({
   runs: Run[];
   events: EngineEvent[];
   initialStateFilter: string;
+  focusRun?: { id: string; nonce: number } | null;
   client: Api;
   action: Action;
   busy: boolean;
@@ -71,6 +73,20 @@ export default function Jobs({
   const [jobFilter, setJobFilter] = useState('');
   const [stateFilter, setStateFilter] = useState(initialStateFilter);
   useEffect(() => setStateFilter(initialStateFilter), [initialStateFilter]);
+  const [focusedRun, setFocusedRun] = useState(focusRun?.id ?? '');
+  useEffect(() => {
+    if (focusRun) {
+      setFocusedRun(focusRun.id);
+      setJobFilter('');
+      setStateFilter('');
+    }
+  }, [focusRun?.nonce]);
+  useEffect(() => {
+    if (focusedRun)
+      requestAnimationFrame(() =>
+        document.getElementById('notification-run')?.scrollIntoView({ block: 'center' }),
+      );
+  }, [focusedRun]);
   return (
     <>
       <div className="page-heading">
@@ -351,6 +367,22 @@ export default function Jobs({
           </Button>
         </form>
       </Sheet>
+      {focusedRun && (
+        <section id="notification-run" className="mb-4 rounded-card border border-line p-4">
+          <div className="section-toolbar">
+            <h2>Notification run</h2>
+            <Button variant="ghost" onClick={() => setFocusedRun('')}>
+              Dismiss
+            </Button>
+          </div>
+          <RunTable runs={runs.filter((r) => r.id === focusedRun)} jobs={jobs} />
+          {!runs.some((r) => r.id === focusedRun) && (
+            <p className="hint">
+              Run <code>{focusedRun}</code> is outside the loaded run history.
+            </p>
+          )}
+        </section>
+      )}
       <Tray title="Run history">
         <div className="toolbar">
           <Field label="Job">

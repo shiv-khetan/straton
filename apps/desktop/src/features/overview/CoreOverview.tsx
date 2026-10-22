@@ -5,6 +5,9 @@ import { useSqlWorkspace } from '@/stores/sql-workspace';
 import { Button } from '@/components/ui/button';
 import { can } from '@/features/access/access-model';
 import { StatusChip, Skeleton } from '@/features/console/ConsoleDrawer';
+import { queryKeys } from '@/lib/queryKeys';
+import { FeatureEmpty, FeatureError, FeatureLoading } from '@/components/workbench/FeatureState';
+import { Pill } from '@/components/workbench/primitives';
 import { formatBytes } from './storage-model';
 export function SourceHealth({
   sources,
@@ -212,6 +215,82 @@ export function Storage({ client, readOnly }: { client: Api; readOnly: boolean }
             </details>
           ))}
         </details>
+      )}
+    </section>
+  );
+}
+
+export function DataQualityScore({ client, onOpen }: { client: Api; onOpen: () => void }) {
+  const query = useQuery({
+    queryKey: [...queryKeys.quality, 'view', 'overview-score'],
+    queryFn: async () => {
+      const [summary, checks] = await Promise.all([
+        client.qualitySummary(),
+        client.qualityChecks(),
+      ]);
+      const latest = await Promise.all(
+        checks.map(async (check) => ({
+          check,
+          run: (await client.qualityCheckRuns(check.id, 1))[0],
+        })),
+      );
+      return { summary, latest };
+    },
+  });
+  const total = query.data
+    ? Object.values(query.data.summary.counts).reduce((a, b) => a + b, 0)
+    : 0;
+  const failing =
+    query.data?.latest.filter((item) => item.run && item.run.status !== 'passed') ?? [];
+  return (
+    <section>
+      <div className="section-toolbar">
+        <h2>Data quality</h2>
+        <Button variant="outline" size="sm" onClick={onOpen}>
+          Manage checks
+        </Button>
+      </div>
+      {query.isPending && <FeatureLoading label="Loading quality score" />}
+      <FeatureError error={query.error} retry={() => void query.refetch()} />
+      {query.data && (
+        <>
+          <div className="flex flex-wrap items-center gap-3 py-2">
+            <span className="font-mono text-2xl">
+              {total ? query.data.summary.score.toFixed(1) + '%' : '—'}
+            </span>
+            <span className="text-ink-2">
+              {total
+                ? query.data.summary.counts.passed + ' of ' + total + ' latest checks passed'
+                : 'No check results yet'}
+            </span>
+          </div>
+          {failing.slice(0, 5).map(({ check, run }) => (
+            <div className="overview-row" key={check.id}>
+              <span>
+                {check.name}
+                <small>{run.message}</small>
+              </span>
+              <Pill tone="danger">{run.status}</Pill>
+            </div>
+          ))}
+          {!query.data.latest.length ? (
+            <FeatureEmpty
+              title="Start measuring data quality"
+              action="Create a check"
+              onAction={onOpen}
+            >
+              Add a check for a dataset or model to monitor its quality here.
+            </FeatureEmpty>
+          ) : (
+            !failing.length && (
+              <p className="text-ink-2">
+                {total
+                  ? 'No failing checks in the latest results.'
+                  : 'Run your first check to calculate a score.'}
+              </p>
+            )
+          )}
+        </>
       )}
     </section>
   );

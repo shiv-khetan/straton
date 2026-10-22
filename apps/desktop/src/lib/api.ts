@@ -284,9 +284,223 @@ export interface EngineEvent {
   received_at?: number;
   type: string;
   id?: string;
-  state?: RunState;
+  state?: RunState | 'pending' | 'skipped';
+  run_id?: string;
+  node_id?: string | null;
+  severity?: 'info' | 'warn' | 'error';
+  title?: string;
+  body?: string;
+  entity_kind?: string;
+  entity_id?: string;
   message?: string;
 }
+
+export type PipelineKind = 'sync' | 'transform' | 'validate';
+export interface PipelineNode {
+  node_id: string;
+  kind: PipelineKind;
+  ref_id: string;
+  label: string;
+  x: number;
+  y: number;
+}
+export interface PipelineEdge {
+  from_node: string;
+  to_node: string;
+}
+export interface PipelineInput {
+  name: string;
+  description: string;
+  cron: string | null;
+  enabled: boolean;
+  nodes: PipelineNode[];
+  edges: PipelineEdge[];
+}
+export interface Pipeline extends Omit<PipelineInput, 'nodes' | 'edges'> {
+  id: string;
+  owner_id: string;
+  last_scheduled: number;
+  created_at: number;
+  updated_at: number;
+}
+export interface PipelineGraph extends Pipeline {
+  nodes: PipelineNode[];
+  edges: PipelineEdge[];
+}
+export interface PipelineValidation {
+  valid: boolean;
+  errors: { node_id?: string; message: string }[];
+}
+export interface PipelineRun {
+  id: string;
+  pipeline_id: string;
+  state: RunState;
+  trigger: 'manual' | 'cron';
+  started_at: number | null;
+  finished_at: number | null;
+  error: string | null;
+}
+export interface PipelineRunNode {
+  node_id: string;
+  state: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled';
+  child_run_id: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+  error: string | null;
+}
+export interface PipelineRunDetail extends PipelineRun {
+  nodes: PipelineRunNode[];
+}
+export type QualityKind =
+  'not_null' | 'unique' | 'range' | 'freshness' | 'row_count' | 'custom_sql';
+export interface QualityInput {
+  name: string;
+  dataset_id: string | null;
+  model_id: string | null;
+  kind: QualityKind;
+  column_name: string | null;
+  config: { min?: SqlCell; max?: SqlCell; max_age_seconds?: number; sql?: string };
+  severity: 'error' | 'warn';
+  cron: string | null;
+  enabled: boolean;
+}
+export interface QualityCheck extends QualityInput {
+  id: string;
+  owner_id: string;
+  last_scheduled: number;
+  created_at: number;
+  updated_at: number;
+}
+export interface QualityRun {
+  id: string;
+  check_id: string;
+  status: 'passed' | 'failed' | 'error';
+  observed: number | null;
+  failing_rows: number | null;
+  message: string;
+  pipeline_run_id: string | null;
+  started_at: number;
+  finished_at: number;
+}
+export interface QualitySummary {
+  score: number;
+  counts: { passed: number; failed: number; error: number };
+  datasets: { dataset_id: string; score: number; passed: number; total: number }[];
+  daily: { day: number; passed: number; total: number; score: number }[];
+}
+export type ChartKind = 'line' | 'bar' | 'area' | 'stat' | 'table';
+export interface ChartConfig {
+  x?: string;
+  y?: string[];
+  series?: string;
+  time_column?: string;
+}
+export interface ChartInput {
+  name: string;
+  sql: string;
+  kind: ChartKind;
+  config: ChartConfig;
+  shared: boolean;
+}
+export interface Chart extends ChartInput {
+  id: string;
+  owner_id: string;
+  created_at: number;
+  updated_at: number;
+}
+export interface ChartRange {
+  from?: SqlCell;
+  to?: SqlCell;
+}
+export interface ChartData {
+  columns: SqlColumn[];
+  rows: SqlCell[][];
+}
+export interface DashboardTile {
+  chart_id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+export interface DashboardInput {
+  name: string;
+  description: string;
+  layout: DashboardTile[];
+  shared: boolean;
+}
+export interface AnalyticsDashboard extends DashboardInput {
+  id: string;
+  owner_id: string;
+  created_at: number;
+  updated_at: number;
+}
+export type ImpactDirection = 'downstream' | 'upstream' | 'both';
+export interface ImpactRequest {
+  node: string;
+  direction?: ImpactDirection;
+  depth?: number;
+}
+export interface ImpactGraph {
+  root: string;
+  nodes: {
+    id: string;
+    kind: 'dataset' | 'model' | 'pipeline' | 'check' | 'chart' | 'dashboard';
+    name: string;
+    status: string | null;
+  }[];
+  edges: { from: string; to: string; kind: string }[];
+  summary: {
+    models: number;
+    pipelines: number;
+    checks: number;
+    charts: number;
+    dashboards: number;
+  };
+}
+export interface ActivityEntry {
+  id: number;
+  at: number;
+  action: string;
+  entity_id: string;
+  actor_id: string | null;
+  actor_name: string | null;
+  summary: string;
+}
+export interface ActivityFilter {
+  before_id?: number;
+  limit?: number;
+  action_prefix?: string;
+  actor?: string;
+  entity?: string;
+}
+export interface EngineNotification {
+  id: string;
+  created_at: number;
+  severity: 'info' | 'warn' | 'error';
+  kind: string;
+  title: string;
+  body: string;
+  entity_kind: string;
+  entity_id: string;
+  read: boolean;
+}
+export class ApiError extends Error {
+  status: number;
+  validation?: PipelineValidation;
+  constructor(status: number, message: string, validation?: PipelineValidation) {
+    super(message);
+    this.status = status;
+    this.validation = validation;
+  }
+}
+const params = (values: object) => {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(values))
+    if (value !== undefined && value !== '') search.set(key, String(value));
+  return search.size ? '?' + search : '';
+};
+
 export function normalizeUrl(value: string): string {
   const url = new URL(value.trim());
   if (
@@ -322,8 +536,15 @@ export function api(connection: Connection) {
       maxRedirections: 0,
     });
     if (!response.ok) {
-      const error = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(error?.error || 'Engine request failed (' + response.status + ')');
+      const error = (await response.json().catch(() => null)) as
+        ({ error?: string } & Partial<PipelineValidation>) | null;
+      throw new ApiError(
+        response.status,
+        error?.error ||
+          error?.errors?.map((e) => e.message).join('; ') ||
+          'Engine request failed (' + response.status + ')',
+        error?.valid === false ? (error as PipelineValidation) : undefined,
+      );
     }
     if (response.status === 204 || (response.status === 202 && path.endsWith('/cancel')))
       return undefined as T;
@@ -331,6 +552,62 @@ export function api(connection: Connection) {
     return response.json() as Promise<T>;
   }
   return {
+    pipelines: () => request<Pipeline[]>('/v1/pipelines'),
+    pipeline: (id: string) => request<PipelineGraph>('/v1/pipelines/' + idPath(id)),
+    createPipeline: (body: PipelineInput) => request<PipelineGraph>('/v1/pipelines', 'POST', body),
+    updatePipeline: (id: string, body: PipelineInput) =>
+      request<PipelineGraph>('/v1/pipelines/' + idPath(id), 'PUT', body),
+    deletePipeline: (id: string) => request<void>('/v1/pipelines/' + idPath(id), 'DELETE'),
+    validatePipeline: (body: PipelineInput) =>
+      request<PipelineValidation>('/v1/pipelines/validate', 'POST', body),
+    runPipeline: (id: string) =>
+      request<{ id: string }>('/v1/pipelines/' + idPath(id) + '/run', 'POST'),
+    pipelineRuns: (id: string, limit = 50) =>
+      request<PipelineRun[]>('/v1/pipelines/' + idPath(id) + '/runs' + params({ limit })),
+    pipelineRun: (id: string) => request<PipelineRunDetail>('/v1/pipeline-runs/' + idPath(id)),
+    cancelPipelineRun: (id: string) =>
+      request<void>('/v1/pipeline-runs/' + idPath(id) + '/cancel', 'POST'),
+    qualityChecks: () => request<QualityCheck[]>('/v1/quality/checks'),
+    qualityCheck: (id: string) => request<QualityCheck>('/v1/quality/checks/' + idPath(id)),
+    createQualityCheck: (body: QualityInput) =>
+      request<QualityCheck>('/v1/quality/checks', 'POST', body),
+    updateQualityCheck: (id: string, body: QualityInput) =>
+      request<QualityCheck>('/v1/quality/checks/' + idPath(id), 'PUT', body),
+    deleteQualityCheck: (id: string) => request<void>('/v1/quality/checks/' + idPath(id), 'DELETE'),
+    runQualityCheck: (id: string) =>
+      request<QualityRun>('/v1/quality/checks/' + idPath(id) + '/run', 'POST'),
+    qualityCheckRuns: (id: string, limit = 50) =>
+      request<QualityRun[]>('/v1/quality/checks/' + idPath(id) + '/runs' + params({ limit })),
+    qualityRuns: (limit = 50) => request<QualityRun[]>('/v1/quality/runs' + params({ limit })),
+    qualitySummary: () => request<QualitySummary>('/v1/quality/summary'),
+    charts: () => request<Chart[]>('/v1/charts'),
+    chart: (id: string) => request<Chart>('/v1/charts/' + idPath(id)),
+    createChart: (body: ChartInput) => request<Chart>('/v1/charts', 'POST', body),
+    updateChart: (id: string, body: ChartInput) =>
+      request<Chart>('/v1/charts/' + idPath(id), 'PUT', body),
+    deleteChart: (id: string) => request<void>('/v1/charts/' + idPath(id), 'DELETE'),
+    chartData: (id: string, range: ChartRange = {}) =>
+      request<ChartData>('/v1/charts/' + idPath(id) + '/data', 'POST', range),
+    previewChart: (body: { sql: string; config: ChartConfig } & ChartRange) =>
+      request<ChartData>('/v1/charts/preview', 'POST', body),
+    drillChart: (id: string, body: { x_value: SqlCell } & ChartRange) =>
+      request<ChartData>('/v1/charts/' + idPath(id) + '/drill', 'POST', body),
+    dashboards: () => request<AnalyticsDashboard[]>('/v1/dashboards'),
+    dashboard: (id: string) => request<AnalyticsDashboard>('/v1/dashboards/' + idPath(id)),
+    createDashboard: (body: DashboardInput) =>
+      request<AnalyticsDashboard>('/v1/dashboards', 'POST', body),
+    updateDashboard: (id: string, body: DashboardInput) =>
+      request<AnalyticsDashboard>('/v1/dashboards/' + idPath(id), 'PUT', body),
+    deleteDashboard: (id: string) => request<void>('/v1/dashboards/' + idPath(id), 'DELETE'),
+    lineageImpact: (query: ImpactRequest) =>
+      request<ImpactGraph>('/v1/lineage/impact' + params(query)),
+    activity: (query: ActivityFilter = {}) =>
+      request<ActivityEntry[]>('/v1/activity' + params(query)),
+    notifications: (query: { unread?: boolean; limit?: number } = {}) =>
+      request<EngineNotification[]>('/v1/notifications' + params(query)),
+    readNotifications: (body: { ids?: string[]; all?: boolean }) =>
+      request<void>('/v1/notifications/read', 'POST', body),
+    notificationCount: () => request<{ count: number }>('/v1/notifications/unread-count'),
     keys: () => request<DatasetKey[]>('/v1/admin/keys'),
     rotateKek: () => request<{ kek_version: number }>('/v1/admin/keys/rotate-kek', 'POST'),
     rotateDatasetKey: (target: string) =>

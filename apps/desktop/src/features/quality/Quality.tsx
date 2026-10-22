@@ -1,0 +1,622 @@
+import { useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import type {
+  Api,
+  Dataset,
+  Me,
+  Model,
+  QualityCheck,
+  QualityInput,
+  QualityKind,
+  QualityRun,
+} from '@/lib/api';
+import { queryKeys } from '@/lib/queryKeys';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import {
+  Table,
+  TableHeader,
+  TableHead,
+  TableBody,
+  TableCell,
+  TableRow,
+} from '@/components/ui/table';
+import { Field } from '@/components/workbench/Field';
+import {
+  Choice,
+  FeatureEmpty,
+  FeatureError,
+  FeatureLoading,
+  useFeatureAction,
+} from '@/components/workbench/FeatureState';
+import { Pill } from '@/components/workbench/primitives';
+import { relativeTime } from '@/lib/view-model';
+const kinds: QualityKind[] = [
+  'not_null',
+  'unique',
+  'range',
+  'freshness',
+  'row_count',
+  'custom_sql',
+];
+const label = (kind: string) => kind.replaceAll('_', ' ');
+const fresh = (): QualityInput => ({
+  name: '',
+  dataset_id: null,
+  model_id: null,
+  kind: 'not_null',
+  column_name: null,
+  config: {},
+  severity: 'error',
+  cron: null,
+  enabled: true,
+});
+export default function Quality({
+  client,
+  me,
+  datasets,
+  models,
+  readOnly,
+  request,
+}: {
+  client: Api;
+  me: Me;
+  datasets: Dataset[];
+  models: Model[];
+  readOnly: boolean;
+  request?: { id: string; nonce: number } | null;
+}) {
+  const checks = useQuery({
+    queryKey: [...queryKeys.quality, 'view', 'checks'],
+    queryFn: () => client.qualityChecks(),
+  });
+  const summary = useQuery({
+    queryKey: [...queryKeys.quality, 'view', 'summary'],
+    queryFn: () => client.qualitySummary(),
+  });
+  const recent = useQuery({
+    queryKey: [...queryKeys.quality, 'view', 'recent'],
+    queryFn: () => client.qualityRuns(100),
+  });
+  const [editing, setEditing] = useState<QualityCheck | 'new' | null>(null);
+  const [history, setHistory] = useState<QualityCheck | null>(null);
+  const handledRequest = useRef<number | null>(null);
+  useEffect(() => {
+    if (!request || !checks.data || handledRequest.current === request.nonce) return;
+    handledRequest.current = request.nonce;
+    setHistory(checks.data.find((q) => q.id === request.id) ?? null);
+  }, [request?.nonce, checks.data]);
+  const action = useFeatureAction();
+  const total = summary.data ? Object.values(summary.data.counts).reduce((a, b) => a + b, 0) : 0;
+  const writable = (q: QualityCheck) => me.privileges.admin || q.owner_id === me.user.id;
+  return (
+    <section className="space-y-5">
+      <div className="section-toolbar">
+        <p className="text-ink-2">Verify the data your workspace depends on.</p>
+        <Button disabled={readOnly} onClick={() => setEditing('new')}>
+          New check
+        </Button>
+      </div>
+      <FeatureError error={action.error} />
+      {summary.isPending && <FeatureLoading label="Loading quality score" />}
+      <FeatureError error={summary.error} retry={() => void summary.refetch()} />
+      {summary.data && (
+        <div className="flex flex-wrap items-center gap-6 rounded-card border border-line bg-panel p-4">
+          <div>
+            <h2 className="font-medium">Quality score</h2>
+            <span className="font-mono text-2xl">
+              {total ? summary.data.score.toFixed(1) + '%' : '—'}
+            </span>
+            <span className="ml-2 text-ink-2">
+              {total ? 'of latest check runs passed' : 'Run a check to measure quality'}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <Pill tone="success">{summary.data.counts.passed} passed</Pill>
+            <Pill tone="danger">{summary.data.counts.failed} failed</Pill>
+            <Pill tone="warning">{summary.data.counts.error} errors</Pill>
+          </div>
+          <div className="ml-auto">
+            <p className="text-caption text-ink-2">Daily pass rate · 30 days</p>
+            <svg
+              width="180"
+              height="40"
+              viewBox="0 0 180 40"
+              role="img"
+              aria-label="Daily quality pass rate"
+            >
+              <title>
+                {summary.data.daily
+                  .map(
+                    (d) =>
+                      new Date(d.day * 1000).toISOString().slice(0, 10) +
+                      ': ' +
+                      (d.total ? d.score.toFixed(1) + '%' : 'no runs'),
+                  )
+                  .join('; ')}
+              </title>
+              {summary.data.daily.map((d, i) => (
+                <rect
+                  key={d.day}
+                  x={i * 6}
+                  y={40 - (d.total ? Math.max(2, d.score * 0.38) : 1)}
+                  width="3"
+                  height={d.total ? Math.max(2, d.score * 0.38) : 1}
+                  fill={d.total ? 'var(--mark)' : 'var(--line)'}
+                />
+              ))}
+            </svg>
+          </div>
+        </div>
+      )}
+      {checks.isPending && <FeatureLoading label="Loading quality checks" />}
+      <FeatureError error={checks.error} retry={() => void checks.refetch()} />
+      {checks.data?.length === 0 && (
+        <FeatureEmpty
+          title="Define what good data looks like"
+          action="New check"
+          disabled={readOnly}
+          onAction={() => setEditing('new')}
+        >
+          Start with a required column or a row count, then schedule checks or add them to a
+          pipeline.
+        </FeatureEmpty>
+      )}
+      {!!checks.data?.length && (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Check</TableHead>
+              <TableHead>Target</TableHead>
+              <TableHead>Severity</TableHead>
+              <TableHead>Latest runs</TableHead>
+              <TableHead>Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {checks.data.map((q) => (
+              <TableRow key={q.id}>
+                <TableCell>
+                  <Button variant="link" onClick={() => setHistory(q)}>
+                    {q.name}
+                  </Button>
+                  <p className="text-caption text-ink-2">
+                    {label(q.kind)} · {q.enabled ? (q.cron ?? 'Manual') : 'Disabled'}
+                  </p>
+                </TableCell>
+                <TableCell>
+                  {datasets.find((d) => d.id === q.dataset_id)?.name ??
+                    models.find((m) => m.id === q.model_id)?.name ??
+                    'Custom query'}
+                  {q.column_name && <code className="block text-caption">{q.column_name}</code>}
+                </TableCell>
+                <TableCell>
+                  <Pill tone={q.severity === 'error' ? 'danger' : 'warning'}>{q.severity}</Pill>
+                </TableCell>
+                <TableCell>
+                  <CheckSparkline client={client} id={q.id} />
+                </TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap gap-1">
+                    {writable(q) && (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={readOnly || action.pending}
+                          onClick={() =>
+                            void action.run(() => client.runQualityCheck(q.id), 'Check completed')
+                          }
+                        >
+                          Run now
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={readOnly}
+                          onClick={() => setEditing(q)}
+                        >
+                          Edit
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+      <section>
+        <h2 className="mb-3 font-medium">Recent failures</h2>
+        {recent.isPending && <FeatureLoading />}
+        <FeatureError error={recent.error} retry={() => void recent.refetch()} />
+        {recent.data
+          ?.filter((r) => r.status !== 'passed')
+          .slice(0, 10)
+          .map((r) => (
+            <div className="overview-row" key={r.id}>
+              <span>
+                {checks.data?.find((q) => q.id === r.check_id)?.name ?? r.check_id}
+                <small>{r.message}</small>
+              </span>
+              <Pill tone="danger">{r.status}</Pill>
+              <time>{relativeTime(r.started_at * 1000)}</time>
+            </div>
+          ))}
+        {recent.data && !recent.data.some((r) => r.status !== 'passed') && (
+          <p className="text-ink-2">No failures in the loaded history.</p>
+        )}
+      </section>
+      {!!summary.data?.datasets.length && (
+        <details>
+          <summary>Scores by dataset</summary>
+          {summary.data.datasets.map((s) => (
+            <div key={s.dataset_id} className="overview-row">
+              <span>{datasets.find((d) => d.id === s.dataset_id)?.name ?? s.dataset_id}</span>
+              <code>
+                {s.score.toFixed(1)}% · {s.passed}/{s.total}
+              </code>
+            </div>
+          ))}
+        </details>
+      )}
+      {editing && (
+        <CheckEditor
+          key={editing === 'new' ? 'new' : editing.id}
+          check={editing === 'new' ? null : editing}
+          client={client}
+          datasets={datasets}
+          models={models}
+          onClose={() => setEditing(null)}
+          readOnly={readOnly}
+        />
+      )}
+      {history && (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setHistory(null);
+          }}
+        >
+          <DialogContent className="max-h-[85vh] overflow-auto sm:max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>{history.name} · history</DialogTitle>
+              <DialogDescription>
+                Counts and outcomes from the latest 50 runs. Row values are never exposed.
+              </DialogDescription>
+            </DialogHeader>
+            <CheckHistory client={client} id={history.id} />
+          </DialogContent>
+        </Dialog>
+      )}
+    </section>
+  );
+}
+function CheckSparkline({ client, id }: { client: Api; id: string }) {
+  const query = useQuery({
+    queryKey: [...queryKeys.quality, 'view', 'sparkline', id],
+    queryFn: () => client.qualityCheckRuns(id, 12),
+  });
+  if (query.isPending) return <span role="status">Loading…</span>;
+  if (query.isError)
+    return (
+      <Button variant="ghost" size="sm" onClick={() => void query.refetch()}>
+        Retry history
+      </Button>
+    );
+  if (!query.data.length) return <span className="text-ink-2">Not run</span>;
+  return (
+    <div className="flex items-center gap-2">
+      <Pill tone={query.data[0].status === 'passed' ? 'success' : 'danger'}>
+        {query.data[0].status}
+      </Pill>
+      <svg
+        width="72"
+        height="24"
+        viewBox="0 0 72 24"
+        role="img"
+        aria-label="Recent check results, oldest first"
+      >
+        <title>
+          {[...query.data]
+            .reverse()
+            .map((r) => r.status + ' · ' + new Date(r.started_at * 1000).toLocaleString())
+            .join('; ')}
+        </title>
+        {[...query.data].reverse().map((r, i) => (
+          <rect
+            key={r.id}
+            x={i * 6}
+            y={r.status === 'passed' ? 2 : 14}
+            width="3"
+            height={r.status === 'passed' ? 20 : 8}
+            fill={r.status === 'passed' ? 'var(--mark)' : 'var(--danger-ink)'}
+          />
+        ))}
+      </svg>
+    </div>
+  );
+}
+function CheckHistory({ client, id }: { client: Api; id: string }) {
+  const query = useQuery({
+    queryKey: [...queryKeys.quality, 'view', 'history', id],
+    queryFn: () => client.qualityCheckRuns(id),
+  });
+  return (
+    <>
+      <FeatureError error={query.error} retry={() => void query.refetch()} />
+      {query.isPending && <FeatureLoading />}
+      {query.data?.length === 0 && <p>No runs yet. Use Run now on the checks table.</p>}
+      {query.data?.map((r: QualityRun) => (
+        <div key={r.id} className="border-b border-line py-3">
+          <div className="flex flex-wrap gap-3">
+            <Pill>{r.status}</Pill>
+            <time>{new Date(r.started_at * 1000).toLocaleString()}</time>
+            <code>
+              Observed: {r.observed ?? '—'} · Failing rows: {r.failing_rows ?? '—'}
+            </code>
+          </div>
+          <p className="mt-2 text-ink-2">{r.message}</p>
+        </div>
+      ))}
+    </>
+  );
+}
+function CheckEditor({
+  check,
+  client,
+  datasets,
+  models,
+  onClose,
+  readOnly,
+}: {
+  check: QualityCheck | null;
+  client: Api;
+  datasets: Dataset[];
+  models: Model[];
+  onClose: () => void;
+  readOnly: boolean;
+}) {
+  const [draft, setDraft] = useState<QualityInput>(() =>
+    check
+      ? {
+          name: check.name,
+          dataset_id: check.dataset_id,
+          model_id: check.model_id,
+          kind: check.kind,
+          column_name: check.column_name,
+          config: check.config,
+          severity: check.severity,
+          cron: check.cron,
+          enabled: check.enabled,
+        }
+      : fresh(),
+  );
+  const [min, setMin] = useState(String(check?.config.min ?? ''));
+  const [max, setMax] = useState(String(check?.config.max ?? ''));
+  const action = useFeatureAction();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const patch = (v: Partial<QualityInput>) => setDraft((d) => ({ ...d, ...v }));
+  const target = draft.model_id
+    ? 'model:' + draft.model_id
+    : draft.dataset_id
+      ? 'dataset:' + draft.dataset_id
+      : '';
+  const dataset = datasets.find(
+    (d) =>
+      d.id === draft.dataset_id ||
+      (draft.model_id &&
+        d.source_id === 'straton-models' &&
+        d.name === models.find((m) => m.id === draft.model_id)?.name),
+  );
+  function bound(s: string) {
+    if (draft.kind === 'row_count') {
+      const n = Number(s);
+      if (!Number.isSafeInteger(n) || n < 0)
+        throw Error('Row count bounds must be nonnegative integers.');
+      return n;
+    }
+    try {
+      const v: unknown = JSON.parse(s);
+      if (['string', 'number', 'boolean'].includes(typeof v)) return v as string | number | boolean;
+    } catch {}
+    return s;
+  }
+  async function save() {
+    const config = { ...draft.config };
+    if (['range', 'row_count'].includes(draft.kind)) {
+      if (!min && !max) throw Error('Enter a minimum or maximum.');
+      if (min) config.min = bound(min);
+      else delete config.min;
+      if (max) config.max = bound(max);
+      else delete config.max;
+    }
+    const body = { ...draft, config };
+    if (check) await client.updateQualityCheck(check.id, body);
+    else await client.createQualityCheck(body);
+    onClose();
+  }
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !action.pending) onClose();
+      }}
+    >
+      <DialogContent className="max-h-[88vh] overflow-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{check ? 'Edit check' : 'New quality check'}</DialogTitle>
+          <DialogDescription>
+            Run checks manually, on a UTC schedule, or in a pipeline.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void action.run(save, 'Check saved');
+          }}
+        >
+          <FeatureError error={action.error} />
+          <Field label="Name">
+            <Input
+              value={draft.name}
+              required
+              maxLength={200}
+              onChange={(e) => patch({ name: e.target.value })}
+            />
+          </Field>
+          <Choice
+            label="Check kind"
+            value={draft.kind}
+            options={kinds.map((k) => ({ value: k, label: label(k) }))}
+            onChange={(v) => {
+              patch({
+                kind: v as QualityKind,
+                config: v === 'freshness' ? { max_age_seconds: 3600 } : {},
+                column_name: null,
+              });
+              setMin('');
+              setMax('');
+            }}
+          />
+          <Choice
+            label="Dataset or model"
+            value={target}
+            options={[
+              {
+                value: '',
+                label: draft.kind === 'custom_sql' ? 'No target (custom SQL)' : 'Choose target',
+              },
+              ...datasets
+                .filter((d) => d.source_id !== 'straton-models')
+                .map((d) => ({ value: 'dataset:' + d.id, label: d.name })),
+              ...models.map((m) => ({ value: 'model:' + m.id, label: 'Model · ' + m.name })),
+            ]}
+            onChange={(v) =>
+              patch({
+                dataset_id: v.startsWith('dataset:') ? v.slice(8) : null,
+                model_id: v.startsWith('model:') ? v.slice(6) : null,
+                column_name: null,
+              })
+            }
+          />
+          {['not_null', 'unique', 'range'].includes(draft.kind) && (
+            <Choice
+              label="Column"
+              value={draft.column_name ?? ''}
+              options={[
+                { value: '', label: 'Choose column' },
+                ...(dataset?.columns ?? []).map((c) => ({
+                  value: c.name,
+                  label: c.name + ' · ' + c.type,
+                })),
+              ]}
+              onChange={(v) => patch({ column_name: v || null })}
+            />
+          )}
+          {['range', 'row_count'].includes(draft.kind) && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Minimum (optional)">
+                <Input value={min} onChange={(e) => setMin(e.target.value)} />
+              </Field>
+              <Field label="Maximum (optional)">
+                <Input value={max} onChange={(e) => setMax(e.target.value)} />
+              </Field>
+            </div>
+          )}
+          {draft.kind === 'freshness' && (
+            <Field label="Maximum age (seconds)">
+              <Input
+                type="number"
+                required
+                min={1}
+                value={draft.config.max_age_seconds ?? 3600}
+                onChange={(e) => patch({ config: { max_age_seconds: Number(e.target.value) } })}
+              />
+            </Field>
+          )}
+          {draft.kind === 'custom_sql' && (
+            <Field label="Read-only SQL (passes when it returns zero rows)">
+              <Textarea
+                className="min-h-36 font-mono"
+                required
+                value={draft.config.sql ?? ''}
+                onChange={(e) => patch({ config: { sql: e.target.value } })}
+              />
+            </Field>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Choice
+              label="Severity"
+              value={draft.severity}
+              options={[
+                { value: 'error', label: 'Error · fails a pipeline' },
+                { value: 'warn', label: 'Warning · pipeline continues' },
+              ]}
+              onChange={(v) => patch({ severity: v as 'error' | 'warn' })}
+            />
+            <Field label="Cron (seconds first, UTC)">
+              <Input
+                placeholder="0 0 * * * *"
+                value={draft.cron ?? ''}
+                onChange={(e) => patch({ cron: e.target.value || null })}
+              />
+            </Field>
+          </div>
+          <label className="flex items-center gap-2">
+            <Checkbox
+              checked={draft.enabled}
+              onCheckedChange={(v) => patch({ enabled: v === true })}
+            />
+            Schedule enabled
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="submit"
+              disabled={
+                readOnly ||
+                action.pending ||
+                !draft.name.trim() ||
+                (draft.kind !== 'custom_sql' && !target) ||
+                (['not_null', 'unique', 'range'].includes(draft.kind) && !draft.column_name)
+              }
+            >
+              {action.pending ? 'Saving…' : 'Save check'}
+            </Button>
+            <Button type="button" variant="outline" disabled={action.pending} onClick={onClose}>
+              Cancel
+            </Button>
+            {check && (
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={readOnly || action.pending}
+                onClick={() => {
+                  if (!confirmDelete) setConfirmDelete(true);
+                  else
+                    void action.run(async () => {
+                      await client.deleteQualityCheck(check.id);
+                      onClose();
+                    }, 'Check deleted');
+                }}
+              >
+                {confirmDelete ? 'Confirm delete' : 'Delete check'}
+              </Button>
+            )}
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}

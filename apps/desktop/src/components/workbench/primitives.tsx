@@ -213,10 +213,15 @@ export function Tabs({
 }) {
   return (
     <TabsRoot value={value} onValueChange={onChange} className="contents">
-      <TabsList className="tabs segmented-control" aria-label={id}>
+      <TabsList
+        variant="line"
+        className="tabs h-auto w-full justify-start rounded-none bg-transparent p-0"
+        aria-label={id}
+      >
         {items.map((item) => (
           <TabsTrigger
             key={item}
+            className="-mb-px h-auto flex-none rounded-none border-0 border-b-2 border-transparent px-0.5 pt-2 pb-1.5 font-normal after:hidden data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:font-medium data-[state=active]:text-ink data-[state=active]:shadow-none dark:data-[state=active]:border-primary dark:data-[state=active]:bg-transparent"
             value={item}
             id={id + '-tab-' + item}
             aria-controls={id + '-panel-' + item}

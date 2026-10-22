@@ -3,7 +3,22 @@
     --xy-background-color: var(--bg);
     --xy-background-pattern-dots-color-default: var(--grid-dot);
     --xy-node-color: var(--ink);
+    --xy-edge-stroke: var(--ink-3);
+    --xy-edge-label-background-color: var(--surface);
+    --xy-edge-label-color: var(--ink-2);
+    --xy-controls-button-background-color: var(--surface);
+    --xy-controls-button-background-color-hover: var(--surface-2);
+    --xy-controls-button-color: var(--ink);
+    --xy-controls-button-color-hover: var(--ink);
+    --xy-controls-button-border-color: var(--line);
+    --xy-controls-box-shadow: none;
     --xy-minimap-background-color: var(--panel);
+  }
+  .react-flow__controls {
+    border: 1px solid var(--line);
+    border-radius: var(--control-radius);
+    overflow: hidden;
+    box-shadow: none;
   }
   .dataset-node.highlighted,
   .react-flow__node.selected .dataset-node {

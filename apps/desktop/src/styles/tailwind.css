@@ -34,6 +34,12 @@
   --mark: #111827;
   --cell-empty: #eef2f8;
   --primary: #1d50a2;
+  /* Categorical chart series: blue-led, never status colours. */
+  --chart-1: #1d50a2;
+  --chart-2: #4f8fe8;
+  --chart-3: #0e7c86;
+  --chart-4: #b7791f;
+  --chart-5: #7c5cbf;
   --primary-hover: #0f336e;
   --primary-tint: #dce7f8;
   --on-primary: #ffffff;
@@ -129,6 +135,11 @@
     --ink-2: #c7c4d7;
     --ink-3: #908fa0;
     --primary: #c0c1ff;
+    --chart-1: #8fb4ff;
+    --chart-2: #4f8fe8;
+    --chart-3: #3fb8c2;
+    --chart-4: #e0a84a;
+    --chart-5: #b49cf0;
     --primary-hover: #e1e0ff;
     --on-primary: #1000a9;
     --on-primary-hover: #1000a9;
@@ -182,6 +193,11 @@
   --ink-2: #c7c4d7;
   --ink-3: #908fa0;
   --primary: #c0c1ff;
+  --chart-1: #8fb4ff;
+  --chart-2: #4f8fe8;
+  --chart-3: #3fb8c2;
+  --chart-4: #e0a84a;
+  --chart-5: #b49cf0;
   --primary-hover: #e1e0ff;
   --on-primary: #1000a9;
   --on-primary-hover: #1000a9;
@@ -263,11 +279,11 @@
   --color-warning-soft: var(--warning-50);
   --color-danger-soft: var(--danger-50);
   --color-info-soft: var(--info-50);
-  --color-chart-1: var(--mark);
-  --color-chart-2: var(--primary);
-  --color-chart-3: var(--success);
-  --color-chart-4: var(--warning);
-  --color-chart-5: var(--danger);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
   --font-sans: var(--font-ui);
   --font-mono: var(--font-code);
   --text-xs: 0.8125rem;

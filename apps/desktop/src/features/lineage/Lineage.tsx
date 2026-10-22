@@ -1,3 +1,5 @@
+import { Impact } from './Impact';
+import { Tabs } from '@/components/workbench/primitives';
 import { Input } from '@/components/ui/input';
 import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -183,10 +185,28 @@ function RoutedEdge(props: EdgeProps<MapEdge>) {
 const edgeTypes = { elk: RoutedEdge };
 const nodeTypes = { table: Table, source: SourceGroup };
 export default function DataMapView(props: Props) {
+  const [mode, setMode] = useState('Lineage');
   return (
-    <ReactFlowProvider>
-      <Canvas {...props} />
-    </ReactFlowProvider>
+    // The map canvas sizes itself with h-full, so this column needs a definite height.
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="px-4 [&_.tabs]:mb-0">
+        <Tabs id="lineage-mode" items={['Lineage', 'Impact']} value={mode} onChange={setMode} />
+      </div>
+      <div
+        id={'lineage-mode-panel-' + mode}
+        role="tabpanel"
+        aria-labelledby={'lineage-mode-tab-' + mode}
+        className={'min-h-0 flex-1 ' + (mode === 'Impact' ? 'overflow-auto' : 'overflow-hidden')}
+      >
+        {mode === 'Impact' ? (
+          <Impact client={props.client} map={props.map} initialRoot={props.focusId} />
+        ) : (
+          <ReactFlowProvider>
+            <Canvas {...props} />
+          </ReactFlowProvider>
+        )}
+      </div>
+    </div>
   );
 }
 function Canvas({

@@ -7,7 +7,7 @@ import {
   TableBody,
   TableCell,
 } from '@/components/ui/table';
-import { SourceHealth, ActiveWork, RecentQueries, Storage } from './CoreOverview';
+import { SourceHealth, ActiveWork, RecentQueries, Storage, DataQualityScore } from './CoreOverview';
 import { useId, useState } from 'react';
 import type { Dataset, Job, Run, Status } from '@/lib/api';
 import {
@@ -302,9 +302,9 @@ export default function Dashboard({
   status: Status | null;
   backups: string[];
   children: React.ReactNode;
-  navigate: (page: 'Jobs' | 'Data Map' | 'Backups', filter?: string) => void;
+  navigate: (page: 'Jobs' | 'Data Map' | 'Backups' | 'Data Quality', filter?: string) => void;
   events: import('@/lib/api').EngineEvent[];
-  canNavigate: (page: 'Jobs' | 'Data Map' | 'Backups') => boolean;
+  canNavigate: (page: 'Jobs' | 'Data Map' | 'Backups' | 'Data Quality') => boolean;
 }) {
   const now = Date.now();
   const total = runKpi(runs, now);
@@ -429,6 +429,7 @@ export default function Dashboard({
           </section>
         )}
       </div>
+      <DataQualityScore client={client} onOpen={() => navigate('Data Quality')} />
       <section className="failed-jobs">
         <h2>Failed jobs</h2>
         {runs

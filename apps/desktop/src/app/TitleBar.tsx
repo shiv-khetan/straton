@@ -4,7 +4,6 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   ArrowLeft,
   ArrowRight,
-  Bell,
   Minus,
   Square,
   Copy,
@@ -15,7 +14,6 @@ import {
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,9 +26,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Breadcrumb } from '@/components/workbench/primitives';
 import appIcon from '../../src-tauri/icons/32x32.png';
-import { notificationList } from '@/lib/events';
-import type { EngineEvent, Me } from '@/lib/api';
-import { relativeTime } from '@/lib/view-model';
+import { Notifications } from '@/features/notifications/Notifications';
+import type { Api, Me } from '@/lib/api';
 import { useThemeStore } from '@/stores/theme';
 import { useRouteStore } from '@/stores/route';
 export function TitleBar({
@@ -39,7 +36,8 @@ export function TitleBar({
   me,
   online,
   live,
-  events,
+  client,
+  onEntity,
   onSearch,
   onConnect,
   onForget,
@@ -54,7 +52,8 @@ export function TitleBar({
   me: Me | null;
   online: boolean;
   live: string;
-  events: EngineEvent[];
+  client: Api | null;
+  onEntity: (kind: string, id: string) => Promise<void>;
   onSearch: () => void;
   onConnect: () => void;
   onForget: () => void;
@@ -66,11 +65,8 @@ export function TitleBar({
 }) {
   const native = isTauri();
   const [maximized, setMaximized] = useState(false);
-  const [seen, setSeen] = useState(0);
   const { preference, setTheme } = useThemeStore();
   const { index, entries, back, forward } = useRouteStore();
-  const notifications = notificationList(events);
-  const unread = notifications.filter((item) => (item.receivedAt ?? 0) > seen).length;
   const initials =
     me?.user.name
       .split(/\s+/)
@@ -201,57 +197,7 @@ export function TitleBar({
         <span className={'size-1.5 rounded-full ' + (online ? 'bg-success' : 'bg-danger')} />
         <span className="max-[850px]:hidden">{live}</span>
       </span>
-      <Popover
-        onOpenChange={(open) => {
-          if (open) setSeen(Date.now());
-        }}
-      >
-        <PopoverTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="relative"
-            aria-label={'Notifications · ' + unread + ' unread'}
-          >
-            <Bell size={18} />
-            {unread > 0 && (
-              <span className="absolute right-0 top-0 size-1.5 rounded-full bg-primary" />
-            )}
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-96 max-w-[calc(100vw-24px)] p-0">
-          <div className="flex items-center justify-between border-b border-line bg-panel px-4 py-3">
-            <h2 className="text-body font-medium">Engine notifications</h2>
-            <span className="font-mono text-caption text-ink-2">{notifications.length}</span>
-          </div>
-          <div className="max-h-96 overflow-y-auto">
-            {notifications.length ? (
-              notifications.map((item) => (
-                <article key={item.key} className="border-b border-line px-4 py-3 last:border-0">
-                  <p
-                    className={
-                      'm-0 break-words text-body ' +
-                      (item.level === 'ERROR' ? 'text-danger' : 'text-ink')
-                    }
-                  >
-                    {item.title}
-                  </p>
-                  <div className="mt-1 flex items-center justify-between gap-3 font-mono text-caption text-ink-3">
-                    <span className="truncate">{item.entity}</span>
-                    <time className="shrink-0">
-                      {item.receivedAt ? relativeTime(item.receivedAt) : 'Receipt time unavailable'}
-                    </time>
-                  </div>
-                </article>
-              ))
-            ) : (
-              <p className="m-0 p-6 text-body text-ink-2">
-                No engine events received yet. Recent events appear here while connected.
-              </p>
-            )}
-          </div>
-        </PopoverContent>
-      </Popover>
+      <Notifications client={client} readOnly={!online} onEntity={onEntity} />
       <Button
         variant="ghost"
         size="icon-sm"
@@ -264,7 +210,7 @@ export function TitleBar({
       </Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-sm" className="rounded-full" aria-label="Account menu">
+          <Button variant="ghost" size="icon-sm" aria-label="Account menu">
             <Avatar className="size-7">
               <AvatarFallback className="bg-panel font-mono text-caption text-ink">
                 {initials}
