@@ -21,6 +21,10 @@ pub async fn tick(
     let _save = crate::pipeline::SAVES.lock().await;
     let now = store::now();
     let mut tx = pool.begin().await?;
+    // Take the writer up front: a read-then-write upgrade fails with BUSY while executors write.
+    sqlx::query("UPDATE security_state SET audit_backfilled=audit_backfilled WHERE id=1")
+        .execute(&mut *tx)
+        .await?;
     let jobs =
         sqlx::query("SELECT id,cron,last_scheduled FROM jobs WHERE enabled=1 AND cron IS NOT NULL AND (model_id IS NULL OR EXISTS(SELECT 1 FROM models m WHERE m.id=jobs.model_id AND m.status='ready'))")
             .fetch_all(&mut *tx)
