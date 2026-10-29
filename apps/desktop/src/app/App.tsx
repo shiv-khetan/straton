@@ -143,13 +143,20 @@ function AppContent() {
   useEffect(() => {
     if (!isTauri()) return;
     let active = true;
-    void invoke<Connection | null>('load_connection')
-      .then((saved) => {
-        if (active && saved) installConnection({ ...saved, url: normalizeUrl(saved.url) });
-      })
-      .catch(() => {
-        if (active) setError('Saved connection could not be loaded. Enter your connection below.');
-      });
+    // The keychain can be briefly busy right after a restart or reload; retry once before
+    // reporting, and keep install errors out of the "could not be loaded" message.
+    const load = () => invoke<Connection | null>('load_connection');
+    void load()
+      .catch(() => new Promise((resolve) => setTimeout(resolve, 400)).then(load))
+      .then(
+        (saved) => {
+          if (active && saved) installConnection({ ...saved, url: normalizeUrl(saved.url) });
+        },
+        () => {
+          if (active)
+            setError('Saved connection could not be loaded. Enter your connection below.');
+        },
+      );
     return () => {
       active = false;
     };

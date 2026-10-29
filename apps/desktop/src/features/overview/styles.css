@@ -177,17 +177,24 @@
   .overview-core {
     display: grid;
     grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-    gap: 32px;
-    margin: 24px 0 32px;
+    gap: 16px;
+    margin: 16px 0;
   }
-  .overview-core section,
+  /* Every Overview block is the same flat card: hairline frame, title on its top edge. */
+  .overview-core > section,
+  .active-work,
   .failed-jobs {
-    min-width: 0;
+    @apply min-w-0 rounded-card border border-line bg-surface px-4 pt-3 pb-4;
   }
-  .overview-core h2,
-  .failed-jobs h2 {
-    font-size: var(--headline-md);
-    margin-bottom: 16px;
+  .active-work,
+  .failed-jobs {
+    @apply mb-4;
+  }
+  .overview-core > section > h2,
+  .overview-core > section > div:first-child > h2,
+  .active-work > h2,
+  .failed-jobs > h2 {
+    @apply mb-3 text-body font-semibold text-ink;
   }
   .section-toolbar {
     display: flex;

@@ -112,7 +112,7 @@ export function ActiveWork({ runs, jobs, models }: { runs: Run[]; jobs: Job[]; m
     (m) => ['running', 'queued'].includes(m.last_run_status ?? '') && !activeModelIds.has(m.name),
   );
   return (
-    <section>
+    <section className="active-work">
       <h2>Active work</h2>
       {active.map((r) => (
         <div className="overview-row" key={r.id}>
