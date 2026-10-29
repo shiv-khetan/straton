@@ -6304,3 +6304,6 @@ async fn mysql_view_fallback_and_mongo_sample_metadata() {
     );
     f.close().await;
 }
+
+#[path = "column_view_tests.rs"]
+mod column_view_tests;

@@ -150,12 +150,16 @@ export function ColumnInspector({
                       <Button
                         variant="link"
                         className="field-link"
-                        onClick={() => onNavigate(use.in)}
+                        onClick={() => {
+                          if (use.in.kind === 'view') onClose();
+                          onNavigate(use.in);
+                        }}
                       >
                         {use.in.name}
                       </Button>
                       <span>
-                        {use.in.kind} · {use.role.replaceAll('_', ' ')}
+                        {use.in.kind === 'view' ? 'View' : use.in.kind} ·{' '}
+                        {use.role.replaceAll('_', ' ')}
                       </span>
                       <code>{label(use)}</code>
                     </li>

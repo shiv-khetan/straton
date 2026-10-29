@@ -684,3 +684,103 @@ async fn hash_sidecar_never_changes_results() {
         f.close().await;
     }
 }
+
+#[tokio::test]
+async fn relayout_relative_data_dir_preserves_all_rows() {
+    const CHILD: &str = "STRATON_TEST_RELAYOUT_RELATIVE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let base = std::env::temp_dir().join(format!("straton-relayout-{}", store::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        // Only the child changes cwd, so parallel tests keep their own path resolution.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::optimizer_tests::relayout_relative_data_dir_preserves_all_rows",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .current_dir(&base)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout).contains("1 passed;"),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    fn fingerprint(value: &serde_json::Value) -> (usize, Vec<u8>) {
+        use sha2::{Digest, Sha256};
+        let mut rows: Vec<_> = value["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect();
+        rows.sort();
+        (
+            rows.len(),
+            Sha256::digest(serde_json::to_vec(&rows).unwrap()).to_vec(),
+        )
+    }
+    for encrypted in [false, true] {
+        let mut f = sql_fixture().await;
+        let input = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new().filename(f.dir.join("sql-input.db")),
+            )
+            .await
+            .unwrap();
+        sqlx::raw_sql("INSERT INTO users VALUES(3,'Aaron'),(4,NULL),(5,'Alice');")
+            .execute(&input)
+            .await
+            .unwrap();
+        input.close().await;
+        f.config.data_dir = PathBuf::from(if encrypted {
+            "data/encrypted"
+        } else {
+            "data/plain"
+        });
+        f.config.encryption.enabled = encrypted;
+        assert!(f.config.data_dir.is_relative());
+        sql_sync(&f).await;
+        let id = dataset_id(&f, "users").await;
+        sqlx::query("INSERT INTO query_stats(dataset_id,column,role,op,count,last_seen) VALUES(?,'name','filter','equality',6,0)")
+            .bind(&id).execute(&f.pool).await.unwrap();
+        let a = app(&f);
+        let query = json!({"query":"SELECT * FROM app_db.users"});
+        let (status, before) = request(&a, "POST", "/v1/sql", query.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{before}");
+        assert_eq!(fingerprint(&before).0, 5);
+        let (status, result) = request(
+            &a,
+            "POST",
+            &format!("/v1/optimizer/datasets/{id}/relayout"),
+            json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "encrypted={encrypted}: {result}");
+        assert_eq!(result["layout"]["sort_column"], "name");
+        let (status, after) = request(&a, "POST", "/v1/sql", query).await;
+        assert_eq!(status, StatusCode::OK, "{after}");
+        assert_eq!(
+            fingerprint(&before),
+            fingerprint(&after),
+            "encrypted={encrypted}"
+        );
+        let dir = f.config.data_dir.join("data/source/users");
+        let current = std::fs::read_to_string(dir.join("_current")).unwrap();
+        assert_eq!(
+            crate::keys::snapshot(&f.pool, &dir.join(current))
+                .await
+                .unwrap()
+                .is_some(),
+            encrypted
+        );
+        drop(a);
+        f.close().await;
+    }
+}
