@@ -95,6 +95,12 @@ export function ChartPreview({
       </div>
     );
   }
+  if (prepared.error)
+    return (
+      <p role="alert" className="py-6 text-danger">
+        {prepared.error}
+      </p>
+    );
   if (!config.x || !prepared.keys.length)
     return (
       <p className="py-6 text-ink-2">

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "tauri": "tauri",
-    "test": "node tests/api.test.mjs && node tests/map.test.mjs && node tests/events.test.mjs && node tests/sql.test.mjs && node tests/view.test.mjs && node tests/access.test.mjs && node tests/jobs.test.mjs && node tests/models.test.mjs && node tests/workbench.test.mjs && node tests/foundation.test.mjs && node tests/query.test.mjs && node tests/core.test.mjs && node tests/pipelines.test.mjs && node tests/cron.test.mjs && node tests/dashboards.test.mjs && node tests/impact.test.mjs && node tests/column-lineage.test.mjs && node tests/activity.test.mjs && node tests/phase3.test.mjs && node tests/optimizer.test.mjs && node tests/sidebar.test.mjs && node --import ./tests/typescript-imports.mjs tests/behaviour-contract.test.mjs",
+    "test": "node tests/api.test.mjs && node tests/map.test.mjs && node tests/events.test.mjs && node tests/sql.test.mjs && node tests/view.test.mjs && node tests/access.test.mjs && node tests/jobs.test.mjs && node tests/models.test.mjs && node tests/workbench.test.mjs && node tests/foundation.test.mjs && node tests/query.test.mjs && node tests/core.test.mjs && node tests/pipelines.test.mjs && node tests/cron.test.mjs && node tests/dashboards.test.mjs && node tests/impact.test.mjs && node tests/column-lineage.test.mjs && node tests/activity.test.mjs && node tests/phase3.test.mjs && node tests/optimizer.test.mjs && node tests/sidebar.test.mjs && node --import ./tests/typescript-imports.mjs tests/behaviour-contract.test.mjs && node tests/ui-review.test.mjs && node tests/editor-review.test.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\""
   },
   "dependencies": {

@@ -1,5 +1,8 @@
 import { StatePill } from '@/components/workbench/primitives';
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
+import { isDirty, saveSnapshot } from '../pipelines/draft-model';
+import { useDraftGuard } from '../pipelines/useDraftGuard';
+import { FeatureError } from '@/components/workbench/FeatureState';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
@@ -91,7 +94,7 @@ export default function Models({
   const inspect = useCallback((selection: ModelSelection | null) => {
     explainEpoch.current++;
     setInspected(selection);
-    setPlans(null);
+    setExplainState({ pending: false, error: '', data: null });
   }, []);
   useEffect(() => {
     onSelection(
@@ -108,8 +111,20 @@ export default function Models({
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<ModelInput>(initial);
   const [tab, setTab] = useState('Definition');
-  const [plans, setPlans] = useState<ModelExplain | null>(null);
-  const [lineage, setLineage] = useState<ModelLineage | null>(null);
+  const [baseline, setBaseline] = useState<ModelInput>(initial);
+  const [explainState, setExplainState] = useState<{
+    pending: boolean;
+    error: string;
+    data: ModelExplain | null;
+  }>({ pending: false, error: '', data: null });
+  const [lineageState, setLineageState] = useState<{
+    pending: boolean;
+    error: string;
+    data: ModelLineage | null;
+  }>({ pending: false, error: '', data: null });
+  const [lineageAttempt, setLineageAttempt] = useState(0);
+  const plans = explainState.data;
+  const lineage = lineageState.data;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -143,25 +158,27 @@ export default function Models({
   useEffect(() => {
     if (!selected || !open) return;
     let active = true;
-    setLineage(null);
+    setLineageState({ pending: true, error: '', data: null });
     client
       .modelLineage(selected.id)
       .then((result) => {
         if (active)
-          setLineage(
-            normalizeModelLineage(
+          setLineageState({
+            pending: false,
+            error: '',
+            data: normalizeModelLineage(
               result,
               catalog.nodes.filter((node) => node.type === 'dataset'),
             ),
-          );
+          });
       })
       .catch((e) => {
-        if (active) setError(String(e));
+        if (active) setLineageState({ pending: false, error: String(e), data: null });
       });
     return () => {
       active = false;
     };
-  }, [client, selected, open, revision, catalog.nodes]);
+  }, [client, selected, open, revision, catalog.nodes, lineageAttempt]);
   async function action(work: () => Promise<unknown>, message: string, refresh = true) {
     if (readOnly) {
       setError('Reconnect the engine before continuing.');
@@ -180,23 +197,23 @@ export default function Models({
       setBusy(false);
     }
   }
-  function edit(model: Model | null) {
+  function openEditor(model: Model | null) {
     explainEpoch.current++;
     setSelected(model);
-    setDraft(
-      model
-        ? {
-            name: model.name,
-            sql: model.sql,
-            materialization: model.materialization,
-            trigger: model.trigger,
-            cron: model.cron,
-            optimize: model.optimize,
-          }
-        : { ...initial },
-    );
+    const next: ModelInput = model
+      ? {
+          name: model.name,
+          sql: model.sql,
+          materialization: model.materialization,
+          trigger: model.trigger,
+          cron: model.cron,
+          optimize: model.optimize,
+        }
+      : { ...initial };
+    setDraft(next);
+    setBaseline(next);
     setTab('Definition');
-    setPlans(null);
+    setExplainState({ pending: false, error: '', data: null });
     setError('');
     setNotice('');
     setOpen(true);
@@ -256,15 +273,37 @@ export default function Models({
     (me.privileges.admin || inspectedModel.owner_id === me.user.id);
   async function loadExplain(id: string) {
     const epoch = ++explainEpoch.current;
-    const next = await client.explainModel(id);
-    if (epoch === explainEpoch.current) setPlans(next);
+    setExplainState({ pending: true, error: '', data: null });
+    try {
+      if (readOnly) throw new Error('Reconnect the engine to load an explain plan.');
+      const data = await client.explainModel(id);
+      if (epoch === explainEpoch.current) setExplainState({ pending: false, error: '', data });
+    } catch (error) {
+      if (epoch === explainEpoch.current)
+        setExplainState({ pending: false, error: String(error), data: null });
+    }
+  }
+  async function saveDraft() {
+    if (!editable) throw new Error('This model is read-only.');
+    const target = saveSnapshot(selected?.id ?? null, draft);
+    if (!/^[a-z_][a-z0-9_]*$/.test(target.draft.name) || !target.draft.sql.trim())
+      throw new Error('Enter a valid model name and SQL before saving.');
+    await client.validateModel(target.draft);
+    if (target.id) await client.updateModel(target.id, target.draft);
+    else await client.createModel(target.draft);
+    setBaseline(target.draft);
+    changed();
+  }
+  const guard = useDraftGuard(open && isDirty(draft, baseline), saveDraft, editable && !busy);
+  function edit(model: Model | null) {
+    guard.request(() => openEditor(model));
   }
   const explainInspected = () => {
     if (!inspectedModel) return;
     setConsoleTab('Explain');
     onConsoleCollapsed(false);
-    setPlans(null);
-    void action(() => loadExplain(inspectedModel.id), 'Explain ready', false);
+    setExplainState({ pending: false, error: '', data: null });
+    void loadExplain(inspectedModel.id);
   };
   const validate = () =>
     void action(() => client.validateModel(draft), 'SQL is valid for your access.', false);
@@ -341,7 +380,7 @@ export default function Models({
                       const canEdit =
                         !readOnly && (me.privileges.admin || m.owner_id === me.user.id);
                       return (
-                        <TableRow key={m.id} onFocus={() => setInspected({ model: m })}>
+                        <TableRow key={m.id}>
                           <TableCell>
                             <Button
                               variant="ghost"
@@ -370,6 +409,13 @@ export default function Models({
                           </TableCell>
                           <TableCell>
                             <div className="actions">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                onClick={() => inspect({ model: m })}
+                              >
+                                Inspect model
+                              </Button>
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -424,8 +470,13 @@ export default function Models({
               events={events}
             >
               {consoleTab === 'Explain' ? (
-                busy && !plans ? (
+                explainState.pending ? (
                   <Skeleton label="Planning…" />
+                ) : explainState.error ? (
+                  <FeatureError
+                    error={explainState.error}
+                    retry={inspectedModel ? () => void loadExplain(inspectedModel.id) : undefined}
+                  />
                 ) : (
                   <ExplainPlan plans={plans} />
                 )
@@ -630,7 +681,7 @@ export default function Models({
       <Sheet
         open={open}
         title={selected ? 'Model · ' + selected.name : 'New SQL model'}
-        onClose={() => setOpen(false)}
+        onClose={() => guard.request(() => setOpen(false))}
       >
         <Tabs
           id="model"
@@ -644,8 +695,7 @@ export default function Models({
           value={tab}
           onChange={(next) => {
             setTab(next);
-            if (next === 'Explain' && selected)
-              void action(() => loadExplain(selected.id), 'Explain ready', false);
+            if (next === 'Explain' && selected) void loadExplain(selected.id);
           }}
         />
         {error && (
@@ -659,11 +709,14 @@ export default function Models({
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                void action(async () => {
-                  if (selected) await client.updateModel(selected.id, draft);
-                  else await client.createModel(draft);
-                  setOpen(false);
-                }, 'Model saved');
+                void action(
+                  async () => {
+                    await saveDraft();
+                    setOpen(false);
+                  },
+                  'Model saved',
+                  false,
+                );
               }}
             >
               <label className="field">
@@ -672,7 +725,7 @@ export default function Models({
                   required
                   pattern="[a-z_][a-z0-9_]*"
                   maxLength={128}
-                  disabled={!editable}
+                  disabled={!editable || busy}
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                 />
@@ -684,7 +737,7 @@ export default function Models({
                   rows={14}
                   required
                   spellCheck={false}
-                  disabled={!editable}
+                  disabled={!editable || busy}
                   value={draft.sql}
                   onChange={(e) => {
                     setDraft({ ...draft, sql: e.target.value });
@@ -706,7 +759,7 @@ export default function Models({
                 <label className="field">
                   <span>Materialization</span>
                   <select
-                    disabled={!editable}
+                    disabled={!editable || busy}
                     value={draft.materialization}
                     onChange={(e) => {
                       const materialization = e.target.value as ModelInput['materialization'];
@@ -724,7 +777,7 @@ export default function Models({
                 <label className="field">
                   <span>Trigger</span>
                   <select
-                    disabled={!editable || draft.materialization === 'view'}
+                    disabled={!editable || busy || draft.materialization === 'view'}
                     value={draft.trigger}
                     onChange={(e) => {
                       const trigger = e.target.value as ModelInput['trigger'];
@@ -745,7 +798,7 @@ export default function Models({
                     <span>Cron · UTC, seconds first</span>
                     <Input
                       required
-                      disabled={!editable}
+                      disabled={!editable || busy}
                       value={draft.cron ?? ''}
                       onChange={(e) => setDraft({ ...draft, cron: e.target.value })}
                     />
@@ -755,7 +808,7 @@ export default function Models({
               <label>
                 <input
                   type="checkbox"
-                  disabled={!editable}
+                  disabled={!editable || busy}
                   checked={draft.optimize}
                   onChange={(e) => setDraft({ ...draft, optimize: e.target.checked })}
                 />{' '}
@@ -825,13 +878,30 @@ export default function Models({
                   </section>
                 ))}
               </div>
-            ) : (
+            ) : lineageState.pending ? (
               <Skeleton label="Loading lineage…" />
+            ) : lineageState.error ? (
+              <FeatureError
+                error={lineageState.error}
+                retry={() => setLineageAttempt((value) => value + 1)}
+              />
+            ) : (
+              <p className="hint">No lineage has been loaded.</p>
             ))}
           {tab === 'Explain' &&
-            (plans ? <ExplainPlan plans={plans} /> : <Skeleton label="Planning…" />)}
+            (explainState.pending ? (
+              <Skeleton label="Planning…" />
+            ) : explainState.error ? (
+              <FeatureError
+                error={explainState.error}
+                retry={selected ? () => void loadExplain(selected.id) : undefined}
+              />
+            ) : (
+              <ExplainPlan plans={plans} />
+            ))}
         </section>
       </Sheet>
+      {guard.dialog}
     </div>
   );
 }

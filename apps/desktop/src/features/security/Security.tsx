@@ -25,24 +25,27 @@ export default function Security({
   const [keys, setKeys] = useState<DatasetKey[] | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [keyError, setKeyError] = useState('');
+  const [keyRevision, setKeyRevision] = useState(0);
+  const [rotated, setRotated] = useState(false);
   const [busy, setBusy] = useState(false);
   const [rotation, setRotation] = useState<Rotation | null>(null);
   const [verification, setVerification] = useState<AuditVerification | null>(null);
   useEffect(() => {
     let current = true;
-    setError('');
+    setKeyError('');
     void client.keys().then(
       (value) => {
         if (current) setKeys(value);
       },
       (reason: unknown) => {
-        if (current) setError(String(reason));
+        if (current) setKeyError(String(reason));
       },
     );
     return () => {
       current = false;
     };
-  }, [client, revision]);
+  }, [client, revision, keyRevision]);
   const disabled = readOnly || busy;
   async function rotate() {
     if (!rotation || disabled) return;
@@ -53,9 +56,10 @@ export default function Security({
       if (rotation.kind === 'kek') await client.rotateKek();
       else await client.rotateDatasetKey(rotation.target);
       setRotation(null);
-      setKeys(await client.keys());
+      setRotated(true);
       setNotice('Key rotation completed.');
       onChanged();
+      setKeyRevision((r) => r + 1);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -109,6 +113,19 @@ export default function Security({
       </div>
       {notice && <p role="status">{notice}</p>}
       {error && <p role="alert">{error}</p>}
+      {keyError && (
+        <div role="alert">
+          <p>
+            {rotated
+              ? 'Key rotation completed. Key metadata could not refresh.'
+              : 'Could not load key metadata.'}{' '}
+            {keyError}
+          </p>
+          <Button variant="outline" disabled={busy} onClick={() => setKeyRevision((r) => r + 1)}>
+            Retry
+          </Button>
+        </div>
+      )}
       {verification && (
         <p role="status">
           <StatePill
@@ -129,7 +146,7 @@ export default function Security({
           Audit head: <code className="security-hash">{status.audit_head}</code>
         </p>
       )}
-      {keys === null && !error ? (
+      {keys === null && !keyError ? (
         <Skeleton label="Loading encryption keys…" />
       ) : (
         <Table label="Encryption key metadata">

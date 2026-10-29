@@ -10,6 +10,7 @@ import { FeatureEmpty, FeatureError, FeatureLoading } from '@/components/workben
 import { StatePill, Tray } from '@/components/workbench/primitives';
 import { relativeTime } from '@/lib/view-model';
 import { formatBytes } from './storage-model';
+import { offlineMessage } from '@/lib/offline-state';
 export function SourceHealth({
   sources,
   jobs,
@@ -190,8 +191,13 @@ export function Storage({ client, readOnly }: { client: Api; readOnly: boolean }
       <p className="hint">
         Current snapshots and engine files. Source details follow your access grants.
       </p>
-      {query.isPending && <Skeleton label="Measuring storage…" />}
-      {query.isError && (
+      {query.isLoading && <Skeleton label="Measuring storage…" />}
+      {readOnly && (
+        <p className="hint" role="status">
+          {offlineMessage(readOnly, data, 'storage usage')}
+        </p>
+      )}
+      {!readOnly && query.isError && (
         <div role="alert">
           {String(query.error)}
           <Button variant="outline" onClick={() => void query.refetch()}>

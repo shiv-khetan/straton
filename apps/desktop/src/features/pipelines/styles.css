@@ -33,15 +33,18 @@
 
 /* Data flow along pipeline edges: a hairline track plus a short glowing segment that
    travels source → target. pathLength=100 on the pulse makes the dash maths edge-agnostic. */
+.flow-edge {
+  --edge-track: var(--ink-3);
+}
 .flow-edge .flow-track {
-  stroke: var(--line);
+  stroke: var(--edge-track);
   stroke-width: 1.5;
 }
 .flow-edge.flow-done .flow-track {
-  stroke: color-mix(in srgb, var(--primary) 55%, var(--line));
+  stroke: color-mix(in srgb, var(--primary) 55%, var(--edge-track));
 }
 .flow-edge.flow-flowing .flow-track {
-  stroke: color-mix(in srgb, var(--primary) 35%, var(--line));
+  stroke: color-mix(in srgb, var(--primary) 35%, var(--edge-track));
 }
 .flow-edge.flow-blocked .flow-track {
   stroke: var(--danger-ink);

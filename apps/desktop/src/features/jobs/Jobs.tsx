@@ -17,6 +17,8 @@ import {
 import { datasetLabel } from '@/lib/view-model';
 import { eligibleWatermarkColumns, hasIncrementalSettings } from './job-model';
 import { RunTable } from './RunTable';
+import { SearchableChoice } from '../pipelines/SearchableChoice';
+import { useReadOnly } from '@/components/workbench/ReadOnlyScope';
 export default function Jobs({
   sources,
   datasets,
@@ -31,6 +33,7 @@ export default function Jobs({
   open,
   onClose,
   seed,
+  readOnly: readOnlyProp = false,
 }: {
   sources: Pick<Source, 'id' | 'name' | 'kind'>[];
   datasets: Dataset[];
@@ -45,7 +48,10 @@ export default function Jobs({
   open: boolean;
   onClose: () => void;
   seed: Dataset | null;
+  readOnly?: boolean;
 }) {
+  const readOnly = useReadOnly() || readOnlyProp;
+  const [search, setSearch] = useState('');
   const [name, setName] = useState(seed ? 'Sync ' + datasetLabel(seed) : '');
   const [source, setSource] = useState(seed?.source_id ?? '');
   const [dataset, setDataset] = useState(seed?.name ?? '');
@@ -104,6 +110,18 @@ export default function Jobs({
         </div>
       </div>
       <Tray title="Sync jobs" className="jobs-table">
+        <Field label="Search jobs by name">
+          <Input type="search" value={search} onChange={(event) => setSearch(event.target.value)} />
+        </Field>
+        {search &&
+          !jobs.some((job) => job.name.toLowerCase().includes(search.trim().toLowerCase())) && (
+            <p className="empty">
+              No matching jobs.{' '}
+              <Button variant="link" onClick={() => setSearch('')}>
+                Clear search
+              </Button>
+            </p>
+          )}
         <UiTable label="Sync jobs">
           <TableHeader>
             <TableRow>
@@ -117,83 +135,85 @@ export default function Jobs({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {jobs.map((job) => (
-              <TableRow key={job.id}>
-                <TableCell>
-                  <div className="flex items-center gap-2 whitespace-nowrap">
-                    <span className="max-w-44 truncate" title={job.name}>
-                      {job.name}
-                    </span>
-                    <StatePill state={job.enabled ? 'Enabled' : 'Disabled'} />
-                  </div>
-                </TableCell>
-                <TableCell>
-                  {datasetLabel(
-                    datasets.find(
-                      (d) => d.source_id === job.source_id && d.name === job.dataset,
-                    ) ?? { name: job.dataset },
-                  )}
-                </TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-2 whitespace-nowrap">
-                    <Pill>{job.mode === 'incremental' ? 'Incremental' : 'Full refresh'}</Pill>
-                    {job.mode === 'incremental' && (
-                      <code className="text-ink-2" title="Watermark">
-                        {job.watermark ?? 'No watermark yet'}
-                      </code>
+            {jobs
+              .filter((job) => job.name.toLowerCase().includes(search.trim().toLowerCase()))
+              .map((job) => (
+                <TableRow key={job.id}>
+                  <TableCell>
+                    <div className="flex items-center gap-2 whitespace-nowrap">
+                      <span className="max-w-44 truncate" title={job.name}>
+                        {job.name}
+                      </span>
+                      <StatePill state={job.enabled ? 'Enabled' : 'Disabled'} />
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    {datasetLabel(
+                      datasets.find(
+                        (d) => d.source_id === job.source_id && d.name === job.dataset,
+                      ) ?? { name: job.dataset },
                     )}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <code>{job.cron || 'Manual'}</code>
-                </TableCell>
-                <TableCell>
-                  <div className="actions row-actions">
-                    <Button
-                      variant="outline"
-                      disabled={busy}
-                      onClick={() => void action(() => client.runJob(job.id), 'Run queued')}
-                    >
-                      Run now
-                    </Button>
-                    {!job.builtin && job.source_id && (
-                      <RowMenu label={'More actions for ' + job.name}>
-                        {' '}
-                        {!job.builtin && job.source_id && (
-                          <Button
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() =>
-                              void action(
-                                () =>
-                                  client.updateJob(job.id, {
-                                    name: job.name,
-                                    source_id: job.source_id!,
-                                    dataset: job.dataset,
-                                    cron: job.cron,
-                                    enabled: !job.enabled,
-                                    mode: job.mode,
-                                    watermark_column: job.watermark_column,
-                                    key_columns: job.key_columns,
-                                    delete_detection: job.delete_detection,
-                                    key_diff_every_runs: job.key_diff_every_runs,
-                                  }),
-                                'Job updated',
-                              )
-                            }
-                          >
-                            {job.enabled ? 'Disable' : 'Enable'}
-                          </Button>
-                        )}
-                      </RowMenu>
-                    )}
-                    <Button variant="outline" onClick={() => setJobFilter(job.id)}>
-                      History
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2 whitespace-nowrap">
+                      <Pill>{job.mode === 'incremental' ? 'Incremental' : 'Full refresh'}</Pill>
+                      {job.mode === 'incremental' && (
+                        <code className="text-ink-2" title="Watermark">
+                          {job.watermark ?? 'No watermark yet'}
+                        </code>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <code>{job.cron || 'Manual'}</code>
+                  </TableCell>
+                  <TableCell>
+                    <div className="actions row-actions">
+                      <Button
+                        variant="outline"
+                        disabled={readOnly || busy}
+                        onClick={() => void action(() => client.runJob(job.id), 'Run queued')}
+                      >
+                        Run now
+                      </Button>
+                      {!job.builtin && job.source_id && (
+                        <RowMenu label={'More actions for ' + job.name}>
+                          {' '}
+                          {!job.builtin && job.source_id && (
+                            <Button
+                              variant="outline"
+                              disabled={readOnly || busy}
+                              onClick={() =>
+                                void action(
+                                  () =>
+                                    client.updateJob(job.id, {
+                                      name: job.name,
+                                      source_id: job.source_id!,
+                                      dataset: job.dataset,
+                                      cron: job.cron,
+                                      enabled: !job.enabled,
+                                      mode: job.mode,
+                                      watermark_column: job.watermark_column,
+                                      key_columns: job.key_columns,
+                                      delete_detection: job.delete_detection,
+                                      key_diff_every_runs: job.key_diff_every_runs,
+                                    }),
+                                  'Job updated',
+                                )
+                              }
+                            >
+                              {job.enabled ? 'Disable' : 'Enable'}
+                            </Button>
+                          )}
+                        </RowMenu>
+                      )}
+                      <Button variant="outline" onClick={() => setJobFilter(job.id)}>
+                        History
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
           </TableBody>
         </UiTable>
         {!jobs.length && <p className="empty">Create a job after discovering a source.</p>}
@@ -202,6 +222,7 @@ export default function Jobs({
         <form
           onSubmit={(e) => {
             e.preventDefault();
+            if (readOnly) return;
             void action(async () => {
               await client.createJob({
                 name,
@@ -225,19 +246,19 @@ export default function Jobs({
             <Field label="Job name">
               <Input required value={name} onChange={(e) => setName(e.target.value)} />
             </Field>
-            <Field label="Source">
-              <select
-                required
-                value={source}
-                onChange={(e) => {
-                  setSource(e.target.value);
-                  setDataset('');
-                  setMode('full');
-                }}
-              >
-                <option value="">Select source</option>
-                {sources
-                  .filter((s) =>
+            <SearchableChoice
+              label="Source"
+              value={source}
+              disabled={readOnly}
+              onChange={(value) => {
+                setSource(value);
+                setDataset('');
+                setMode('full');
+              }}
+              options={[
+                { value: '', label: 'Select source' },
+                ...sources
+                  .filter((source) =>
                     [
                       'postgres',
                       'sqlserver',
@@ -248,27 +269,23 @@ export default function Jobs({
                       'stripe',
                       'salesforce',
                       'noop',
-                    ].includes(s.kind),
+                    ].includes(source.kind),
                   )
-                  .map((s) => (
-                    <option value={s.id} key={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-              </select>
-            </Field>
-            <Field label="Dataset">
-              <select required value={dataset} onChange={(e) => setDataset(e.target.value)}>
-                <option value="">Select discovered dataset</option>
-                {datasets
-                  .filter((d) => d.source_id === source && !d.stale)
-                  .map((d) => (
-                    <option key={d.id} value={d.name}>
-                      {datasetLabel(d)}
-                    </option>
-                  ))}
-              </select>
-            </Field>
+                  .map((source) => ({ value: source.id, label: source.name })),
+              ]}
+            />
+            <SearchableChoice
+              label="Dataset"
+              value={dataset}
+              disabled={readOnly}
+              onChange={setDataset}
+              options={[
+                { value: '', label: 'Select discovered dataset' },
+                ...datasets
+                  .filter((item) => item.source_id === source && !item.stale)
+                  .map((item) => ({ value: item.name, label: datasetLabel(item) })),
+              ]}
+            />
             <Field label="Mode">
               <select
                 value={mode}
@@ -384,7 +401,9 @@ export default function Jobs({
           <Button
             variant="default"
             disabled={
+              readOnly ||
               busy ||
+              !source ||
               !dataset ||
               (mode === 'incremental' && !hasIncrementalSettings(sourceKind, watermark, keys))
             }
@@ -411,7 +430,7 @@ export default function Jobs({
       )}
       <Tray title="Run history" className="run-history-card">
         <div className="toolbar">
-          <Choice
+          <SearchableChoice
             label="Job"
             value={jobFilter}
             onChange={setJobFilter}
@@ -438,7 +457,11 @@ export default function Jobs({
               (!jobFilter || r.job_id === jobFilter) && (!stateFilter || r.state === stateFilter),
           )}
           jobs={jobs}
-          cancel={(id) => void action(() => client.cancelRun(id), 'Cancellation requested')}
+          cancel={
+            readOnly
+              ? undefined
+              : (id) => void action(() => client.cancelRun(id), 'Cancellation requested')
+          }
           busy={busy}
         />
       </Tray>

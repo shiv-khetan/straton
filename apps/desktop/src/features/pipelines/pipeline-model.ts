@@ -48,6 +48,35 @@ export function graphValidation(graph: PipelineInput): PipelineValidation {
   }
   return { valid: errors.length === 0, errors };
 }
+export function dependencyError(graph: PipelineInput, from: string, to: string): string {
+  if (
+    !graph.nodes.some((node) => node.node_id === from) ||
+    !graph.nodes.some((node) => node.node_id === to)
+  )
+    return 'Choose both dependency nodes.';
+  if (from === to) return 'A node cannot depend on itself.';
+  if (graph.edges.some((edge) => edge.from_node === from && edge.to_node === to))
+    return 'This dependency already exists.';
+  const candidate = { ...graph, edges: [...graph.edges, { from_node: from, to_node: to }] };
+  return graphValidation(candidate).errors.some(
+    (error) => error.message === 'Graph contains a cycle.',
+  )
+    ? 'This dependency would create a cycle.'
+    : '';
+}
+
+export function selectionChange(
+  current: string,
+  changes: { type: string; id?: string; selected?: boolean }[],
+): string {
+  for (const change of changes) {
+    if (change.type !== 'select' || !change.id) continue;
+    if (change.selected) current = change.id;
+    else if (current === change.id) current = '';
+  }
+  return current;
+}
+
 export function validationDisplay(graph: PipelineInput, validation: PipelineValidation) {
   return {
     global: validation.errors.filter((e) => !e.node_id).map((e) => e.message),

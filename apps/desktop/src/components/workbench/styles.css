@@ -1,7 +1,10 @@
 @layer components {
+  /* Identifiers and types are code; pills and footers are labels (Mono-Means-Code). */
   .mono,
   .column-name,
-  .column-type,
+  .column-type {
+    @apply font-mono tabular-nums text-xs;
+  }
   .dataset-footer,
   .pill {
     @apply font-sans font-medium tabular-nums text-xs;

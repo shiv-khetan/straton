@@ -1,3 +1,7 @@
+import { useRouteStore } from '@/stores/route';
+import { useDraftExit, useDraftValue } from './DraftExit';
+import { clearDraft, draftKey, readDraft, snapshotSave, writeDraft } from './draft-store';
+import type { DashboardContinuation } from './draft-store';
 import { Plus } from 'lucide-react';
 import { PageActions } from '@/components/workbench/primitives';
 import { useEffect, useRef, useState } from 'react';
@@ -35,7 +39,7 @@ const fresh = (): ChartInput => ({
   config: { y: ['value'] },
   shared: false,
 });
-export default function Analytics({
+function AnalyticsLibrary({
   client,
   me,
   scope,
@@ -50,7 +54,10 @@ export default function Analytics({
     queryKey: [...queryKeys.charts, 'view', 'library'],
     queryFn: () => client.charts(),
   });
-  const [editing, setEditing] = useState<Chart | 'new' | null>(null);
+  const continuation = readDraft<DashboardContinuation>(draftKey(scope, 'dashboard-continuation'));
+  const [editing, setEditing] = useDraftValue<Chart | 'new' | null>(draftKey(scope, 'chart'), () =>
+    continuation ? 'new' : null,
+  );
   return (
     <section className="space-y-4">
       {editing ? (
@@ -139,7 +146,8 @@ function Builder({
   readOnly: boolean;
   onClose: () => void;
 }) {
-  const [draft, setDraft] = useState<ChartInput>(() =>
+  const key = draftKey(scope, 'chart', chart?.id ?? 'new');
+  const [draft, setDraft] = useDraftValue<ChartInput>(key, () =>
     chart
       ? {
           name: chart.name,
@@ -150,6 +158,29 @@ function Builder({
         }
       : fresh(),
   );
+  const baseline = chart
+    ? {
+        name: chart.name,
+        sql: chart.sql,
+        kind: chart.kind,
+        config: chart.config,
+        shared: chart.shared,
+      }
+    : fresh();
+  const exit = useDraftExit(JSON.stringify(draft) !== JSON.stringify(baseline), () => {
+    clearDraft(key);
+    setDraft(baseline);
+  });
+  const close = () =>
+    exit.request(() => {
+      clearDraft(key);
+      onClose();
+      const continuationKey = draftKey(scope, 'dashboard-continuation');
+      if (readDraft<DashboardContinuation>(continuationKey)) {
+        clearDraft(continuationKey);
+        exit.allow(() => useRouteStore.getState().navigate('Dashboards'));
+      }
+    });
   const [preview, setPreview] = useState<ChartData | null>(null);
   const [previewSql, setPreviewSql] = useState('');
   const [deleting, setDeleting] = useState(false);
@@ -191,7 +222,7 @@ function Builder({
   return (
     <div className="space-y-4">
       <div className="section-toolbar">
-        <Button variant="ghost" disabled={action.pending} onClick={onClose}>
+        <Button variant="ghost" disabled={action.pending} onClick={close}>
           ← Chart library
         </Button>
         <h2>{chart?.name ?? 'New chart'}</h2>
@@ -342,8 +373,12 @@ function Builder({
           <p className="py-6 text-ink-2">Run preview to see your query results.</p>
         )}
       </section>
+      {exit.dialog}
       {writable && (
-        <div className="flex flex-wrap gap-2">
+        <PageActions>
+          <Button variant="outline" disabled={action.pending} onClick={close}>
+            Cancel
+          </Button>
           <Button
             disabled={
               readOnly ||
@@ -354,9 +389,20 @@ function Builder({
             }
             onClick={() =>
               void action.run(async () => {
-                if (chart) await client.updateChart(chart.id, draft);
-                else await client.createChart(draft);
-                onClose();
+                const snapshot = snapshotSave(chart?.id, draft);
+                const result = snapshot.target
+                  ? await client.updateChart(snapshot.target, snapshot.value)
+                  : await client.createChart(snapshot.value);
+                clearDraft(key);
+                const continuationKey = draftKey(scope, 'dashboard-continuation');
+                const continuation = readDraft<DashboardContinuation>(continuationKey);
+                if (continuation) {
+                  writeDraft(continuationKey, { ...continuation, chartId: result.id });
+                  exit.allow(() => {
+                    onClose();
+                    useRouteStore.getState().navigate('Dashboards');
+                  });
+                } else exit.allow(onClose);
               }, 'Chart saved')
             }
           >
@@ -371,18 +417,23 @@ function Builder({
                 else
                   void action.run(async () => {
                     await client.deleteChart(chart.id);
-                    onClose();
+                    clearDraft(key);
+                    exit.allow(onClose);
                   }, 'Chart deleted');
               }}
             >
               {deleting ? 'Confirm delete' : 'Delete chart'}
             </Button>
           )}
-        </div>
+        </PageActions>
       )}
       {preview && previewSql !== draft.sql && (
         <p className="text-ink-2">SQL changed. Run preview again.</p>
       )}
     </div>
   );
+}
+
+export default function Analytics(props: Parameters<typeof AnalyticsLibrary>[0]) {
+  return <AnalyticsLibrary key={props.scope} {...props} />;
 }

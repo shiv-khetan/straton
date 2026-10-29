@@ -48,9 +48,19 @@ import {
 } from '@/components/workbench/FeatureState';
 import { Tabs, StatePill } from '@/components/workbench/primitives';
 import { relativeTime } from '@/lib/view-model';
-import { flowState, graphValidation, placeNodes, validationDisplay } from './pipeline-model';
+import {
+  dependencyError,
+  selectionChange,
+  graphValidation,
+  placeNodes,
+  validationDisplay,
+} from './pipeline-model';
 import { edgeTypes } from './FlowEdge';
 import type { FlowEdgeType } from './FlowEdge';
+import { isDirty, saveSnapshot } from './draft-model';
+import { useDraftGuard } from './useDraftGuard';
+import { SearchableChoice } from './SearchableChoice';
+import { historyPage, historyPageSize } from './history-model';
 import './styles.css';
 const empty = (): PipelineInput => ({
   name: '',
@@ -98,15 +108,19 @@ export default function Pipelines({
 }) {
   const [id, setId] = useState<string | null>(null);
   const [draft, setDraft] = useState<PipelineInput | null>(null);
+  const [baseline, setBaseline] = useState<PipelineInput | null>(null);
+  const [search, setSearch] = useState('');
   const [tab, setTab] = useState('Editor');
   const [requestedRun, setRequestedRun] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   useEffect(() => {
     if (request) {
-      setId(request.id);
-      setDraft(null);
-      setTab('Run history');
-      setRequestedRun(request.runId ?? '');
+      guard.request(() => {
+        setId(request.id);
+        setDraft(null);
+        setTab(request.runId ? 'Run history' : 'Editor');
+        setRequestedRun(request.runId ?? '');
+      });
     }
   }, [request?.nonce]);
   const list = useQuery({
@@ -121,17 +135,39 @@ export default function Pipelines({
   const mutation = useFeatureAction();
   function open(graph: PipelineGraph) {
     setId(graph.id);
-    setDraft({
+    const next: PipelineInput = {
       name: graph.name,
       description: graph.description,
       cron: graph.cron,
       enabled: graph.enabled,
       ...placeNodes({ nodes: graph.nodes, edges: graph.edges }),
-    });
+    };
+    setDraft(next);
+    setBaseline(next);
   }
   const selected = list.data?.find((p) => p.id === id);
   const writable =
     !!draft && (!id || (!!selected && (me.privileges.admin || selected.owner_id === me.user.id)));
+  async function saveDraft() {
+    if (!draft || readOnly || !writable) throw new Error('This pipeline is read-only.');
+    const target = saveSnapshot(id, draft);
+    const validation = await client.validatePipeline(target.draft);
+    if (!validation.valid)
+      throw new Error(validation.errors.map((error) => error.message).join(' '));
+    open(
+      target.id
+        ? await client.updatePipeline(target.id, target.draft)
+        : await client.createPipeline(target.draft),
+    );
+  }
+  const guard = useDraftGuard(
+    !!draft && isDirty(draft, baseline),
+    saveDraft,
+    !readOnly && writable && !mutation.pending,
+  );
+  const visible = (list.data ?? []).filter((pipeline) =>
+    pipeline.name.toLowerCase().includes(search.trim().toLowerCase()),
+  );
   return (
     <section className="space-y-4">
       <FeatureError error={mutation.error} />
@@ -144,6 +180,7 @@ export default function Pipelines({
                 disabled={readOnly}
                 onClick={() => {
                   setDraft(empty());
+                  setBaseline(empty());
                   setTab('Editor');
                   mutation.clear();
                 }}
@@ -153,6 +190,27 @@ export default function Pipelines({
               </Button>
             </PageActions>
           </div>
+          <Field label="Search pipelines by name">
+            <Input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </Field>
+          {!!list.data?.length && (
+            <p role="status" className="text-caption text-ink-2">
+              {visible.length} of {list.data.length} pipelines
+            </p>
+          )}
+          {!!list.data?.length && !visible.length && (
+            <FeatureEmpty
+              title="No matching pipelines"
+              action="Clear search"
+              onAction={() => setSearch('')}
+            >
+              Try another pipeline name.
+            </FeatureEmpty>
+          )}
           {list.isPending && <FeatureLoading label="Loading pipelines" />}
           {list.isError && <FeatureError error={list.error} retry={() => void list.refetch()} />}
           {list.data?.length === 0 && (
@@ -162,6 +220,7 @@ export default function Pipelines({
               disabled={readOnly}
               onAction={() => {
                 setDraft(empty());
+                setBaseline(empty());
                 setTab('Editor');
               }}
             >
@@ -179,7 +238,7 @@ export default function Pipelines({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {list.data.map((p) => (
+                {visible.map((p) => (
                   <PipelineRow
                     key={p.id}
                     pipeline={p}
@@ -202,10 +261,12 @@ export default function Pipelines({
           <div className="section-toolbar">
             <Button
               variant="ghost"
-              onClick={() => {
-                setDraft(null);
-                setId(null);
-              }}
+              onClick={() =>
+                guard.request(() => {
+                  setDraft(null);
+                  setId(null);
+                })
+              }
             >
               ← Pipelines
             </Button>
@@ -251,16 +312,12 @@ export default function Pipelines({
                     onChange={setDraft}
                     jobs={jobs}
                     models={models}
-                    readOnly={readOnly || !writable}
+                    readOnly={readOnly || !writable || mutation.pending}
                     saving={mutation.pending}
                     save={(validation) =>
                       void mutation.run(async () => {
                         try {
-                          open(
-                            id
-                              ? await client.updatePipeline(id, draft)
-                              : await client.createPipeline(draft),
-                          );
+                          await saveDraft();
                         } catch (e) {
                           if (e instanceof ApiError && e.validation) validation(e.validation);
                           throw e;
@@ -271,7 +328,6 @@ export default function Pipelines({
                 </ReactFlowProvider>
               ) : id ? (
                 <RunHistory
-                  graph={detail.data ?? draft}
                   key={id}
                   client={client}
                   id={id}
@@ -295,6 +351,7 @@ export default function Pipelines({
           )}
         </>
       )}
+      {guard.dialog}
     </section>
   );
 }
@@ -378,6 +435,9 @@ function Editor({
   const [refId, setRefId] = useState('');
   const [selected, setSelected] = useState('');
   const [selectedEdge, setSelectedEdge] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [connectionError, setConnectionError] = useState('');
   const [server, setServer] = useState<PipelineValidation | null>(null);
   const [validating, setValidating] = useState(false);
   const [validationError, setValidationError] = useState<unknown>(null);
@@ -459,6 +519,12 @@ function Editor({
     selected: selectedEdge === String(i),
   }));
   const patch = (v: Partial<PipelineInput>) => onChange({ ...draft, ...v });
+  function addDependency(source: string, target: string) {
+    if (readOnly) return;
+    const error = dependencyError(draft, source, target);
+    setConnectionError(error);
+    if (!error) patch({ edges: [...draft.edges, { from_node: source, to_node: target }] });
+  }
   async function arrange() {
     const { default: ELK } = await import('elkjs/lib/elk.bundled.js');
     const result = await new ELK().layout({
@@ -530,7 +596,7 @@ function Editor({
             setRefId('');
           }}
         />
-        <Choice
+        <SearchableChoice
           label="Existing reference"
           value={refId}
           options={[{ value: '', label: 'Choose a ' + kind }, ...options]}
@@ -580,11 +646,45 @@ function Editor({
           Remove selected node
         </Button>
       </div>
+      <div className="flex flex-wrap items-end gap-3">
+        <SearchableChoice
+          label="From node"
+          value={from}
+          onChange={setFrom}
+          disabled={readOnly}
+          options={draft.nodes.map((node) => ({ value: node.node_id, label: node.label }))}
+        />
+        <SearchableChoice
+          label="To node"
+          value={to}
+          onChange={setTo}
+          disabled={readOnly}
+          options={draft.nodes.map((node) => ({ value: node.node_id, label: node.label }))}
+        />
+        <Button
+          variant="outline"
+          disabled={readOnly || !from || !to}
+          onClick={() => addDependency(from, to)}
+        >
+          Add dependency
+        </Button>
+        <Button
+          variant="outline"
+          disabled={readOnly || !selectedEdge}
+          onClick={() => {
+            patch({ edges: draft.edges.filter((_, index) => String(index) !== selectedEdge) });
+            setSelectedEdge('');
+          }}
+        >
+          Remove selected dependency
+        </Button>
+      </div>
+      <FeatureError error={connectionError} />
       <FeatureError error={checks.error} retry={() => void checks.refetch()} />
       <FeatureError error={action.error} />
       <p className="text-caption text-ink-2">
-        Connect a node’s right handle to the next node’s left handle. Select an edge and press
-        Delete to remove it.
+        Choose From and To nodes, then Add dependency, or connect the canvas handles. Use Tab and
+        Enter to select a node or dependency; Delete removes the selection.
       </p>
       <div className="pipeline-canvas">
         <ReactFlow<TaskNode>
@@ -595,6 +695,8 @@ function Editor({
           nodesDraggable={!readOnly}
           nodesConnectable={!readOnly}
           elementsSelectable
+          multiSelectionKeyCode={null}
+          selectionKeyCode={null}
           onNodeClick={(_, n) => {
             setSelected(n.id);
             setSelectedEdge('');
@@ -608,6 +710,9 @@ function Editor({
             setSelectedEdge('');
           }}
           onNodesChange={(changes) => {
+            setSelected((current) => selectionChange(current, changes));
+            if (changes.some((change) => change.type === 'select' && change.selected))
+              setSelectedEdge('');
             if (readOnly) return;
             const moved = changes.filter((c) => c.type === 'position' && c.position !== undefined);
             if (!moved.length) return;
@@ -620,10 +725,12 @@ function Editor({
               }),
             });
           }}
-          onConnect={(c) => {
-            if (!readOnly)
-              patch({ edges: [...draft.edges, { from_node: c.source, to_node: c.target }] });
+          onEdgesChange={(changes) => {
+            setSelectedEdge((current) => selectionChange(current, changes));
+            if (changes.some((change) => change.type === 'select' && change.selected))
+              setSelected('');
           }}
+          onConnect={(connection) => addDependency(connection.source, connection.target)}
           onEdgesDelete={(removed) => {
             if (!readOnly)
               patch({
@@ -721,26 +828,26 @@ function RunActions({
   );
 }
 function RunHistory({
-  graph,
   client,
   id,
   readOnly,
   initialRunId,
 }: {
-  graph: PipelineInput;
   client: Api;
   id: string;
   readOnly: boolean;
   initialRunId?: string;
 }) {
   const [runId, setRunId] = useState(initialRunId ?? '');
+  const [page, setPage] = useState(0);
   useEffect(() => setRunId(initialRunId ?? ''), [initialRunId]);
   const runs = useQuery({
-    queryKey: [...queryKeys.pipelines, 'view', id, 'history'],
-    queryFn: () => client.pipelineRuns(id),
+    queryKey: [...queryKeys.pipelines, 'view', id, 'history', page],
+    queryFn: () => client.pipelineRuns(id, (page + 1) * historyPageSize + 1),
     refetchInterval: 5000,
   });
-  const current = runId || runs.data?.[0]?.id;
+  const loaded = historyPage(runs.data ?? [], page);
+  const current = runId || loaded.rows[0]?.id;
   const run = useQuery({
     queryKey: [...queryKeys.pipelines, 'view', 'run', current],
     queryFn: () => client.pipelineRun(current!),
@@ -765,11 +872,11 @@ function RunHistory({
         </FeatureEmpty>
       )}
       {!!runs.data?.length && (
-        <Choice
+        <SearchableChoice
           label="Run"
           value={current ?? ''}
           onChange={setRunId}
-          options={runs.data.map((r) => ({
+          options={loaded.rows.map((r) => ({
             value: r.id,
             label:
               (r.started_at ? new Date(r.started_at * 1000).toLocaleString() : 'Queued') +
@@ -779,6 +886,33 @@ function RunHistory({
               r.id.slice(0, 8),
           }))}
         />
+      )}
+      {runs.data && (
+        <div className="flex flex-wrap items-center gap-3">
+          <p role="status" className="text-caption text-ink-2">
+            Showing {loaded.first}–{loaded.last} · {runs.data.length} runs loaded, newest first
+          </p>
+          <Button
+            variant="outline"
+            disabled={page === 0 || runs.isFetching}
+            onClick={() => {
+              setPage((value) => value - 1);
+              setRunId('');
+            }}
+          >
+            Previous runs
+          </Button>
+          <Button
+            variant="outline"
+            disabled={runs.isFetching || runs.data.length <= (page + 1) * historyPageSize}
+            onClick={() => {
+              setPage((value) => value + 1);
+              setRunId('');
+            }}
+          >
+            Next runs
+          </Button>
+        </div>
       )}
       {current && run.isPending && <FeatureLoading />}
       <FeatureError error={run.error} retry={() => void run.refetch()} />
@@ -803,14 +937,17 @@ function RunHistory({
             )}
           </div>
           {run.data.error && <FeatureError error={run.data.error} />}
-          <LiveRunGraph graph={graph} run={run.data} />
-          <RunNodes graph={graph} run={run.data} />
+          <p className="text-caption text-ink-2">
+            These are the actual run-node records. The engine does not provide the executed graph
+            snapshot, so historical topology and labels are unavailable.
+          </p>
+          <RunNodes run={run.data} />
         </>
       )}
     </div>
   );
 }
-function RunNodes({ run, graph }: { run: PipelineRunDetail; graph: PipelineInput }) {
+function RunNodes({ run }: { run: PipelineRunDetail }) {
   return (
     <Table>
       <TableHeader>
@@ -825,9 +962,7 @@ function RunNodes({ run, graph }: { run: PipelineRunDetail; graph: PipelineInput
         {run.nodes.map((n) => (
           <TableRow key={n.node_id}>
             <TableCell>
-              <span>
-                {graph.nodes.find((node) => node.node_id === n.node_id)?.label ?? n.node_id}
-              </span>
+              <code>{n.node_id}</code>
             </TableCell>
             <TableCell>
               <StatePill state={n.state} />
@@ -837,57 +972,11 @@ function RunNodes({ run, graph }: { run: PipelineRunDetail; graph: PipelineInput
             </TableCell>
             <TableCell>
               {n.error ??
-                (n.started_at ? relativeTime(n.started_at * 1000) : 'Waiting for upstream nodes')}
+                (n.started_at ? relativeTime(n.started_at * 1000) : 'Start time unavailable')}
             </TableCell>
           </TableRow>
         ))}
       </TableBody>
     </Table>
-  );
-}
-
-function LiveRunGraph({ graph, run }: { graph: PipelineInput; run: PipelineRunDetail }) {
-  const nodes: TaskNode[] = placeNodes(graph).nodes.map((n) => ({
-    id: n.node_id,
-    type: 'task',
-    position: { x: n.x, y: n.y },
-    data: {
-      label: n.label,
-      kind: n.kind,
-      state: run.nodes.find((r) => r.node_id === n.node_id)?.state ?? 'pending',
-      errors: [],
-    },
-  }));
-  return (
-    <ReactFlowProvider>
-      <div className="pipeline-canvas" role="region" aria-label="Live pipeline node states">
-        <ReactFlow<TaskNode>
-          nodes={nodes}
-          edges={graph.edges.map((e, i): FlowEdgeType => ({
-            id: String(i),
-            source: e.from_node,
-            target: e.to_node,
-            type: 'flow',
-            data: {
-              flow: flowState(
-                run.nodes.find((n) => n.node_id === e.from_node)?.state,
-                run.nodes.find((n) => n.node_id === e.to_node)?.state,
-              ),
-            },
-            markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
-          }))}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          nodesDraggable={false}
-          nodesConnectable={false}
-          deleteKeyCode={null}
-          fitView
-          fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
-        >
-          <Background color="var(--line)" />
-          <Controls showInteractive={false} />
-        </ReactFlow>
-      </div>
-    </ReactFlowProvider>
   );
 }

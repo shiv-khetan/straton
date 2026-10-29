@@ -604,7 +604,8 @@ function AppContent() {
             }
           >
             <ReadOnlyScope
-              disabled={!online && ['Sources', 'Jobs', 'Access', 'Backups'].includes(page)}
+              // Jobs disables its own mutations offline so cached history stays browsable.
+              disabled={!online && ['Sources', 'Access', 'Backups'].includes(page)}
             >
               {queryError && <Feedback message={queryError} error onClose={() => {}} />}
               {loading && page !== 'Connect' && <Skeleton label="Loading engine workspace…" />}

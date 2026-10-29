@@ -27,6 +27,8 @@ import { ResultGrid, TypeIcon } from '@/components/workbench/ResultGrid';
 import { Skeleton } from '@/features/console/ConsoleDrawer';
 import { explorerRequest, filterOps, parseFilter } from './explorer-model';
 import { tableReference } from '@/features/sql/sql-model';
+import { Inspector, PageActions } from '@/components/workbench/primitives';
+import { offlineMessage } from '@/lib/offline-state';
 function FilterBar({
   table,
   filters,
@@ -185,7 +187,7 @@ function TableView({
           </h2>
           <code className="hint">{tableReference(table.sql_schema, table.sql_table)}</code>
         </div>
-        <div className="actions">
+        <PageActions>
           <Button variant="outline" onClick={query}>
             Open in SQL
           </Button>
@@ -212,7 +214,7 @@ function TableView({
           >
             <PanelRight size={18} />
           </Button>
-        </div>
+        </PageActions>
       </div>
       <label className="record-search">
         Search records
@@ -232,7 +234,7 @@ function TableView({
       />
       <div className="explorer-data">
         <div className="explorer-grid-area" aria-busy={result.isFetching}>
-          {result.isError && (
+          {!readOnly && result.isError && (
             <div role="alert" className="inline-error">
               {String(result.error)}{' '}
               <Button variant="outline" onClick={() => void result.refetch()}>
@@ -240,7 +242,12 @@ function TableView({
               </Button>
             </div>
           )}
-          {result.isPending ? (
+          {readOnly && (
+            <p className="hint p-4" role="status">
+              {offlineMessage(readOnly, data, 'table rows')}
+            </p>
+          )}
+          {result.isLoading ? (
             <Skeleton label="Loading table rows…" />
           ) : (
             data && (
@@ -292,7 +299,7 @@ function TableView({
               variant="outline"
               size="icon-sm"
               aria-label="Previous page"
-              disabled={pageIndex === 0 || result.isFetching}
+              disabled={readOnly || pageIndex === 0 || result.isFetching}
               onClick={() => setPage((p) => p - 1)}
             >
               <ChevronLeft size={16} />
@@ -303,6 +310,7 @@ function TableView({
               size="icon-sm"
               aria-label="Next page"
               disabled={
+                readOnly ||
                 !data ||
                 result.isFetching ||
                 data.rows.length < pageSize ||
@@ -315,55 +323,61 @@ function TableView({
           </div>
         </div>
         {meta && (
-          <aside className="table-metadata">
-            <h3>{table.dataset_type === 'view' ? 'View details' : 'Table details'}</h3>
-            <dl>
-              <dt>SQL name</dt>
-              <dd>
-                <code>{tableReference(table.sql_schema, table.sql_table)}</code>
-              </dd>
-              <dt>Rows</dt>
-              <dd>
-                <code>
-                  {table.row_count?.toLocaleString() ??
-                    (table.approximate_row_count != null
-                      ? '≈ ' + table.approximate_row_count.toLocaleString()
-                      : 'Policy filtered / unknown')}
-                </code>
-              </dd>
-              <dt>Last sync</dt>
-              <dd>
-                <code>{table.last_synced_at ?? 'Never synced'}</code>
-              </dd>
-              <dt>Policies</dt>
-              <dd>
-                {table.row_filtered ? 'Row filter applied' : 'No row filter'} ·{' '}
-                {table.columns.filter((c) => c.masked).length} masked columns
-              </dd>
-            </dl>
-            {table.sampled_documents != null && (
-              <p className="hint">
-                Inferred from {table.sampled_documents.toLocaleString()} sampled documents. Fields
-                may vary outside this sample.
-              </p>
-            )}
-            <h3>Columns</h3>
-            {table.columns.map((c) => (
-              <div key={c.name} className="metadata-column">
-                <TypeIcon type={c.type} />
-                <code>{c.name}</code>
-                <code className="hint">{c.type}</code>
-                {c.pk && <span className="policy-badge">PK</span>}
-                {table.sampled_documents != null && (
-                  <span className="hint">
-                    {table.field_coverage?.[c.name] ?? 0}/{table.sampled_documents} sampled ·{' '}
-                    {c.nullable ? 'Nullable' : 'Required in sample'}
-                  </span>
-                )}
-                {c.masked && <span className="policy-badge">Masked</span>}
-              </div>
-            ))}
-          </aside>
+          <Inspector
+            entityId={table.id}
+            title={table.display_name ?? table.name}
+            label="Table details"
+            onClose={() => setMeta(false)}
+          >
+            <div className="table-metadata">
+              <dl>
+                <dt>SQL name</dt>
+                <dd>
+                  <code>{tableReference(table.sql_schema, table.sql_table)}</code>
+                </dd>
+                <dt>Rows</dt>
+                <dd>
+                  <code>
+                    {table.row_count?.toLocaleString() ??
+                      (table.approximate_row_count != null
+                        ? '≈ ' + table.approximate_row_count.toLocaleString()
+                        : 'Policy filtered / unknown')}
+                  </code>
+                </dd>
+                <dt>Last sync</dt>
+                <dd>
+                  <code>{table.last_synced_at ?? 'Never synced'}</code>
+                </dd>
+                <dt>Policies</dt>
+                <dd>
+                  {table.row_filtered ? 'Row filter applied' : 'No row filter'} ·{' '}
+                  {table.columns.filter((c) => c.masked).length} masked columns
+                </dd>
+              </dl>
+              {table.sampled_documents != null && (
+                <p className="hint">
+                  Inferred from {table.sampled_documents.toLocaleString()} sampled documents. Fields
+                  may vary outside this sample.
+                </p>
+              )}
+              <h3>Columns</h3>
+              {table.columns.map((c) => (
+                <div key={c.name} className="metadata-column">
+                  <TypeIcon type={c.type} />
+                  <code>{c.name}</code>
+                  <code className="hint">{c.type}</code>
+                  {c.pk && <span className="policy-badge">PK</span>}
+                  {table.sampled_documents != null && (
+                    <span className="hint">
+                      {table.field_coverage?.[c.name] ?? 0}/{table.sampled_documents} sampled ·{' '}
+                      {c.nullable ? 'Nullable' : 'Required in sample'}
+                    </span>
+                  )}
+                  {c.masked && <span className="policy-badge">Masked</span>}
+                </div>
+              ))}
+            </div>
+          </Inspector>
         )}
       </div>
     </section>
@@ -450,8 +464,13 @@ export default function Explorer({
               }
             }}
           >
-            {tree.isPending && <Skeleton label="Loading sources…" />}
-            {tree.isError && (
+            {tree.isLoading && <Skeleton label="Loading sources…" />}
+            {readOnly && (
+              <p className="hint" role="status">
+                {offlineMessage(readOnly, tree.data, 'the catalog')}
+              </p>
+            )}
+            {!readOnly && tree.isError && (
               <div role="alert">
                 {String(tree.error)}
                 <Button variant="outline" onClick={() => void tree.refetch()}>
@@ -505,7 +524,7 @@ export default function Explorer({
                 )
               );
             })}
-            {!tree.isPending && !tables.length && (
+            {tree.data && !tables.length && (
               <p className="hint">Discover a source, then sync a dataset to browse its rows.</p>
             )}
           </div>

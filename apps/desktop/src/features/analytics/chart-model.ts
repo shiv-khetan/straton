@@ -22,6 +22,18 @@ export function chartRows(result: ChartData, config: ChartConfig) {
           ]) as Record<string, SqlCell>,
       ),
     };
+  const coordinates = new Set<string>();
+  for (const row of result.rows) {
+    const coordinate = JSON.stringify([x >= 0 ? row[x] : coordinates.size, row[series]]);
+    if (coordinates.has(coordinate))
+      return {
+        rows: [],
+        keys: [],
+        error:
+          'Multiple rows share an X and series value. Aggregate them in SQL or choose a unique X column.',
+      };
+    coordinates.add(coordinate);
+  }
   const keys = new Set<string>();
   const rows = new Map<string, Record<string, SqlCell>>();
   result.rows.forEach((r, i) => {

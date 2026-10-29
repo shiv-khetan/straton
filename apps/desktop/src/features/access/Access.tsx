@@ -29,6 +29,14 @@ import { Field } from '@/components/workbench/Field';
 import { Skeleton } from '@/features/console/ConsoleDrawer';
 import { setMask } from '@/features/access/access-model';
 import { datasetLabel, relativeTime } from '@/lib/view-model';
+import { dirtyPredicates, savePredicate } from './predicate-model';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
 const emptyPolicies: Policies = { row_filters: [], masks: [] };
 export default function Access({
   client,
@@ -62,7 +70,10 @@ export default function Access({
     [privilege, setPrivilege] = useState<Privilege>('read');
   const [dataset, setDataset] = useState(''),
     [policies, setPolicies] = useState<Policies>(emptyPolicies),
-    [policyReady, setPolicyReady] = useState(false);
+    [policyState, setPolicyState] = useState<'loading' | 'error' | 'success'>('loading');
+  const [policyError, setPolicyError] = useState('');
+  const [policyRevision, setPolicyRevision] = useState(0);
+  const [nextDataset, setNextDataset] = useState<string | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({}),
     [validation, setValidation] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -104,7 +115,8 @@ export default function Access({
   }, [client, selectedUser, revision]);
   useEffect(() => {
     let active = true;
-    setPolicyReady(false);
+    setPolicyState('loading');
+    setPolicyError('');
     setPolicies(emptyPolicies);
     setFilters({});
     setValidation({});
@@ -115,16 +127,19 @@ export default function Access({
           if (active) {
             setPolicies(p);
             setFilters(Object.fromEntries(p.row_filters.map((f) => [f.role_id, f.predicate])));
-            setPolicyReady(true);
+            setPolicyState('success');
           }
         })
         .catch((e) => {
-          if (active) setError(String(e));
+          if (active) {
+            setPolicyError(String(e));
+            setPolicyState('error');
+          }
         });
     return () => {
       active = false;
     };
-  }, [client, dataset, revision]);
+  }, [client, dataset, policyRevision]);
   const work = useCallback(
     async (fn: () => Promise<unknown>, text: string, refresh = true) => {
       setBusy(true);
@@ -464,9 +479,10 @@ export default function Access({
             <Field label="Dataset">
               <select
                 value={dataset}
+                disabled={busy}
                 onChange={(e) => {
-                  setPolicyReady(false);
-                  setDataset(e.target.value);
+                  if (dirtyPredicates(policies, filters)) setNextDataset(e.target.value);
+                  else setDataset(e.target.value);
                 }}
               >
                 <option value="">Choose dataset</option>
@@ -479,8 +495,15 @@ export default function Access({
             </Field>
             {!dataset ? (
               <EmptyState>Choose a dataset to edit its row filters and column masks.</EmptyState>
-            ) : !policyReady ? (
+            ) : policyState === 'loading' ? (
               <p role="status">Loading policies…</p>
+            ) : policyState === 'error' ? (
+              <div role="alert">
+                <p>Could not load policies. {policyError}</p>
+                <Button variant="outline" onClick={() => setPolicyRevision((r) => r + 1)}>
+                  Retry policies
+                </Button>
+              </div>
             ) : (
               <>
                 <h2>Row filters</h2>
@@ -493,6 +516,7 @@ export default function Access({
                     <Field label={r.name + ' row predicate'}>
                       <Textarea
                         rows={2}
+                        disabled={busy}
                         className="mono"
                         placeholder="No filter — all rows"
                         value={filters[r.id] ?? ''}
@@ -531,13 +555,15 @@ export default function Access({
                         disabled={busy}
                         onClick={() =>
                           void work(
-                            () =>
-                              client.rowFilter(
-                                dataset,
-                                r.id,
-                                filters[r.id]?.trim() ? filters[r.id] : null,
-                              ),
+                            async () => {
+                              const predicate = filters[r.id]?.trim() ? filters[r.id] : null;
+                              await client.rowFilter(dataset, r.id, predicate);
+                              setPolicies((p) => savePredicate(p, r.id, predicate));
+                              setFilters((p) => ({ ...p, [r.id]: predicate ?? '' }));
+                              onChanged();
+                            },
                             'Row filter saved',
+                            false,
                           )
                         }
                       >
@@ -549,8 +575,14 @@ export default function Access({
                         disabled={busy || !policies.row_filters.some((f) => f.role_id === r.id)}
                         onClick={() =>
                           void work(
-                            () => client.rowFilter(dataset, r.id, null),
+                            async () => {
+                              await client.rowFilter(dataset, r.id, null);
+                              setPolicies((p) => savePredicate(p, r.id, null));
+                              setFilters((p) => ({ ...p, [r.id]: '' }));
+                              onChanged();
+                            },
                             'Row filter removed',
+                            false,
                           )
                         }
                       >
@@ -622,6 +654,35 @@ export default function Access({
           </Tray>
         )}
       </section>
+      <Dialog
+        open={nextDataset !== null}
+        onOpenChange={(open) => {
+          if (!open) setNextDataset(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard policy changes?</DialogTitle>
+            <DialogDescription>
+              Changing datasets discards unsaved row predicates.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button autoFocus variant="outline" onClick={() => setNextDataset(null)}>
+              Keep editing
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setDataset(nextDataset!);
+                setNextDataset(null);
+              }}
+            >
+              Discard changes
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Sheet
         open={!!selectedUser}
         title={'Tokens · ' + (selected?.name ?? '')}
