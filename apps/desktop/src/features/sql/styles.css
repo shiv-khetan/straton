@@ -24,10 +24,17 @@
     border-right: 1px solid var(--line);
     padding: 12px;
   }
-  .sql-tables > label {
+  .sql-side-panel > label {
     margin: 12px 0 20px;
   }
+  .sql-panel-tab {
+    @apply h-auto flex-none rounded-none border-0 bg-transparent font-normal after:hidden data-[state=active]:bg-transparent data-[state=active]:font-medium data-[state=active]:shadow-none dark:data-[state=active]:bg-transparent;
+  }
   .sql-side-tabs {
+    width: 100%;
+    height: auto;
+    padding: 0;
+    justify-content: flex-start;
     display: flex;
     gap: 4px;
     flex-wrap: wrap;
@@ -119,13 +126,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .sql-toolbar {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--line);
-  }
   .sql-output {
     display: flex;
     flex-direction: column;
@@ -155,7 +155,7 @@
     overflow: auto;
   }
   .sql-error h3 {
-    color: var(--danger);
+    color: var(--danger-ink);
     margin-bottom: 8px;
   }
   .sql-error pre {

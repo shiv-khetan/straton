@@ -13,6 +13,8 @@ import {
   useFeatureAction,
 } from '@/components/workbench/FeatureState';
 import { relativeTime } from '@/lib/view-model';
+import { toast } from 'sonner';
+import { openNotification } from './notification-model';
 export function Notifications({
   client,
   readOnly,
@@ -36,10 +38,15 @@ export function Notifications({
     enabled: !!client && open,
   });
   const action = useFeatureAction();
+  const navigation = useFeatureAction();
   const jump = (n: EngineNotification) =>
-    void action.run(async () => {
-      if (!n.read) await client!.readNotifications({ ids: [n.id] });
-      await onEntity(n.entity_kind, n.entity_id);
+    void navigation.run(async () => {
+      await openNotification(n, {
+        readOnly,
+        onEntity,
+        markRead: client ? (id) => client.readNotifications({ ids: [id] }) : undefined,
+        onReadError: (error) => toast.error('Could not mark notification read: ' + String(error)),
+      });
       setOpen(false);
     });
   return (
@@ -87,6 +94,7 @@ export function Notifications({
         </header>
         <div className="max-h-96 overflow-y-auto p-3">
           <FeatureError error={action.error} />
+          <FeatureError error={navigation.error} />
           <FeatureError error={count.error} retry={() => void count.refetch()} />
           {list.isPending && <FeatureLoading label="Loading notifications" />}
           <FeatureError error={list.error} retry={() => void list.refetch()} />
@@ -94,8 +102,9 @@ export function Notifications({
             <FeatureEmpty
               title={unreadOnly ? 'You’re caught up' : 'No notifications yet'}
               action="View activity"
+              disabled={navigation.pending}
               onAction={() =>
-                void action.run(async () => {
+                void navigation.run(async () => {
                   await onEntity('activity', '');
                   setOpen(false);
                 })
@@ -132,7 +141,7 @@ export function Notifications({
                   <Button
                     size="sm"
                     variant="link"
-                    disabled={readOnly || action.pending}
+                    disabled={navigation.pending}
                     onClick={() => jump(n)}
                   >
                     Open {n.entity_kind.replaceAll('_', ' ')}

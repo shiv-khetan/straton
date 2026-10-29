@@ -1,6 +1,15 @@
+import { useDraftExit, useDraftValue } from '@/features/analytics/DraftExit';
+import {
+  clearDraft,
+  draftKey,
+  readDraft,
+  snapshotSave,
+  writeDraft,
+} from '@/features/analytics/draft-store';
+import type { DashboardContinuation } from '@/features/analytics/draft-store';
 import { Plus } from 'lucide-react';
 import { PageActions } from '@/components/workbench/primitives';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type {
   AnalyticsDashboard,
@@ -42,9 +51,9 @@ import {
 import { Pill } from '@/components/workbench/primitives';
 import { ResultGrid } from '@/components/workbench/ResultGrid';
 import { ChartPreview } from '@/features/analytics/ChartPreview';
-import { packLayout, reorderLayout } from './layout-model';
+import { addDashboardChart, packLayout, reorderLayout } from './layout-model';
 import './styles.css';
-export default function Dashboards({
+function DashboardLibrary({
   client,
   me,
   scope,
@@ -57,7 +66,7 @@ export default function Dashboards({
   readOnly: boolean;
   onAnalytics: () => void;
 }) {
-  const [id, setId] = useState<string | null>(null);
+  const [id, setId] = useDraftValue<string | null>(draftKey(scope, 'dashboard'), () => null);
   const list = useQuery({
     queryKey: [...queryKeys.dashboards, 'view', 'list'],
     queryFn: () => client.dashboards(),
@@ -71,9 +80,6 @@ export default function Dashboards({
     <section className="space-y-4">
       {id ? (
         <>
-          <Button variant="ghost" onClick={() => setId(null)}>
-            ← Dashboards
-          </Button>
           {id === 'new' ? (
             <DashboardView
               key="new"
@@ -175,19 +181,31 @@ function DashboardView({
   onClose: () => void;
   onAnalytics: () => void;
 }) {
-  const [draft, setDraft] = useState<DashboardInput>(() =>
-    dashboard
-      ? {
-          name: dashboard.name,
-          description: dashboard.description,
-          layout: dashboard.layout,
-          shared: dashboard.shared,
-        }
-      : { name: '', description: '', layout: [], shared: false },
-  );
-  const [saved, setSaved] = useState(draft);
-  const [savedId, setSavedId] = useState(dashboard?.id);
-  const [editing, setEditing] = useState(!dashboard);
+  const key = draftKey(scope, 'dashboard', dashboard?.id ?? 'new');
+  const initial: DashboardInput = dashboard
+    ? {
+        name: dashboard.name,
+        description: dashboard.description,
+        layout: dashboard.layout,
+        shared: dashboard.shared,
+      }
+    : { name: '', description: '', layout: [], shared: false };
+  const [draft, setDraft] = useDraftValue<DashboardInput>(key, () => initial);
+  const [saved, setSaved] = useDraftValue<DashboardInput>(key + ':saved', () => initial);
+  const [savedId, setSavedId] = useDraftValue<string | undefined>(key + ':id', () => dashboard?.id);
+  const [editing, setEditing] = useDraftValue<boolean>(key + ':editing', () => !dashboard);
+  const exit = useDraftExit(JSON.stringify(draft) !== JSON.stringify(saved), () => {
+    setDraft(saved);
+    setEditing(!savedId);
+  });
+  const close = () =>
+    exit.request(() => {
+      clearDraft(key);
+      clearDraft(key + ':saved');
+      clearDraft(key + ':id');
+      clearDraft(key + ':editing');
+      onClose();
+    });
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [range, setRange] = useState<ChartRange>({
     from: new Date(Date.now() - 7 * 86400000).toISOString(),
@@ -203,9 +221,23 @@ function DashboardView({
   const writable = !dashboard || me.privileges.admin || dashboard.owner_id === me.user.id;
   const patch = (v: Partial<DashboardInput>) => setDraft((d) => ({ ...d, ...v }));
   const used = new Set(draft.layout.map((t) => t.chart_id));
+  useEffect(() => {
+    const continuationKey = draftKey(scope, 'dashboard-continuation');
+    const continuation = readDraft<DashboardContinuation>(continuationKey);
+    if (continuation?.chartId && continuation.dashboardId === (dashboard?.id ?? 'new')) {
+      const chartId = continuation.chartId;
+      setDraft((current) => addDashboardChart(current, chartId));
+      setEditing(true);
+      clearDraft(continuationKey);
+    }
+  }, [scope, dashboard?.id]);
   return (
     <div className="space-y-4">
+      {exit.dialog}
       <FeatureError error={action.error} />
+      <Button variant="ghost" disabled={action.pending} onClick={close}>
+        ← Dashboards
+      </Button>
       <div className="section-toolbar">
         <h2 className="text-lg font-medium">{draft.name || 'New dashboard'}</h2>
         <div className="flex gap-2">
@@ -223,7 +255,11 @@ function DashboardView({
                 else
                   void action.run(async () => {
                     await client.deleteDashboard(savedId);
-                    onClose();
+                    clearDraft(key);
+                    clearDraft(key + ':saved');
+                    clearDraft(key + ':id');
+                    clearDraft(key + ':editing');
+                    exit.allow(onClose);
                   }, 'Dashboard deleted');
               }}
             >
@@ -233,7 +269,10 @@ function DashboardView({
         </div>
       </div>
       {editing ? (
-        <div className="space-y-4 rounded-card border border-line bg-panel p-4">
+        <fieldset
+          disabled={readOnly || action.pending}
+          className="space-y-4 rounded-card border border-line bg-panel p-4"
+        >
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Name">
               <Input
@@ -269,58 +308,61 @@ function DashboardView({
               onChange={setChartId}
             />
             <Button
+              variant="outline"
               disabled={readOnly || !chartId}
               onClick={() => {
-                if (!used.has(chartId))
-                  patch({
-                    layout: packLayout([
-                      ...draft.layout,
-                      { chart_id: chartId, x: 0, y: 0, w: 6, h: 4 },
-                    ]),
-                  });
+                setDraft((current) => addDashboardChart(current, chartId));
                 setChartId('');
               }}
             >
               Add chart
             </Button>
-            <Button
-              disabled={readOnly || action.pending || !draft.name.trim()}
-              onClick={() =>
-                void action.run(async () => {
-                  const result = savedId
-                    ? await client.updateDashboard(savedId, draft)
-                    : await client.createDashboard(draft);
-                  setSavedId(result.id);
-                  const value = {
-                    name: result.name,
-                    description: result.description,
-                    layout: result.layout,
-                    shared: result.shared,
-                  };
-                  setDraft(value);
-                  setSaved(value);
-                  setEditing(false);
-                }, 'Dashboard saved')
-              }
-            >
-              Save dashboard
-            </Button>
-            {savedId && (
-              <Button
-                variant="outline"
-                disabled={action.pending}
-                onClick={() => {
-                  setDraft(saved);
-                  setEditing(false);
-                }}
-              >
-                Discard changes
-              </Button>
-            )}
           </div>
-        </div>
+        </fieldset>
       ) : (
         <p className="text-ink-2">{draft.description}</p>
+      )}
+      {editing && (
+        <PageActions>
+          {' '}
+          <Button
+            disabled={readOnly || action.pending || !draft.name.trim()}
+            onClick={() =>
+              void action.run(async () => {
+                const snapshot = snapshotSave(savedId, draft);
+                const result = snapshot.target
+                  ? await client.updateDashboard(snapshot.target, snapshot.value)
+                  : await client.createDashboard(snapshot.value);
+                setSavedId(result.id);
+                const value = {
+                  name: result.name,
+                  description: result.description,
+                  layout: result.layout,
+                  shared: result.shared,
+                };
+                setDraft(value);
+                setSaved(value);
+                setEditing(false);
+              }, 'Dashboard saved')
+            }
+          >
+            Save dashboard
+          </Button>
+          {
+            <Button
+              variant="outline"
+              disabled={action.pending}
+              onClick={() => {
+                exit.request(() => {
+                  setDraft(saved);
+                  setEditing(false);
+                });
+              }}
+            >
+              Cancel
+            </Button>
+          }
+        </PageActions>
       )}
       <TimeRange onChange={setRange} />
       <FeatureError error={charts.error} retry={() => void charts.refetch()} />
@@ -330,8 +372,12 @@ function DashboardView({
           title="This dashboard has no charts"
           action={writable ? (editing ? 'Open Analytics' : 'Add charts') : undefined}
           onAction={() => {
-            if (editing) onAnalytics();
-            else setEditing(true);
+            if (editing) {
+              writeDraft(draftKey(scope, 'dashboard-continuation'), {
+                dashboardId: dashboard?.id ?? 'new',
+              });
+              exit.allow(onAnalytics);
+            } else setEditing(true);
           }}
           disabled={readOnly}
         >
@@ -612,4 +658,8 @@ function Drill({
       )}
     </div>
   );
+}
+
+export default function Dashboards(props: Parameters<typeof DashboardLibrary>[0]) {
+  return <DashboardLibrary key={props.scope} {...props} />;
 }

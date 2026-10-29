@@ -395,7 +395,7 @@ export default function Dashboard({
                     <TableHead>Name</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right tabular-nums">Rows</TableHead>
-                    <TableHead className="text-right tabular-nums">Started</TableHead>
+                    <TableHead className="text-right tabular-nums">Scheduled</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -412,6 +412,7 @@ export default function Dashboard({
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         <time
+                          dateTime={new Date(run.available_at * 1000).toISOString()}
                           title={
                             new Date(run.available_at * 1000).toLocaleString() +
                             ' · scheduled availability; actual start time is not reported'

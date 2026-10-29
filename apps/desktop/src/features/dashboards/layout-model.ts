@@ -1,4 +1,4 @@
-import type { DashboardTile } from '../../lib/api.ts';
+import type { DashboardInput, DashboardTile } from '../../lib/api.ts';
 export function packLayout(tiles: DashboardTile[]): DashboardTile[] {
   let x = 0,
     y = 0,
@@ -24,4 +24,12 @@ export function reorderLayout(tiles: DashboardTile[], id: string, delta: number)
   if (index < 0 || target < 0 || target >= next.length) return tiles;
   [next[index], next[target]] = [next[target], next[index]];
   return packLayout(next);
+}
+
+export function addDashboardChart(draft: DashboardInput, chartId: string): DashboardInput {
+  if (draft.layout.some((tile) => tile.chart_id === chartId)) return draft;
+  return {
+    ...draft,
+    layout: packLayout([...draft.layout, { chart_id: chartId, x: 0, y: 0, w: 6, h: 4 }]),
+  };
 }

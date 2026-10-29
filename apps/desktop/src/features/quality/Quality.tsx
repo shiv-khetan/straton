@@ -1,3 +1,4 @@
+import { checkPage } from './pagination';
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type {
@@ -89,6 +90,8 @@ export default function Quality({
     queryKey: [...queryKeys.quality, 'view', 'recent'],
     queryFn: () => client.qualityRuns(100),
   });
+  const [page, setPage] = useState(0);
+  const displayed = checkPage(checks.data ?? [], page);
   const [editing, setEditing] = useState<QualityCheck | 'new' | null>(null);
   useEffect(() => {
     if (createRequest) setEditing('new');
@@ -160,73 +163,94 @@ export default function Quality({
         </FeatureEmpty>
       )}
       {!!checks.data?.length && (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Check</TableHead>
-              <TableHead>Target</TableHead>
-              <TableHead>Severity</TableHead>
-              <TableHead>Latest runs</TableHead>
-              <TableHead>Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {checks.data.map((q) => (
-              <TableRow key={q.id}>
-                <TableCell>
-                  <Button
-                    variant="link"
-                    className="h-auto justify-start p-0"
-                    onClick={() => setHistory(q)}
-                  >
-                    {q.name}
-                  </Button>
-                  <p className="text-caption text-ink-2">
-                    {label(q.kind)} · {q.enabled ? (q.cron ?? 'Manual') : 'Disabled'}
-                  </p>
-                </TableCell>
-                <TableCell>
-                  {datasets.find((d) => d.id === q.dataset_id)?.name ??
-                    models.find((m) => m.id === q.model_id)?.name ??
-                    'Custom query'}
-                  {q.column_name && <code className="block text-caption">{q.column_name}</code>}
-                </TableCell>
-                <TableCell>
-                  <Pill>{q.severity === 'error' ? 'Error' : 'Warning'}</Pill>
-                </TableCell>
-                <TableCell>
-                  <CheckSparkline client={client} id={q.id} />
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap gap-1">
-                    {writable(q) && (
-                      <>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={readOnly || action.pending}
-                          onClick={() =>
-                            void action.run(() => client.runQualityCheck(q.id), 'Check completed')
-                          }
-                        >
-                          Run now
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={readOnly}
-                          onClick={() => setEditing(q)}
-                        >
-                          Edit
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </TableCell>
+        <>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Check</TableHead>
+                <TableHead>Target</TableHead>
+                <TableHead>Severity</TableHead>
+                <TableHead>Latest runs</TableHead>
+                <TableHead>Actions</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {displayed.rows.map((q) => (
+                <TableRow key={q.id}>
+                  <TableCell>
+                    <Button
+                      variant="link"
+                      className="h-auto justify-start p-0"
+                      onClick={() => setHistory(q)}
+                    >
+                      {q.name}
+                    </Button>
+                    <p className="text-caption text-ink-2">
+                      {label(q.kind)} · {q.enabled ? (q.cron ?? 'Manual') : 'Disabled'}
+                    </p>
+                  </TableCell>
+                  <TableCell>
+                    {datasets.find((d) => d.id === q.dataset_id)?.name ??
+                      models.find((m) => m.id === q.model_id)?.name ??
+                      'Custom query'}
+                    {q.column_name && <code className="block text-caption">{q.column_name}</code>}
+                  </TableCell>
+                  <TableCell>
+                    <Pill>{q.severity === 'error' ? 'Error' : 'Warning'}</Pill>
+                  </TableCell>
+                  <TableCell>
+                    <CheckSparkline client={client} id={q.id} />
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {writable(q) && (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={readOnly || action.pending}
+                            onClick={() =>
+                              void action.run(() => client.runQualityCheck(q.id), 'Check completed')
+                            }
+                          >
+                            Run now
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={readOnly}
+                            onClick={() => setEditing(q)}
+                          >
+                            Edit
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          <nav aria-label="Quality checks pages" className="flex items-center justify-end gap-3">
+            <Button
+              variant="outline"
+              disabled={displayed.page === 0}
+              onClick={() => setPage(displayed.page - 1)}
+            >
+              Previous
+            </Button>
+            <span role="status">
+              Page {displayed.page + 1} of {displayed.pages} · {checks.data.length} checks
+            </span>
+            <Button
+              variant="outline"
+              disabled={displayed.page + 1 === displayed.pages}
+              onClick={() => setPage(displayed.page + 1)}
+            >
+              Next
+            </Button>
+          </nav>
+        </>
       )}
       <section>
         <h2 className="mb-3 font-medium">Recent failures</h2>

@@ -1,3 +1,13 @@
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { Choice } from '@/components/workbench/FeatureState';
+import { manualSelection, relationshipInput } from './relationship-form';
+import type { Relationship } from '@/lib/api';
 import { Home } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { ColumnInspector } from './ColumnInspector';
@@ -284,6 +294,24 @@ function Canvas({
   const [nodes, setNodes, onNodesChange] = useNodesState<MapNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<MapEdge>([]);
   const [fieldFocus, setFieldFocus] = useState<ColumnRef | null>(null);
+  const section = useRef<HTMLElement>(null);
+  const fieldInspectorOpen = !!fieldFocus;
+  useEffect(() => {
+    if (!fieldInspectorOpen) return;
+    const previous = document.activeElement;
+    section.current?.querySelector<HTMLButtonElement>('.column-inspector button')?.focus();
+    return () => {
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
+  }, [fieldInspectorOpen]);
+  const [addingRelationship, setAddingRelationship] = useState(false);
+  const [relationshipError, setRelationshipError] = useState('');
+  const [sourceDataset, setSourceDataset] = useState('');
+  const [sourceColumn, setSourceColumn] = useState('');
+  const [targetDataset, setTargetDataset] = useState('');
+  const [targetColumn, setTargetColumn] = useState('');
+  const [removal, setRemoval] = useState<Relationship[]>([]);
+  const relationshipDatasets = map.nodes.filter((n): n is Dataset => n.type === 'dataset');
   const onFieldFocus = useCallback(
     (dataset_id: string, column: string) => {
       setFieldFocus({ dataset_id, column });
@@ -565,40 +593,48 @@ function Canvas({
       })),
     [fieldGraph],
   );
+  function createRelationship(
+    source: string,
+    from: string,
+    target: string,
+    to: string,
+    closeForm = false,
+  ) {
+    if (!canManage || busy) return;
+    void action(async () => {
+      try {
+        await client.createRelationship(
+          relationshipInput(relationshipDatasets, source, from, target, to),
+        );
+        if (closeForm) setAddingRelationship(false);
+      } catch (error) {
+        if (closeForm) setRelationshipError(String(error));
+        throw error;
+      }
+    }, 'Manual relationship created');
+  }
   function connect(connection: FlowConnection) {
-    if (!canManage) return;
     if (!connection.sourceHandle || !connection.targetHandle) return;
     const forward = connection.sourceHandle.startsWith('out:');
     const source = forward ? connection.source : connection.target;
     const target = forward ? connection.target : connection.source;
     const from = forward ? connection.sourceHandle : connection.targetHandle;
     const to = forward ? connection.targetHandle : connection.sourceHandle;
-    void action(
-      () =>
-        client.createRelationship({
-          from_dataset: source,
-          from_cols: [from.slice(from.indexOf(':') + 1)],
-          to_dataset: target,
-          to_cols: [to.slice(to.indexOf(':') + 1)],
-          kind: 'manual',
-          confidence: null,
-        }),
-      'Manual relationship created',
+    createRelationship(
+      source,
+      from.slice(from.indexOf(':') + 1),
+      target,
+      to.slice(to.indexOf(':') + 1),
     );
   }
   function removeSelected() {
-    if (!canManage) return;
-    const ids = [
-      ...new Set(
-        edges
-          .filter((e) => selected.includes(e.id) && e.data?.kind === 'manual')
-          .map((e) => e.data!.relationshipId),
+    if (!canManage || busy) return;
+    setRemoval(
+      manualSelection(
+        map.edges,
+        edges.filter((e) => selected.includes(e.id)).map((e) => e.data!.relationshipId),
       ),
-    ];
-    if (ids.length)
-      void action(async () => {
-        for (const id of ids) await client.deleteRelationship(id);
-      }, 'Manual relationship deleted');
+    );
   }
   function selectDataset(id: string) {
     const dataset = map.nodes.find((n): n is Dataset => n.type === 'dataset' && n.id === id);
@@ -642,6 +678,7 @@ function Canvas({
   return (
     <section
       className="map-section"
+      ref={section}
       onKeyDown={(event) => {
         if (event.key === 'Escape' && fieldFocus) {
           event.stopPropagation();
@@ -793,6 +830,12 @@ function Canvas({
         </div>
       )}
       <div className="map-center">
+        {!fieldFocus && (
+          <p className="hint px-3 py-2">
+            Select a field to trace its sources, transformations and uses. Arrow keys move between
+            fields; Enter traces a field.
+          </p>
+        )}
         <div
           className="map-canvas"
           tabIndex={0}
@@ -879,6 +922,18 @@ function Canvas({
               />
             )}
             <Panel position="top-right" className="map-tools">
+              {canManage && (
+                <Button
+                  variant="outline"
+                  disabled={busy || relationshipDatasets.length === 0}
+                  onClick={() => {
+                    setRelationshipError('');
+                    setAddingRelationship(true);
+                  }}
+                >
+                  Add relationship
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"
@@ -1211,7 +1266,7 @@ function Canvas({
           </div>
         </Inspector>
       )}
-      {(fieldFocus || (!selectedDataset && !selectedEdge)) && (
+      {fieldFocus && (
         <ColumnInspector
           focus={fieldFocus}
           graph={fieldGraph}
@@ -1223,6 +1278,150 @@ function Canvas({
           onNavigate={onNavigateUsage}
         />
       )}
+      <Dialog
+        open={addingRelationship}
+        onOpenChange={(open) => {
+          if (!busy) setAddingRelationship(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add relationship</DialogTitle>
+            <DialogDescription>
+              Choose the source and target columns for a manual relationship.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setRelationshipError('');
+              createRelationship(sourceDataset, sourceColumn, targetDataset, targetColumn, true);
+            }}
+          >
+            <Choice
+              label="Source dataset"
+              value={sourceDataset}
+              disabled={busy}
+              options={[
+                { value: '', label: 'Choose dataset' },
+                ...relationshipDatasets.map((d) => ({ value: d.id, label: datasetLabel(d) })),
+              ]}
+              onChange={(value) => {
+                setSourceDataset(value);
+                setSourceColumn('');
+              }}
+            />
+            <Choice
+              label="Source column"
+              value={sourceColumn}
+              disabled={busy || !sourceDataset}
+              options={[
+                { value: '', label: 'Choose column' },
+                ...(relationshipDatasets.find((d) => d.id === sourceDataset)?.columns ?? []).map(
+                  (c) => ({ value: c.name, label: c.name }),
+                ),
+              ]}
+              onChange={setSourceColumn}
+            />
+            <Choice
+              label="Target dataset"
+              value={targetDataset}
+              disabled={busy}
+              options={[
+                { value: '', label: 'Choose dataset' },
+                ...relationshipDatasets.map((d) => ({ value: d.id, label: datasetLabel(d) })),
+              ]}
+              onChange={(value) => {
+                setTargetDataset(value);
+                setTargetColumn('');
+              }}
+            />
+            <Choice
+              label="Target column"
+              value={targetColumn}
+              disabled={busy || !targetDataset}
+              options={[
+                { value: '', label: 'Choose column' },
+                ...(relationshipDatasets.find((d) => d.id === targetDataset)?.columns ?? []).map(
+                  (c) => ({ value: c.name, label: c.name }),
+                ),
+              ]}
+              onChange={setTargetColumn}
+            />
+            {relationshipError && (
+              <p role="alert" className="text-danger">
+                {relationshipError}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => setAddingRelationship(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={busy || !sourceColumn || !targetColumn}>
+                {busy ? 'Adding…' : 'Add relationship'}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={removal.length > 0}
+        onOpenChange={(open) => {
+          if (!open && !busy) setRemoval([]);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Delete{' '}
+              {removal.length === 1
+                ? 'manual relationship'
+                : removal.length + ' manual relationships'}
+              ?
+            </DialogTitle>
+            <DialogDescription>
+              This removes the selected relationships from the Data Map. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="max-h-48 overflow-auto text-sm">
+            {removal.map((edge) => (
+              <li key={edge.id}>
+                <code>
+                  {datasetLabel(relationshipDatasets.find((d) => d.id === edge.from_dataset))}.
+                  {edge.from_cols.join(', ')} →{' '}
+                  {datasetLabel(relationshipDatasets.find((d) => d.id === edge.to_dataset))}.
+                  {edge.to_cols.join(', ')}
+                </code>
+              </li>
+            ))}
+          </ul>
+          <div className="flex justify-end gap-2">
+            <Button autoFocus variant="outline" disabled={busy} onClick={() => setRemoval([])}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={busy || !canManage}
+              onClick={() =>
+                void action(async () => {
+                  for (const edge of removal) {
+                    await client.deleteRelationship(edge.id);
+                    setRemoval((pending) => pending.filter((item) => item.id !== edge.id));
+                  }
+                }, 'Manual relationships deleted')
+              }
+            >
+              {busy ? 'Deleting…' : 'Delete relationships'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <span className="visually-hidden" role="status">
         {hover}
       </span>

@@ -1,3 +1,6 @@
+import { useQuery } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/queryKeys';
+import { FeatureError, FeatureLoading } from '@/components/workbench/FeatureState';
 import {
   Table as DataTable,
   TableHeader,
@@ -12,7 +15,7 @@ import { backupTime, relativeTime } from '@/lib/view-model';
 import Security from './Security';
 export default function Backups({
   client,
-  backups,
+  backups: _backups,
   status,
   datasets,
   me,
@@ -29,6 +32,14 @@ export default function Backups({
   revision: number;
   onChanged: () => void;
 }) {
+  // Observe the engine inventory query directly so an error cannot become an empty list.
+  const inventory = useQuery({
+    queryKey: [...queryKeys.backups, 'backups'],
+    queryFn: () => client.backups(),
+    enabled: !!me?.privileges.admin,
+    retry: false,
+  });
+  const backups = inventory.data ?? [];
   return (
     <>
       <div className="page-heading">
@@ -38,6 +49,8 @@ export default function Backups({
         </div>
       </div>
       <Tray title="Engine backups">
+        {inventory.isPending && <FeatureLoading label="Loading backups" />}
+        <FeatureError error={inventory.error} retry={() => void inventory.refetch()} />
         <div className="table-wrap" tabIndex={0} role="region" aria-label="Engine backups">
           <DataTable>
             <TableHeader>
@@ -63,7 +76,7 @@ export default function Backups({
             </TableBody>
           </DataTable>
         </div>
-        {!backups.length && (
+        {inventory.isSuccess && !backups.length && (
           <p className="empty">No backups yet. Create your first snapshot with Back up now.</p>
         )}
       </Tray>

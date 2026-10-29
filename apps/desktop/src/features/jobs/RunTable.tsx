@@ -20,6 +20,9 @@ export function RunTable({
 }) {
   return runs.length ? (
     <div className="run-history-table">
+      <p className="hint">
+        Actual start time is unavailable. Times below show scheduled availability.
+      </p>
       <UiTable label={label}>
         <TableHeader>
           <TableRow>
@@ -34,7 +37,7 @@ export function RunTable({
             <TableHead scope="col" className="text-right tabular-nums">
               Changes (+ / ~ / −) / read
             </TableHead>
-            <TableHead scope="col">Started</TableHead>
+            <TableHead scope="col">Scheduled availability</TableHead>
             <TableHead scope="col">
               <span className="visually-hidden">Actions</span>
             </TableHead>
@@ -67,6 +70,7 @@ export function RunTable({
               </TableCell>
               <TableCell>
                 <time
+                  dateTime={new Date(run.available_at * 1000).toISOString()}
                   title={
                     new Date(run.available_at * 1000).toLocaleString() +
                     ' · scheduled availability; actual start time is not reported'

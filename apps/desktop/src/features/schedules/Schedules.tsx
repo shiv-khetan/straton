@@ -26,12 +26,14 @@ export default function Schedules({
   models,
   canSeeJobs,
   onNavigate,
+  onOpenEntity,
 }: {
   client: Api;
   jobs: Job[];
   models: Model[];
   canSeeJobs: boolean;
   onNavigate: (route: Route) => void;
+  onOpenEntity?: (entity: { kind: 'job' | 'model' | 'pipeline' | 'check'; id: string }) => void;
 }) {
   const pipelines = useQuery({
     queryKey: [...queryKeys.pipelines, 'view', 'schedules'],
@@ -56,6 +58,7 @@ export default function Schedules({
             id: j.id,
             name: j.name,
             kind: 'Job',
+            entityKind: 'job' as const,
             cron: j.cron!,
             enabled: j.enabled,
             route: 'Jobs' as Route,
@@ -66,6 +69,7 @@ export default function Schedules({
             id: m.id,
             name: m.name,
             kind: 'Model',
+            entityKind: 'model' as const,
             cron: m.cron!,
             enabled: m.materialization === 'table',
             route: 'Models' as Route,
@@ -76,6 +80,7 @@ export default function Schedules({
             id: p.id,
             name: p.name,
             kind: 'Pipeline',
+            entityKind: 'pipeline' as const,
             cron: p.cron!,
             enabled: p.enabled,
             route: 'Pipelines' as Route,
@@ -86,6 +91,7 @@ export default function Schedules({
             id: c.id,
             name: c.name,
             kind: 'Check',
+            entityKind: 'check' as const,
             cron: c.cron!,
             enabled: c.enabled,
             route: 'Data Quality' as Route,
@@ -134,8 +140,8 @@ export default function Schedules({
       {!visible.length && !pipelines.isPending && !checks.isPending && (
         <FeatureEmpty
           title="No schedules in this view"
-          action="Open pipelines"
-          onAction={() => onNavigate('Pipelines')}
+          action={kind === 'all' ? 'Open pipelines' : 'Clear filter'}
+          onAction={() => (kind === 'all' ? onNavigate('Pipelines') : setKind('all'))}
         >
           Add a cron schedule to a job, model, pipeline or quality check to see its next run here.
         </FeatureEmpty>
@@ -155,7 +161,14 @@ export default function Schedules({
             {visible.map((r) => (
               <TableRow key={r.kind + ':' + r.id}>
                 <TableCell>
-                  <Button variant="link" onClick={() => onNavigate(r.route)}>
+                  <Button
+                    variant="link"
+                    onClick={() =>
+                      onOpenEntity
+                        ? onOpenEntity({ kind: r.entityKind, id: r.id })
+                        : onNavigate(r.route)
+                    }
+                  >
                     {r.name}
                   </Button>
                 </TableCell>
@@ -171,7 +184,7 @@ export default function Schedules({
                 </TableCell>
                 <TableCell>
                   {r.error ? (
-                    <span title={r.error}>Unable to compute</span>
+                    <span className="text-danger">Unable to compute: {r.error}</span>
                   ) : !r.enabled ? (
                     'Paused'
                   ) : r.next ? (

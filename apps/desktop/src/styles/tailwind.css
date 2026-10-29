@@ -28,6 +28,7 @@
   --surface-2: #f9fafb;
   --surface-3: #f3f4f6;
   --line: #e5e7eb;
+  --control-border: #89919f;
   --ink: #111827;
   --ink-2: #4b5563;
   --ink-3: #5f6673;
@@ -131,6 +132,7 @@
     --surface-2: #181b22;
     --surface-3: #1f232b;
     --line: #262a33;
+    --control-border: #606b7e;
     --ink: #e5e7eb;
     --ink-2: #a8aebb;
     --ink-3: #8b919d;
@@ -189,6 +191,7 @@
   --surface-2: #181b22;
   --surface-3: #1f232b;
   --line: #262a33;
+  --control-border: #606b7e;
   --ink: #e5e7eb;
   --ink-2: #a8aebb;
   --ink-3: #8b919d;
@@ -247,7 +250,8 @@
   --color-panel-2: var(--panel-2);
   --color-line: var(--line);
   --color-border: var(--line);
-  --color-input: var(--line);
+  --color-input: var(--control-border);
+  --color-control-border: var(--control-border);
   --color-ink: var(--ink);
   --color-ink-2: var(--ink-2);
   --color-ink-3: var(--ink-3);
@@ -332,4 +336,10 @@
 }
 @utility duration-shell {
   transition-duration: var(--duration-shell);
+}
+
+@layer base {
+  select {
+    border-color: var(--control-border);
+  }
 }

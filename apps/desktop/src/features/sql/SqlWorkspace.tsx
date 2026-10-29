@@ -8,7 +8,16 @@ import { toast } from 'sonner';
 import { monaco, autocomplete, editorTheme } from './monaco';
 import { useResolvedTheme } from '@/stores/theme';
 import { useSqlWorkspace } from '@/stores/sql-workspace';
-import { shortcuts, shortcutAction } from './workspace-model';
+import {
+  shortcuts,
+  shortcutAction,
+  snapshotSaveTarget,
+  completeQuerySave,
+  workspaceShortcutAllowed,
+} from './workspace-model';
+import { offlineMessage } from '@/lib/offline-state';
+import { PageActions } from '@/components/workbench/primitives';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import type { Api, Me, SavedQuery, SqlExplain, SqlResult } from '@/lib/api';
 import { tableReference } from './sql-model';
 import { Button } from '@/components/ui/button';
@@ -50,6 +59,7 @@ export default function SqlView({
   const store = useSqlWorkspace();
   const active = store.tabs.find((t) => t.id === store.active);
   const cache = useQueryClient();
+  const workspace = useRef<HTMLDivElement>(null);
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const initial = useRef<string | null>(null);
   const [outputs, setOutputs] = useState<Record<string, Execution>>({});
@@ -57,13 +67,15 @@ export default function SqlView({
     null,
   );
   const runningRef = useRef<typeof running>(null);
-  const [resultTab, setResultTab] = useState<'Results' | 'Explain'>('Results');
+  const [resultTab, setResultTab] = useState('Results');
   const [saveOpen, setSaveOpen] = useState(false);
+  const [saveTargetId, setSaveTargetId] = useState<string | null>(null);
+  const saveTarget = store.tabs.find((tab) => tab.id === saveTargetId);
   const [closeTarget, setCloseTarget] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [shared, setShared] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [sideTab, setSideTab] = useState<'Catalog' | 'Saved'>('Catalog');
+  const [sideTab, setSideTab] = useState('Catalog');
   const [search, setSearch] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(true);
   const [error, setError] = useState('');
@@ -181,7 +193,9 @@ export default function SqlView({
     }
   }
   function beginSave() {
-    if (!active) return;
+    if (!active || saving) return;
+    setSaveTargetId(active.id);
+    setError('');
     setCatalogOpen(true);
     setSideTab('Saved');
     setName(active.name === 'Untitled query' ? '' : active.name);
@@ -208,6 +222,19 @@ export default function SqlView({
   };
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || !(e.target instanceof Element)) return;
+      if (
+        !workspaceShortcutAllowed({
+          withinWorkspace: workspace.current?.contains(e.target) ?? false,
+          inOverlay: !!e.target.closest(
+            '[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]',
+          ),
+          ordinaryField:
+            !!e.target.closest('input,textarea,select,[contenteditable="true"]') &&
+            !e.target.closest('.monaco-editor'),
+        })
+      )
+        return;
       const action = shortcutAction(e);
       if (action) {
         if (action === 'Cancel' && (!runningRef.current || runningRef.current.explain)) return;
@@ -220,17 +247,20 @@ export default function SqlView({
     return () => window.removeEventListener('keydown', key, true);
   }, []);
   async function saveQuery() {
-    if (!active || saving || !name.trim() || readOnly) return;
+    const submitted = snapshotSaveTarget(useSqlWorkspace.getState().tabs, saveTargetId);
+    if (!submitted || saving || !name.trim() || readOnly) return;
     setSaving(true);
     setError('');
     try {
-      const original = saved.data?.find((q) => q.id === active.savedId);
+      const original = saved.data?.find((q) => q.id === submitted.savedId);
       const writable = original && (original.owner_id === me.user.id || me.privileges.admin);
-      const body = { name: name.trim(), sql: active.sql, shared };
+      const body = { name: name.trim(), sql: submitted.sql, shared };
       const q = writable
         ? await client.updateSavedQuery(original.id, body)
         : await client.createSavedQuery(body);
-      store.update(active.id, { name: q.name, savedId: q.id, dirty: false });
+      useSqlWorkspace.setState((state) => ({
+        tabs: completeQuerySave(state.tabs, submitted, q),
+      }));
       setSaveOpen(false);
       await cache.invalidateQueries({ queryKey: ['engine', 'saved-queries'] });
       toast.success('Query saved');
@@ -259,7 +289,7 @@ export default function SqlView({
     }
   }
   return (
-    <div className="sql-layout">
+    <div className="sql-layout" ref={workspace}>
       <AlertDialog
         open={closeTarget !== null}
         onOpenChange={(open) => {
@@ -301,72 +331,75 @@ export default function SqlView({
       </div>
       <div className="sql-workarea">
         <aside id="sql-catalog" className="sql-tables" hidden={!catalogOpen}>
-          <div className="tabs sql-side-tabs" role="tablist" aria-label="Side panel">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={sideTab === 'Catalog'}
-              onClick={() => setSideTab('Catalog')}
-            >
-              Catalog
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={sideTab === 'Saved'}
-              onClick={() => setSideTab('Saved')}
-            >
-              Saved queries
-            </button>
-          </div>
-          <label>
-            Find {sideTab === 'Catalog' ? 'a table' : 'a query'}
-            <Input value={search} onChange={(e) => setSearch(e.target.value)} />
-          </label>
-          {saveOpen && (
-            <form
-              className="save-query"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void saveQuery();
-              }}
-            >
-              <label>
-                Query name
-                <Input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  maxLength={200}
-                  required
-                />
-              </label>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={shared}
-                  onChange={(e) => setShared(e.target.checked)}
-                />
-                Share with readers
-              </label>
-              <div className="actions">
-                <Button type="submit" disabled={saving || readOnly || !name.trim()}>
-                  {saving ? 'Saving…' : 'Save query'}
-                </Button>
-                <Button type="button" variant="ghost" onClick={() => setSaveOpen(false)}>
-                  Dismiss
-                </Button>
-              </div>
-              {error && (
-                <p role="alert" className="error">
-                  {error}
+          <Tabs value={sideTab} onValueChange={setSideTab} className="sql-side-panel gap-0">
+            <TabsList variant="line" className="tabs sql-side-tabs" aria-label="Side panel">
+              <TabsTrigger className="sql-panel-tab" value="Catalog">
+                Catalog
+              </TabsTrigger>
+              <TabsTrigger className="sql-panel-tab" value="Saved">
+                Saved queries
+              </TabsTrigger>
+            </TabsList>
+            <label>
+              Find {sideTab === 'Catalog' ? 'a table' : 'a query'}
+              <Input value={search} onChange={(e) => setSearch(e.target.value)} />
+            </label>
+            {saveOpen && (
+              <form
+                className="save-query"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void saveQuery();
+                }}
+              >
+                <p className="hint" role="status">
+                  {saveTarget
+                    ? `Saving “${saveTarget.name}”`
+                    : 'This query tab was closed. Dismiss and choose another tab to save.'}
+                </p>
+                <label>
+                  Query name
+                  <Input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    maxLength={200}
+                    required
+                  />
+                </label>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={shared}
+                    onChange={(e) => setShared(e.target.checked)}
+                  />
+                  Share with readers
+                </label>
+                <div className="actions">
+                  <Button
+                    type="submit"
+                    disabled={saving || readOnly || !saveTarget || !name.trim()}
+                  >
+                    {saving ? 'Saving…' : 'Save query'}
+                  </Button>
+                  <Button type="button" variant="ghost" onClick={() => setSaveOpen(false)}>
+                    Dismiss
+                  </Button>
+                </div>
+                {error && (
+                  <p role="alert" className="error">
+                    {error}
+                  </p>
+                )}
+              </form>
+            )}
+            <TabsContent value="Catalog">
+              {catalog.isLoading && <Skeleton label="Loading catalog…" />}
+              {readOnly && (
+                <p className="hint" role="status">
+                  {offlineMessage(readOnly, catalog.data, 'the catalog')}
                 </p>
               )}
-            </form>
-          )}
-          {sideTab === 'Catalog' ? (
-            <>
-              {catalog.isPending && <Skeleton label="Loading catalog…" />}
-              {catalog.isError && <p role="alert">{String(catalog.error)}</p>}
+              {!readOnly && catalog.isError && <p role="alert">{String(catalog.error)}</p>}
               {catalog.data?.tables
                 .filter((t) =>
                   (t.schema + '.' + t.name).toLowerCase().includes(search.toLowerCase()),
@@ -401,11 +434,15 @@ export default function SqlView({
                     ))}
                   </details>
                 ))}
-            </>
-          ) : (
-            <>
-              {saved.isPending && <Skeleton label="Loading saved queries…" />}
-              {saved.isError && <p role="alert">{String(saved.error)}</p>}
+            </TabsContent>
+            <TabsContent value="Saved">
+              {saved.isLoading && <Skeleton label="Loading saved queries…" />}
+              {readOnly && (
+                <p className="hint" role="status">
+                  {offlineMessage(readOnly, saved.data, 'saved queries')}
+                </p>
+              )}
+              {!readOnly && saved.isError && <p role="alert">{String(saved.error)}</p>}
               {saved.data
                 ?.filter((q) => q.name.toLowerCase().includes(search.toLowerCase()))
                 .map((q) => (
@@ -430,8 +467,8 @@ export default function SqlView({
               {saved.data?.length === 0 && (
                 <p className="hint">Save a query to reuse it here or share it with your team.</p>
               )}
-            </>
-          )}
+            </TabsContent>
+          </Tabs>
         </aside>
         <section className="sql-workspace">
           <div className="query-tabs" aria-label="SQL tabs">
@@ -466,7 +503,7 @@ export default function SqlView({
           </div>
           {active ? (
             <>
-              <div className="sql-toolbar">
+              <PageActions>
                 <Button
                   disabled={readOnly || !!running || !active.sql.trim()}
                   onClick={() => void run()}
@@ -504,7 +541,7 @@ export default function SqlView({
                   <Save size={16} />
                   Save
                 </Button>
-              </div>
+              </PageActions>
               <ResizablePanelGroup orientation="vertical">
                 <ResizablePanel defaultSize="48%" minSize="120px">
                   <Editor
@@ -533,26 +570,16 @@ export default function SqlView({
                 </ResizablePanel>
                 <ResizableHandle withHandle />
                 <ResizablePanel minSize="100px">
-                  <div className="sql-output">
+                  <Tabs value={resultTab} onValueChange={setResultTab} className="sql-output gap-0">
                     <div className="results-toolbar">
-                      <div className="tabs result-tabs" role="tablist" aria-label="Output">
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={resultTab === 'Results'}
-                          onClick={() => setResultTab('Results')}
-                        >
+                      <TabsList variant="line" className="tabs result-tabs" aria-label="Output">
+                        <TabsTrigger className="sql-panel-tab" value="Results">
                           Results
-                        </button>
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={resultTab === 'Explain'}
-                          onClick={() => setResultTab('Explain')}
-                        >
+                        </TabsTrigger>
+                        <TabsTrigger className="sql-panel-tab" value="Explain">
                           Explain
-                        </button>
-                      </div>
+                        </TabsTrigger>
+                      </TabsList>
                       <span role="status">
                         <code>
                           {running?.tab === active.id
@@ -578,38 +605,42 @@ export default function SqlView({
                       </div>
                     )}
                     {running?.tab === active.id && <Skeleton label="Executing query…" />}
-                    {resultTab === 'Results' && output?.result && (
-                      <>
-                        {output.result.truncated_preview && (
-                          <p className="truncated-notice" role="status">
-                            Showing the first 1,000 rows of{' '}
-                            {output.result.row_count.toLocaleString()}. Use Explorer to export a
-                            larger result.
-                          </p>
-                        )}
-                        <ResultGrid
-                          key={active.id}
-                          columns={output.result.columns}
-                          rows={output.result.rows}
-                          scope={scope}
-                          tableKey={'sql:' + active.id}
-                        />
-                      </>
-                    )}
-                    {resultTab === 'Explain' && output?.plans && (
-                      <div className="sql-plans">
-                        <h3>Logical plan</h3>
-                        <pre>{output.plans.logical}</pre>
-                        <h3>Physical plan</h3>
-                        <pre>{output.plans.physical}</pre>
-                      </div>
-                    )}
+                    <TabsContent value="Results" className="flex min-h-0 flex-col">
+                      {output?.result && (
+                        <>
+                          {output.result.truncated_preview && (
+                            <p className="truncated-notice" role="status">
+                              Showing the first 1,000 rows of{' '}
+                              {output.result.row_count.toLocaleString()}. Use Explorer to export a
+                              larger result.
+                            </p>
+                          )}
+                          <ResultGrid
+                            key={active.id}
+                            columns={output.result.columns}
+                            rows={output.result.rows}
+                            scope={scope}
+                            tableKey={'sql:' + active.id}
+                          />
+                        </>
+                      )}
+                    </TabsContent>
+                    <TabsContent value="Explain" className="min-h-0 overflow-auto">
+                      {output?.plans && (
+                        <div className="sql-plans">
+                          <h3>Logical plan</h3>
+                          <pre>{output.plans.logical}</pre>
+                          <h3>Physical plan</h3>
+                          <pre>{output.plans.physical}</pre>
+                        </div>
+                      )}
+                    </TabsContent>
                     {!output && !running && (
                       <p className="empty-copy">
                         Run your SQL to inspect its results, or choose Explain to review the plan.
                       </p>
                     )}
-                  </div>
+                  </Tabs>
                 </ResizablePanel>
               </ResizablePanelGroup>
             </>

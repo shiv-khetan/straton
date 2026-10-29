@@ -45,7 +45,7 @@ function Entity({ data }: NodeProps<GraphNode>) {
   return (
     <article
       className={'dataset-node model-node state-' + statusChip(state).state.replaceAll(' ', '-')}
-      style={{ opacity: data.dimmed ? 0.35 : 1 }}
+      style={{ borderColor: data.dimmed === false ? 'var(--primary)' : undefined }}
     >
       <Handle type="target" position={Position.Left} />
       <div className="dataset-title">
@@ -229,7 +229,7 @@ function Canvas({ models, lineages, jobs, runs, relationships, onSelect }: Canva
           batches: n.data.dataset
             ? datasetRun(n.data.dataset, jobs, runs)?.committed_batches
             : undefined,
-          dimmed: !!filter && statusChip(state(n)).state !== filter,
+          dimmed: filter ? statusChip(state(n)).state !== filter : undefined,
         },
       })),
     [nodes, filter, jobs, runs, relationships],
@@ -289,6 +289,17 @@ function Canvas({ models, lineages, jobs, runs, relationships, onSelect }: Canva
             ),
           )}
         </Panel>
+        {filter && (
+          <Panel position="bottom-left" className="map-legend">
+            <p role="status">
+              {visibleNodes.filter((node) => node.data.dimmed === false).length} of {nodes.length}{' '}
+              match {filter}. Matches have an indigo border.
+            </p>
+            <Button variant="ghost" onClick={() => setFilter('')}>
+              Clear filter
+            </Button>
+          </Panel>
+        )}
         <Panel position="top-right" className="map-tools">
           <Button type="button" variant="ghost" aria-label="Zoom in" onClick={() => void zoomIn()}>
             <Icon name="plus" />

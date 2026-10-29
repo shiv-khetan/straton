@@ -1,4 +1,4 @@
-import { StatePill } from '@/components/workbench/primitives';
+import { PageActions, StatePill } from '@/components/workbench/primitives';
 import { useState } from 'react';
 import { useSqlWorkspace } from '@/stores/sql-workspace';
 import { toast } from 'sonner';
@@ -29,23 +29,25 @@ export default function QueryHistory({
             placeholder="Find a query…"
           />
         </label>
-        <Button
-          variant="outline"
-          disabled={!entries.some((e) => e.scope === scope)}
-          onClick={() => {
-            const removed = entries.filter((e) => e.scope === scope);
-            clear(scope);
-            toast('Query history cleared', {
-              description:
-                removed.length +
-                (removed.length === 1 ? ' query' : ' queries') +
-                ' removed from this device.',
-              action: { label: 'Undo', onClick: () => restore(removed) },
-            });
-          }}
-        >
-          Clear history
-        </Button>
+        <PageActions>
+          <Button
+            variant="outline"
+            disabled={!entries.some((e) => e.scope === scope)}
+            onClick={() => {
+              const removed = entries.filter((e) => e.scope === scope);
+              clear(scope);
+              toast('Query history cleared', {
+                description:
+                  removed.length +
+                  (removed.length === 1 ? ' query' : ' queries') +
+                  ' removed from this device.',
+                action: { label: 'Undo', onClick: () => restore(removed) },
+              });
+            }}
+          >
+            Clear history
+          </Button>
+        </PageActions>
       </div>
       <p className="hint">
         Up to 500 executions are stored on this device. Query text stays local to your workspace.

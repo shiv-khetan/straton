@@ -14,7 +14,7 @@
   border-radius: 6px;
   background: var(--surface);
 }
-@media (max-width: 1000px) {
+@media (max-width: 1100px) {
   .dashboard-layout {
     display: flex;
     flex-direction: column;

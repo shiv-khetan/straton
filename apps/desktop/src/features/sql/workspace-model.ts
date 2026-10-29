@@ -56,3 +56,31 @@ export function shortcutAction(e: {
     return ({ s: 'Save', t: 'New tab', w: 'Close tab' } as Record<string, string>)[k] ?? null;
   return null;
 }
+
+// Copy the target before the request so tab switches and edits cannot retarget a save.
+export function snapshotSaveTarget(tabs: SqlTab[], id: string | null) {
+  const tab = tabs.find((tab) => tab.id === id);
+  return tab ? { ...tab } : undefined;
+}
+export function completeQuerySave(
+  tabs: SqlTab[],
+  submitted: SqlTab,
+  saved: { id: string; name: string },
+) {
+  return tabs.map((tab) =>
+    tab.id === submitted.id
+      ? { ...tab, name: saved.name, savedId: saved.id, dirty: tab.sql !== submitted.sql }
+      : tab,
+  );
+}
+export function workspaceShortcutAllowed({
+  withinWorkspace,
+  inOverlay,
+  ordinaryField,
+}: {
+  withinWorkspace: boolean;
+  inOverlay: boolean;
+  ordinaryField: boolean;
+}) {
+  return withinWorkspace && !inOverlay && !ordinaryField;
+}

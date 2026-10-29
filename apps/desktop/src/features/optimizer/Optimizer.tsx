@@ -513,6 +513,12 @@ export default function Optimizer({
               <p className="hint">{confirmation?.recommendation.risk}</p>
             </>
           )}
+          {/* Failures stay inside the dialog so the reviewed SQL and the result are seen together. */}
+          {error && confirmation && (
+            <p role="alert" className="message">
+              {error} Check the recommendation's status before retrying.
+            </p>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
             <AlertDialogAction
@@ -528,7 +534,9 @@ export default function Optimizer({
                   ? 'Relayout'
                   : confirmation?.kind === 'rollback'
                     ? 'Execute rollback'
-                    : 'Approve and apply'}
+                    : error
+                      ? 'Retry apply'
+                      : 'Approve and apply'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
