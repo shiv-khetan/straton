@@ -27,6 +27,10 @@ const buttonVariants = cva(
         'icon-lg': 'size-10',
       },
     },
+    // Links read as text: no button box, so they align with the copy around them.
+    compoundVariants: [
+      { variant: 'link', class: 'h-auto justify-start px-0 py-0 has-[>svg]:px-0' },
+    ],
     defaultVariants: {
       variant: 'default',
       size: 'default',

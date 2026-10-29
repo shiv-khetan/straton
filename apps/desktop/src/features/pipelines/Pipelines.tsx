@@ -1,3 +1,5 @@
+import { Play, Plus } from 'lucide-react';
+import { PageActions } from '@/components/workbench/primitives';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -6,6 +8,7 @@ import {
   Background,
   Controls,
   Handle,
+  MarkerType,
   Position,
 } from '@xyflow/react';
 import type { Node, NodeProps } from '@xyflow/react';
@@ -45,7 +48,9 @@ import {
 } from '@/components/workbench/FeatureState';
 import { Tabs, StatePill } from '@/components/workbench/primitives';
 import { relativeTime } from '@/lib/view-model';
-import { graphValidation, placeNodes, validationDisplay } from './pipeline-model';
+import { flowState, graphValidation, placeNodes, validationDisplay } from './pipeline-model';
+import { edgeTypes } from './FlowEdge';
+import type { FlowEdgeType } from './FlowEdge';
 import './styles.css';
 const empty = (): PipelineInput => ({
   name: '',
@@ -65,7 +70,7 @@ function Task({ data }: NodeProps<TaskNode>) {
       <Handle type="target" position={Position.Left} />
       <span className="text-caption text-ink-2">{data.kind}</span>
       <strong>{data.label}</strong>
-      <StatePill state={data.state} />
+      {data.state && <StatePill state={data.state} />}
       {data.errors.map((e, i) => (
         <span className="text-caption text-danger" key={i}>
           {e}
@@ -134,16 +139,19 @@ export default function Pipelines({
         <>
           <div className="section-toolbar">
             <p className="text-ink-2">Orchestrate syncs, transformations and quality checks.</p>
-            <Button
-              disabled={readOnly}
-              onClick={() => {
-                setDraft(empty());
-                setTab('Editor');
-                mutation.clear();
-              }}
-            >
-              New pipeline
-            </Button>
+            <PageActions>
+              <Button
+                disabled={readOnly}
+                onClick={() => {
+                  setDraft(empty());
+                  setTab('Editor');
+                  mutation.clear();
+                }}
+              >
+                <Plus size={16} aria-hidden="true" />
+                New pipeline
+              </Button>
+            </PageActions>
           </div>
           {list.isPending && <FeatureLoading label="Loading pipelines" />}
           {list.isError && <FeatureError error={list.error} retry={() => void list.refetch()} />}
@@ -437,14 +445,17 @@ function Editor({
     data: {
       label: n.label,
       kind: n.kind,
-      state: 'pending',
+      state: '',
       errors: display.nodes[n.node_id] ?? [],
     },
   }));
-  const edges = draft.edges.map((e, i) => ({
+  const edges: FlowEdgeType[] = draft.edges.map((e, i) => ({
     id: String(i),
     source: e.from_node,
     target: e.to_node,
+    type: 'flow',
+    data: { flow: 'idle' },
+    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
     selected: selectedEdge === String(i),
   }));
   const patch = (v: Partial<PipelineInput>) => onChange({ ...draft, ...v });
@@ -580,6 +591,7 @@ function Editor({
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           nodesDraggable={!readOnly}
           nodesConnectable={!readOnly}
           elementsSelectable
@@ -661,14 +673,16 @@ function Editor({
         </ul>
         <FeatureError error={validationError} retry={() => setValidationRevision((v) => v + 1)} />
       </section>
-      <Button
-        disabled={
-          readOnly || saving || validating || !server?.valid || !local.valid || !!validationError
-        }
-        onClick={() => save(setServer)}
-      >
-        {saving ? 'Saving…' : 'Save pipeline'}
-      </Button>
+      <PageActions>
+        <Button
+          disabled={
+            readOnly || saving || validating || !server?.valid || !local.valid || !!validationError
+          }
+          onClick={() => save(setServer)}
+        >
+          {saving ? 'Saving…' : 'Save pipeline'}
+        </Button>
+      </PageActions>
     </div>
   );
 }
@@ -687,17 +701,22 @@ function RunActions({
   return (
     <div className="space-y-2">
       <FeatureError error={action.error} />
-      <Button
-        disabled={disabled || action.pending}
-        onClick={() =>
-          void action.run(async () => {
-            await client.runPipeline(id);
-            onRun();
-          }, 'Pipeline queued')
-        }
-      >
-        {action.pending ? 'Queuing…' : 'Run saved pipeline'}
-      </Button>
+      <PageActions>
+        <Button
+          variant="outline"
+          title="Runs the last saved version of this pipeline"
+          disabled={disabled || action.pending}
+          onClick={() =>
+            void action.run(async () => {
+              await client.runPipeline(id);
+              onRun();
+            }, 'Pipeline queued')
+          }
+        >
+          <Play size={16} aria-hidden="true" />
+          {action.pending ? 'Queuing…' : 'Run saved version'}
+        </Button>
+      </PageActions>
     </div>
   );
 }
@@ -844,12 +863,21 @@ function LiveRunGraph({ graph, run }: { graph: PipelineInput; run: PipelineRunDe
       <div className="pipeline-canvas" role="region" aria-label="Live pipeline node states">
         <ReactFlow<TaskNode>
           nodes={nodes}
-          edges={graph.edges.map((e, i) => ({
+          edges={graph.edges.map((e, i): FlowEdgeType => ({
             id: String(i),
             source: e.from_node,
             target: e.to_node,
+            type: 'flow',
+            data: {
+              flow: flowState(
+                run.nodes.find((n) => n.node_id === e.from_node)?.state,
+                run.nodes.find((n) => n.node_id === e.to_node)?.state,
+              ),
+            },
+            markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
           }))}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           nodesDraggable={false}
           nodesConnectable={false}
           deleteKeyCode={null}

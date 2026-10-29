@@ -2912,7 +2912,7 @@ async fn incremental_api_validation_and_target_privileges() {
         (
             "watermark_column",
             json!("name"),
-            "integer, date or timestamp",
+            "integer, date, timestamp or rowversion",
         ),
         ("key_columns", json!([]), "requires"),
         ("key_columns", json!(["missing"]), "exist"),
@@ -5661,5 +5661,292 @@ async fn phase3_scheduler_pipelines_checks_and_notification_retention() {
         .await
         .unwrap();
     drop(a);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn sqlserver_api_credentials_validation_and_metadata() {
+    use secrecy::ExposeSecret;
+    let f = Fixture::new().await;
+    let app = app(&f);
+    let secret = "sqlserver-password-never-in-config";
+    let config = json!({"host":"localhost","database":"scratch","auth":"sql","username":"reader","encrypt":true,"trust_server_certificate":false});
+    let (status, source) = request(
+        &app,
+        "POST",
+        "/v1/sources",
+        json!({"name":"SQL Server", "kind":"sqlserver", "config":config, "secret":secret}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{source}");
+    let id = source["id"].as_str().unwrap();
+    assert_eq!(source["kind"], "sqlserver");
+    assert!(!source.to_string().contains(secret));
+    assert_eq!(
+        crate::credentials::get(id)
+            .unwrap()
+            .unwrap()
+            .expose_secret(),
+        secret
+    );
+    let (status, _) = request(
+        &app,
+        "PUT",
+        &format!("/v1/sources/{id}"),
+        json!({"name":"Renamed SQL Server", "kind":"sqlserver", "config":config}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        crate::credentials::get(id)
+            .unwrap()
+            .unwrap()
+            .expose_secret(),
+        secret
+    );
+    for (key, value) in [
+        ("password", json!(secret)),
+        ("auth", json!("invalid")),
+        ("port", json!(65536)),
+        ("encrypt", json!("true")),
+        ("trust_server_certificate", json!("false")),
+        ("batch_size", json!(0)),
+    ] {
+        let mut invalid = config.clone();
+        invalid[key] = value;
+        let (status, response) = request(
+            &app,
+            "POST",
+            "/v1/sources",
+            json!({"name":"Bad", "kind":"sqlserver", "config":invalid, "secret":secret}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(!response.to_string().contains(secret));
+    }
+    let (status, _) = request(
+        &app,
+        "POST",
+        "/v1/sources",
+        json!({"name":"Missing password", "kind":"sqlserver", "config":config}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let ds = straton_core::DatasetSchema {
+        dataset: straton_core::Dataset {
+            id: String::new(),
+            source_id: id.into(),
+            name: "sales.revenue".into(),
+        },
+        columns: vec![straton_core::Column {
+            id: String::new(),
+            dataset_id: String::new(),
+            name: "version".into(),
+            data_type: "FixedSizeBinary(8)".into(),
+            nullable: false,
+            primary_key: true,
+        }],
+        relationships: vec![],
+        metadata: straton_core::DatasetMetadata {
+            is_view: true,
+            definition: Some("SELECT version FROM sales.orders".into()),
+            approximate_rows: Some(42),
+            indexes: vec![straton_core::DatasetIndex {
+                name: "uq_version".into(),
+                columns: vec!["version".into()],
+                unique: true,
+                clustered: false,
+                kind: "NONCLUSTERED".into(),
+                unique_constraint: true,
+            }],
+        },
+    };
+    let mut tx = f.pool.begin().await.unwrap();
+    let did = crate::catalog::upsert(&mut tx, id, &ds).await.unwrap();
+    crate::catalog::upsert(&mut tx, id, &ds).await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM dataset_indexes WHERE dataset_id=?")
+            .bind(&did)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap(),
+        1
+    );
+    let (_, map) = request(&app, "GET", "/v1/datamap", json!(null)).await;
+    let view = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == did)
+        .unwrap();
+    assert_eq!(view["dataset_type"], "view");
+    assert_eq!(view["approximate_row_count"], 42);
+    assert_eq!(view["definition"], "SELECT version FROM sales.orders");
+    let (_, tree) = request(&app, "GET", "/v1/explorer/tree", json!(null)).await;
+    assert!(tree.to_string().contains("\"dataset_type\":\"view\""));
+    let (status, response) = request(&app, "POST", "/v1/jobs", json!({"name":"Rowversion sync", "source_id":id, "dataset":"sales.revenue", "enabled":true, "mode":"incremental", "watermark_column":"version"})).await;
+    assert_eq!(status, StatusCode::CREATED, "{response}");
+    let audit = sqlx::query_scalar::<_, String>("SELECT detail FROM audit_log")
+        .fetch_all(&f.pool)
+        .await
+        .unwrap();
+    assert!(audit.iter().all(|s| !s.contains(secret)));
+    #[cfg(windows)]
+    {
+        let (status, response) = request(&app, "PUT", &format!("/v1/sources/{id}"), json!({"name":"Integrated", "kind":"sqlserver", "config":{"host":"localhost","database":"scratch","auth":"windows"}})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(response["credential_id"].is_null());
+        assert!(crate::credentials::get(id).unwrap().is_none());
+    }
+    f.close().await;
+}
+
+#[tokio::test]
+async fn sqlserver_live_full_sync_and_resume() {
+    use futures::StreamExt;
+    let Ok(target) = std::env::var("STRATON_TEST_SQLSERVER") else {
+        return;
+    };
+    let (server, path) = target
+        .split_once('/')
+        .expect("host:port/database?auth=windows");
+    let (database, query) = path.split_once('?').unwrap_or((path, ""));
+    assert_eq!(
+        database, "straton_scratch",
+        "live tests are limited to the scratch database"
+    );
+    let (host, port) = server
+        .rsplit_once(':')
+        .map(|(h, p)| (h, p.parse::<u16>().unwrap()))
+        .unwrap_or((server, 1433));
+    let mut config =
+        json!({"host":host,"port":port,"database":database,"auth":"windows","batch_size":2});
+    for pair in query.split('&').filter(|s| !s.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap();
+        match key {
+            "auth" | "instance" | "username" => config[key] = json!(value),
+            "encrypt" | "trust_server_certificate" => {
+                config[key] = json!(value.parse::<bool>().unwrap())
+            }
+            _ => panic!("unsupported SQL Server test option"),
+        }
+    }
+    let mut f = Fixture::new().await;
+    // Local test snapshots are plaintext so their row counts can be verified without the OS keychain.
+    f.config.encryption.enabled = false;
+    if let Ok(secret) = std::env::var("STRATON_TEST_SQLSERVER_PASSWORD") {
+        crate::credentials::set("source", &secret.into()).unwrap();
+        sqlx::query("UPDATE sources SET credential_id='source' WHERE id='source'")
+            .execute(&f.pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "UPDATE sources SET name='Scratch SQL Server',kind='sqlserver',config=? WHERE id='source'",
+    )
+    .bind(config.to_string())
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE jobs SET dataset='sales.orders' WHERE id='job'")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let app = app(&f);
+    assert_eq!(
+        request(&app, "POST", "/v1/sources/source/check", json!(null))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&app, "POST", "/v1/sources/source/discover", json!(null))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM relationships WHERE kind='lineage'")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    crate::catalog::discover(&f.pool, "source").await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM relationships WHERE kind='lineage'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap(),
+        before
+    );
+    for name in [
+        "sales.customers",
+        "sales.products",
+        "sales.orders",
+        "sales.order_items",
+        "sales.v_customer_revenue",
+    ] {
+        assert!(
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM datasets WHERE source_id='source' AND name=?)"
+            )
+            .bind(name)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap()
+        );
+    }
+    let connector = crate::catalog::connector(&f.pool, "source").await.unwrap();
+    let mut stream = connector
+        .read("sales.orders", Default::default())
+        .await
+        .unwrap();
+    let (first, cursor) = stream
+        .next()
+        .await
+        .expect("scratch orders must contain rows")
+        .unwrap();
+    let mut expected = first.num_rows() as i64;
+    while let Some(batch) = stream.next().await {
+        expected += batch.unwrap().0.num_rows() as i64;
+    }
+    drop(stream);
+    let id = f.enqueue().await;
+    runner::state(&f.pool, &f.events, &id, "running", None)
+        .await
+        .unwrap();
+    let output = f.dir.join("data/source/sales.orders");
+    let staging = output.join(format!(".staging-{id}"));
+    straton_connectors::write_parquet(&staging.join("part-000000.parquet"), &first, None).unwrap();
+    runner::checkpoint(&f.pool, &id, &cursor).await.unwrap();
+    runner::execute(
+        &f.pool,
+        &backup::Backups::new(f.config.clone()),
+        &id,
+        &f.events,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(output.join("_current")).unwrap(),
+        id
+    );
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT row_count FROM datasets WHERE source_id='source' AND name='sales.orders'",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows, expected);
+    assert!(rows > 0);
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM runs WHERE id=?")
+            .bind(&id)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap(),
+        "succeeded"
+    );
+    // All SQL Server operations above are SELECTs; only the local fixture and lake are written.
+    drop(connector);
     f.close().await;
 }

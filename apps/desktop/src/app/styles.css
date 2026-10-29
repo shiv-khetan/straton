@@ -122,9 +122,6 @@
     .page-header .field > span {
       @apply hidden;
     }
-    .page-title h1 {
-      font-size: 1.375rem;
-    }
     .page-content {
       @apply p-3;
     }

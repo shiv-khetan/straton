@@ -238,7 +238,15 @@ export default function Jobs({
                 <option value="">Select source</option>
                 {sources
                   .filter((s) =>
-                    ['postgres', 'sqlite', 'csv', 'stripe', 'salesforce', 'noop'].includes(s.kind),
+                    [
+                      'postgres',
+                      'sqlserver',
+                      'sqlite',
+                      'csv',
+                      'stripe',
+                      'salesforce',
+                      'noop',
+                    ].includes(s.kind),
                   )
                   .map((s) => (
                     <option value={s.id} key={s.id}>
@@ -297,7 +305,9 @@ export default function Jobs({
               <>
                 <Field label="Watermark column">
                   <select required value={watermark} onChange={(e) => setWatermark(e.target.value)}>
-                    <option value="">Select an integer, date or timestamp column</option>
+                    <option value="">
+                      Select an integer, date, timestamp or rowversion column
+                    </option>
                     {eligibleWatermarkColumns(selectedDataset?.columns ?? []).map((c) => (
                       <option key={c.name} value={c.name}>
                         {c.name} · {c.type}

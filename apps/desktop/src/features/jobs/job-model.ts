@@ -2,7 +2,9 @@ import type { Column, Run } from '@/lib/api';
 export function eligibleWatermarkColumns(columns: Column[]): Column[] {
   return columns.filter(
     (c) =>
-      /^(?:U?Int(?:8|16|32|64)|Date(?:32|64))$/.test(c.type) || c.type.startsWith('Timestamp('),
+      /^(?:U?Int(?:8|16|32|64)|Date(?:32|64))$/.test(c.type) ||
+      c.type.startsWith('Timestamp(') ||
+      c.type === 'FixedSizeBinary(8)',
   );
 }
 export function runStats(

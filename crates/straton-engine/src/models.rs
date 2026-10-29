@@ -293,6 +293,7 @@ pub async fn catalog_model(
                 })
                 .collect(),
             relationships: vec![],
+            metadata: Default::default(),
         },
     )
     .await?;

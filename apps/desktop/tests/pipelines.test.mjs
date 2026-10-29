@@ -70,3 +70,19 @@ assert.ok(cycleDisplay.nodes.c.length);
   if (placeNodes(placed) !== placed) throw new Error('placeNodes must keep distinct positions');
   console.log('Pipelines: unplaced graphs get a layered layout.');
 }
+
+{
+  const { flowState } = await import('../src/features/pipelines/pipeline-model.ts');
+  const cases = [
+    ['running', 'pending', 'flowing'],
+    ['succeeded', 'running', 'flowing'],
+    ['succeeded', 'succeeded', 'done'],
+    ['failed', 'pending', 'blocked'],
+    ['succeeded', 'skipped', 'blocked'],
+    ['pending', 'pending', 'idle'],
+    [undefined, undefined, 'idle'],
+  ];
+  for (const [from, to, want] of cases)
+    if (flowState(from, to) !== want) throw new Error(`flowState(${from}, ${to}) should be ${want}`);
+  console.log('Pipelines: edge flow states follow node states.');
+}

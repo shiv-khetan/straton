@@ -17,6 +17,8 @@ pub type Cursor = serde_json::Value;
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Postgres,
+    #[serde(rename = "sqlserver")]
+    Sqlserver,
     Sqlite,
     Csv,
     External,
@@ -77,6 +79,88 @@ pub struct DatasetSchema {
     pub dataset: Dataset,
     pub columns: Vec<Column>,
     pub relationships: Vec<Relationship>,
+    #[serde(default)]
+    pub metadata: DatasetMetadata,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DatasetMetadata {
+    #[serde(default)]
+    pub is_view: bool,
+    pub definition: Option<String>,
+    pub approximate_rows: Option<i64>,
+    #[serde(default)]
+    pub indexes: Vec<DatasetIndex>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatasetIndex {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+    pub clustered: bool,
+    pub kind: String,
+    pub unique_constraint: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SqlserverConfig {
+    pub host: String,
+    #[serde(default = "sqlserver_port")]
+    pub port: u16,
+    pub instance: Option<String>,
+    pub database: String,
+    pub auth: SqlserverAuth,
+    pub username: Option<String>,
+    #[serde(default = "enabled")]
+    pub encrypt: bool,
+    #[serde(default)]
+    pub trust_server_certificate: bool,
+    #[serde(default = "sqlserver_batch_size")]
+    pub batch_size: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SqlserverAuth {
+    Windows,
+    Sql,
+}
+fn sqlserver_port() -> u16 {
+    1433
+}
+fn sqlserver_batch_size() -> usize {
+    10_000
+}
+fn enabled() -> bool {
+    true
+}
+impl SqlserverConfig {
+    pub fn validate(&self) -> Result<()> {
+        if self.host.trim().is_empty()
+            || self.database.trim().is_empty()
+            || self.port == 0
+            || self.batch_size == 0
+            || self.batch_size > i32::MAX as usize
+            || self.instance.as_ref().is_some_and(|s| s.trim().is_empty())
+        {
+            return Err(Error::Invalid("invalid SQL Server configuration".into()));
+        }
+        if self.auth == SqlserverAuth::Sql
+            && self.username.as_ref().is_none_or(|s| s.trim().is_empty())
+        {
+            return Err(Error::Invalid(
+                "SQL authentication requires username".into(),
+            ));
+        }
+        if self.auth == SqlserverAuth::Windows && self.username.is_some() {
+            return Err(Error::Invalid(
+                "Windows authentication uses the engine account".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -167,6 +251,7 @@ pub fn eligible_watermark(data_type: &str) -> bool {
             | "UInt64"
             | "Date32"
             | "Date64"
+            | "FixedSizeBinary(8)"
     ) || data_type.starts_with("Timestamp(")
 }
 

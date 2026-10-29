@@ -461,7 +461,8 @@ async fn publish_snapshot(
         let ds = straton_core::DatasetSchema {
             dataset: straton_core::Dataset { id:String::new(), source_id:crate::models::SOURCE.into(), name:m.get("name") },
             columns: schema.fields().iter().map(|f|straton_core::Column {id:String::new(),dataset_id:String::new(),name:f.name().clone(),data_type:f.data_type().to_string(),nullable:f.is_nullable(),primary_key:false}).collect(),
-            relationships:vec![],
+            relationships: vec![],
+            metadata: Default::default(),
         };
         crate::catalog::upsert(&mut tx,crate::models::SOURCE,&ds).await?;
         store::audit(&mut tx,"model.output",m.get("id"),id).await?;

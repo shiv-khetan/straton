@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { Table as DataTable } from '@/components/ui/table';
 
 import { Button } from '@/components/ui/button';
@@ -266,7 +267,7 @@ export function Tabs({
 export function Breadcrumb({ items }: { items: string[] }) {
   return (
     <BreadcrumbRoot>
-      <BreadcrumbList className="text-[0.9375rem]">
+      <BreadcrumbList className="text-caption">
         {items.map((item, index) => (
           <Fragment key={index}>
             {index > 0 && <BreadcrumbSeparator />}
@@ -570,4 +571,11 @@ export function KpiTile({
       </span>
     </Button>
   );
+}
+
+// Renders a page's primary action into the title row, so it sits in one place on every page.
+export function PageActions({ children }: { children: import('react').ReactNode }) {
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => setSlot(document.getElementById('page-actions')), []);
+  return slot ? createPortal(children, slot) : null;
 }

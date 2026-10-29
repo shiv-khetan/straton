@@ -79,3 +79,15 @@ export function placeNodes<T extends Pick<PipelineInput, 'nodes' | 'edges'>>(gra
     }),
   };
 }
+
+// idle: the graph at rest (editor) · flowing: data is moving across this hop now
+// done: both ends finished · blocked: the upstream failed or the hop was skipped
+export type FlowState = 'idle' | 'flowing' | 'done' | 'blocked';
+
+export function flowState(from?: string, to?: string): FlowState {
+  if (from === 'failed' || to === 'skipped' || to === 'cancelled') return 'blocked';
+  if (from === 'succeeded' && to === 'succeeded') return 'done';
+  if (from === 'running' || (from === 'succeeded' && (to === 'running' || to === 'pending')))
+    return 'flowing';
+  return 'idle';
+}

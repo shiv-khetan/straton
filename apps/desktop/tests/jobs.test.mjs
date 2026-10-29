@@ -15,3 +15,6 @@ assert.equal(hasIncrementalSettings('postgres','', ['id']),false);
 assert.equal(hasIncrementalSettings('postgres','updated_at',[]),false);
 assert.equal(hasIncrementalSettings(undefined,'',[]),false);
 console.log('Event-feed incremental validation and required watermark/key checks passed.');
+
+assert.deepEqual(eligibleWatermarkColumns([{name:'version', type:'FixedSizeBinary(8)'}, {name:'bytes', type:'Binary'}]).map(c=>c.name), ['version']);
+assert.equal(hasIncrementalSettings('sqlserver','version',['id']),true);

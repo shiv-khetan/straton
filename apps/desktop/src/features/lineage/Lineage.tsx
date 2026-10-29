@@ -92,6 +92,7 @@ function Table({ data }: NodeProps<TableNode>) {
           <strong title={datasetLabel(data.dataset)}>{datasetLabel(data.dataset)}</strong>
         </div>
         <div className="node-state-row">
+          {data.dataset.dataset_type === 'view' && <Pill>View</Pill>}
           <StatusChip state={data.state} />
           {data.dataset.row_filtered && (
             <Pill title="Row filter active">
@@ -143,7 +144,13 @@ function Table({ data }: NodeProps<TableNode>) {
         </div>
       )}
       <div className="dataset-footer" style={{ height: TABLE_FOOTER_HEIGHT }}>
-        <span>{data.dataset.row_count?.toLocaleString() ?? '—'} rows</span>
+        <span>
+          {data.dataset.row_count?.toLocaleString() ??
+            (data.dataset.approximate_row_count != null
+              ? '≈ ' + data.dataset.approximate_row_count.toLocaleString()
+              : '—')}{' '}
+          rows
+        </span>
         {data.state === 'running' && <span>{data.batches ?? 0} batches</span>}
         <Pill title={data.dataset.last_synced_at ?? 'Never synced'}>
           <Icon name="clock" />
@@ -624,7 +631,15 @@ function Canvas({
                 (node): node is MapSource =>
                   node.type === 'source' &&
                   node.connected &&
-                  ['postgres', 'sqlite', 'csv', 'stripe', 'salesforce', 'noop'].includes(node.kind),
+                  [
+                    'postgres',
+                    'sqlserver',
+                    'sqlite',
+                    'csv',
+                    'stripe',
+                    'salesforce',
+                    'noop',
+                  ].includes(node.kind),
               )
               .map((source) => (
                 <Button
@@ -819,6 +834,7 @@ function Canvas({
                   <code title={selectedDataset.id}>{selectedDataset.id}</code>
                 </Pill>
                 <StatusChip state={datasetState(selectedDataset, jobs, runs)} />
+                {selectedDataset.dataset_type === 'view' && <Pill>View</Pill>}
                 <h3>Target</h3>
                 <div className="target-path">
                   <code>
@@ -993,7 +1009,15 @@ function Canvas({
                       busy ||
                       !canCreateJob(selectedDataset) ||
                       selectedDataset.stale ||
-                      !['postgres', 'sqlite', 'csv', 'stripe', 'salesforce', 'noop'].includes(
+                      ![
+                        'postgres',
+                        'sqlserver',
+                        'sqlite',
+                        'csv',
+                        'stripe',
+                        'salesforce',
+                        'noop',
+                      ].includes(
                         (
                           map.nodes.find((n) => n.id === selectedDataset.source_id) as
                             MapSource | undefined

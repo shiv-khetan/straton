@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   Database,
   Table2,
+  PanelsTopLeft,
   Download,
   ChevronLeft,
   ChevronRight,
@@ -178,7 +179,10 @@ function TableView({
     <section className="explorer-table" aria-label={table.name}>
       <div className="explorer-toolbar">
         <div className="min-w-0">
-          <h2>{table.display_name ?? table.name}</h2>
+          <h2>
+            {table.display_name ?? table.name}{' '}
+            {table.dataset_type === 'view' && <span className="policy-badge">View</span>}
+          </h2>
           <code className="hint">{tableReference(table.sql_schema, table.sql_table)}</code>
         </div>
         <div className="actions">
@@ -312,7 +316,7 @@ function TableView({
         </div>
         {meta && (
           <aside className="table-metadata">
-            <h3>Table details</h3>
+            <h3>{table.dataset_type === 'view' ? 'View details' : 'Table details'}</h3>
             <dl>
               <dt>SQL name</dt>
               <dd>
@@ -320,7 +324,12 @@ function TableView({
               </dd>
               <dt>Rows</dt>
               <dd>
-                <code>{table.row_count?.toLocaleString() ?? 'Policy filtered / unknown'}</code>
+                <code>
+                  {table.row_count?.toLocaleString() ??
+                    (table.approximate_row_count != null
+                      ? '≈ ' + table.approximate_row_count.toLocaleString()
+                      : 'Policy filtered / unknown')}
+                </code>
               </dd>
               <dt>Last sync</dt>
               <dd>
@@ -467,7 +476,14 @@ export default function Explorer({
                             aria-pressed={selected === t.id}
                             onClick={() => setSelected(t.id)}
                           >
-                            <Table2 size={14} />
+                            {t.dataset_type === 'view' ? (
+                              <PanelsTopLeft size={14} />
+                            ) : (
+                              <Table2 size={14} />
+                            )}
+                            {t.dataset_type === 'view' && (
+                              <span className="policy-badge">View</span>
+                            )}
                             <span>{t.display_name ?? t.name}</span>
                           </button>
                         ))}

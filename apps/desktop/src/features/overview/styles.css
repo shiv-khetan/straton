@@ -85,7 +85,7 @@
     @apply m-0 text-ink-2;
   }
   .chart-toolbar code {
-    font-size: 1.5rem;
+    font-size: 1.75rem;
     @apply font-semibold text-ink;
   }
   .activity-chart-container {

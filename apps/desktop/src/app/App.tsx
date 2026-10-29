@@ -31,7 +31,7 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { Sidebar } from './Sidebar';
 import { TitleBar } from './TitleBar';
 import { useEngineData } from './useEngineData';
-import { useRouteStore } from '@/stores/route';
+import { lastPage, useRouteStore } from '@/stores/route';
 import { isRoute, laterRoutes, routeLabels } from '@/stores/route-history';
 import type { Route } from '@/stores/route-history';
 import { routeAvailable, navigation, sectionLabels, sectionOf } from './navigation';
@@ -133,7 +133,7 @@ function AppContent() {
     setEntityRequest(null);
     setSheet(null);
     setConnection(next);
-    resetRoute(next ? 'Dashboard' : 'Connect');
+    resetRoute(next ? lastPage() : 'Connect');
   }
   useEffect(() => {
     if (!isTauri()) return;
@@ -511,6 +511,7 @@ function AppContent() {
               )}
             </div>
             <div className="actions">
+              <span id="page-actions" className="contents" />
               {primary && (
                 <Button
                   type="button"
@@ -700,9 +701,15 @@ function AppContent() {
                         (node) =>
                           node.type === 'source' &&
                           node.id === dataset.source_id &&
-                          ['postgres', 'sqlite', 'csv', 'stripe', 'salesforce', 'noop'].includes(
-                            node.kind,
-                          ),
+                          [
+                            'postgres',
+                            'sqlserver',
+                            'sqlite',
+                            'csv',
+                            'stripe',
+                            'salesforce',
+                            'noop',
+                          ].includes(node.kind),
                       )
                     }
                     onCreateJob={(dataset) => {

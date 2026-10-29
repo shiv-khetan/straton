@@ -12,6 +12,7 @@ import type { Api, Source, SourceKind } from '@/lib/api';
 import { Tray, RowMenu, Sheet, Table as UiTable } from '@/components/workbench/primitives';
 const fields: Record<string, string[]> = {
   postgres: ['host', 'port', 'database', 'username', 'batch_size'],
+  sqlserver: ['host', 'port', 'instance', 'database', 'username', 'batch_size'],
   sqlite: ['path', 'batch_size'],
   csv: ['path', 'batch_size', 'sample_size'],
   stripe: ['account_label', 'rate_limit_rps'],
@@ -48,7 +49,7 @@ export default function Sources({
   const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [kind, setKind] = useState<SourceKind>('postgres');
-  const [config, setConfig] = useState<Record<string, string | number | string[]>>({});
+  const [config, setConfig] = useState<Record<string, string | number | boolean | string[]>>({});
   const [secret, setSecret] = useState('');
   const [manual, setManual] = useState('');
   const [datasetName, setDatasetName] = useState('');
@@ -114,9 +115,15 @@ export default function Sources({
                 </TableCell>
                 <TableCell>
                   <div className="actions row-actions">
-                    {['postgres', 'sqlite', 'csv', 'stripe', 'salesforce', 'external'].includes(
-                      source.kind,
-                    ) && (
+                    {[
+                      'postgres',
+                      'sqlserver',
+                      'sqlite',
+                      'csv',
+                      'stripe',
+                      'salesforce',
+                      'external',
+                    ].includes(source.kind) && (
                       <>
                         <Button
                           variant="outline"
@@ -177,9 +184,15 @@ export default function Sources({
                             </Button>
                           </>
                         )}
-                        {['postgres', 'sqlite', 'csv', 'stripe', 'salesforce', 'external'].includes(
-                          source.kind,
-                        ) && (
+                        {[
+                          'postgres',
+                          'sqlserver',
+                          'sqlite',
+                          'csv',
+                          'stripe',
+                          'salesforce',
+                          'external',
+                        ].includes(source.kind) && (
                           <>
                             {' '}
                             <Button
@@ -228,37 +241,116 @@ export default function Sources({
                 disabled={!!editing}
                 onChange={(e) => {
                   setKind(e.target.value as SourceKind);
-                  setConfig({});
+                  setConfig(
+                    e.target.value === 'sqlserver'
+                      ? {
+                          auth: 'windows',
+                          port: 1433,
+                          encrypt: true,
+                          trust_server_certificate: false,
+                        }
+                      : {},
+                  );
                   setSecret('');
                 }}
               >
-                {['postgres', 'sqlite', 'csv', 'stripe', 'salesforce', 'external'].map((k) => (
-                  <option key={k}>{k}</option>
-                ))}
+                {['postgres', 'sqlserver', 'sqlite', 'csv', 'stripe', 'salesforce', 'external'].map(
+                  (k) => (
+                    <option key={k} value={k}>
+                      {k === 'sqlserver' ? 'SQL Server' : k}
+                    </option>
+                  ),
+                )}
               </select>
             </Field>
-            {(fields[kind] || []).map((key) => (
-              <Field
-                key={key}
-                label={key === 'path' ? 'Path on engine machine' : key.replaceAll('_', ' ')}
-              >
-                <Input
-                  required={['host', 'database', 'username', 'path'].includes(key)}
-                  type={numericFields.includes(key) ? 'number' : 'text'}
-                  min="1"
-                  max={key === 'rate_limit_rps' ? '1000' : '2147483647'}
-                  placeholder={
-                    key === 'rate_limit_rps'
-                      ? (kind === 'salesforce' ? '10' : '25') + ' (default)'
-                      : key === 'login_url'
-                        ? 'https://login.salesforce.com (or test.salesforce.com)'
-                        : undefined
-                  }
-                  value={(config[key] as string | number | undefined) ?? ''}
-                  onChange={(e) => setConfig({ ...config, [key]: e.target.value })}
-                />
-              </Field>
-            ))}
+            {kind === 'sqlserver' && (
+              <>
+                <Field label="Authentication">
+                  <select
+                    value={(config.auth as string | undefined) ?? 'windows'}
+                    onChange={(e) => {
+                      const next: typeof config = { ...config, auth: e.target.value };
+                      if (e.target.value === 'windows') delete next.username;
+                      setConfig(next);
+                      setSecret('');
+                    }}
+                  >
+                    <option value="windows">Windows integrated</option>
+                    <option value="sql">SQL login</option>
+                  </select>
+                </Field>
+                {config.auth !== 'sql' && (
+                  <p className="hint">Connects as the Windows account running the engine.</p>
+                )}
+                <fieldset className="checklist">
+                  <legend>Connection security</legend>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={config.encrypt !== false}
+                      onChange={(e) => setConfig({ ...config, encrypt: e.target.checked })}
+                    />
+                    Encrypt connection
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={config.trust_server_certificate === true}
+                      aria-describedby="sqlserver-trust-help"
+                      onChange={(e) =>
+                        setConfig({ ...config, trust_server_certificate: e.target.checked })
+                      }
+                    />
+                    Trust server certificate
+                  </label>
+                  <p id="sqlserver-trust-help" className="hint">
+                    Trusting the server certificate skips certificate and hostname validation.
+                    Enable only when you have verified the server on a trusted network.
+                  </p>
+                  {config.encrypt === false && (
+                    <p role="status" className="message">
+                      Encryption is disabled. Data may travel unencrypted.
+                    </p>
+                  )}
+                  {config.trust_server_certificate === true && (
+                    <p role="status" className="message">
+                      Certificate validation is disabled. The server's identity will not be
+                      verified.
+                    </p>
+                  )}
+                </fieldset>
+              </>
+            )}
+            {(fields[kind] || [])
+              .filter(
+                (key) => !(kind === 'sqlserver' && key === 'username' && config.auth !== 'sql'),
+              )
+              .map((key) => (
+                <Field
+                  key={key}
+                  label={key === 'path' ? 'Path on engine machine' : key.replaceAll('_', ' ')}
+                >
+                  <Input
+                    required={['host', 'database', 'username', 'path'].includes(key)}
+                    type={numericFields.includes(key) ? 'number' : 'text'}
+                    min="1"
+                    max={
+                      key === 'port' ? '65535' : key === 'rate_limit_rps' ? '1000' : '2147483647'
+                    }
+                    placeholder={
+                      kind === 'sqlserver' && key === 'port'
+                        ? '1433 (default)'
+                        : key === 'rate_limit_rps'
+                          ? (kind === 'salesforce' ? '10' : '25') + ' (default)'
+                          : key === 'login_url'
+                            ? 'https://login.salesforce.com (or test.salesforce.com)'
+                            : undefined
+                    }
+                    value={(config[key] as string | number | undefined) ?? ''}
+                    onChange={(e) => setConfig({ ...config, [key]: e.target.value })}
+                  />
+                </Field>
+              ))}
             {kind === 'stripe' && (
               <fieldset className="checklist">
                 <legend>Objects to sync</legend>
@@ -284,16 +376,23 @@ export default function Sources({
                 })}
               </fieldset>
             )}
-            {(kind === 'postgres' || kind === 'stripe') && (
+            {(kind === 'postgres' ||
+              kind === 'stripe' ||
+              (kind === 'sqlserver' && config.auth === 'sql')) && (
               <Field label={kind === 'stripe' ? 'API key (write-only)' : 'Password (write-only)'}>
                 <Input
                   type="password"
+                  required={
+                    kind === 'sqlserver' && !sources.find((s) => s.id === editing)?.credential_id
+                  }
                   autoComplete="new-password"
                   value={secret}
                   onChange={(e) => setSecret(e.target.value)}
                   aria-describedby={kind === 'stripe' ? 'stripe-key-help' : undefined}
                   placeholder={
-                    editing ? 'Leave blank to keep current secret' : 'Stored in engine OS keychain'
+                    editing && sources.find((s) => s.id === editing)?.credential_id
+                      ? 'Leave blank to keep current secret'
+                      : 'Stored in engine OS keychain'
                   }
                 />
               </Field>
@@ -330,14 +429,13 @@ export default function Sources({
                     onClick={() =>
                       void action(async () => {
                         // PKCE sign-in runs in the desktop shell; only the grant comes back here.
-                        const grant = await invoke<{ refresh_token: string; instance_url: string }>(
-                          'salesforce_authorize',
-                          {
-                            loginUrl:
-                              (config.login_url as string) || 'https://login.salesforce.com',
-                            clientId: config.client_id,
-                          },
-                        );
+                        const grant = await invoke<{
+                          refresh_token: string;
+                          instance_url: string;
+                        }>('salesforce_authorize', {
+                          loginUrl: (config.login_url as string) || 'https://login.salesforce.com',
+                          clientId: config.client_id,
+                        });
                         setSecret(grant.refresh_token);
                         setConfig({ ...config, instance_url: grant.instance_url });
                       }, 'Signed in to Salesforce — save the source to keep it')

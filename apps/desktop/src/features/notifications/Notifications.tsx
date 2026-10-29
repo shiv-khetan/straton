@@ -54,7 +54,7 @@ export function Notifications({
         >
           <Bell size={18} />
           {!!count.data?.count && (
-            <span className="absolute -right-1 -top-1 rounded-xs bg-primary px-1 text-[11px] font-semibold text-primary-foreground">
+            <span className="absolute -right-1 -top-1 rounded-xs bg-primary px-1 text-[0.75rem] leading-4 font-semibold text-primary-foreground">
               {count.data.count > 99 ? '99+' : count.data.count}
             </span>
           )}

@@ -58,6 +58,7 @@ fn schema(name: String, columns: Vec<Column>, relationships: Vec<Relationship>) 
         },
         columns,
         relationships,
+        metadata: Default::default(),
     }
 }
 fn relationship(from: &str, cols: Vec<String>, to: &str, targets: Vec<String>) -> Relationship {
@@ -144,6 +145,7 @@ mod http;
 mod salesforce;
 #[cfg(test)]
 mod salesforce_tests;
+mod sqlserver;
 mod stripe;
 #[cfg(test)]
 mod stripe_tests;
@@ -152,7 +154,7 @@ mod stripe_tests;
 pub fn incremental_style(kind: &str) -> straton_core::IncrementalStyle {
     use straton_core::IncrementalStyle::*;
     match kind {
-        "sqlite" | "postgres" => Column,
+        "sqlite" | "postgres" | "sqlserver" => Column,
         "stripe" => Events {
             horizon_secs: Some(stripe::EVENT_HORIZON_SECS),
         },
@@ -165,6 +167,7 @@ pub fn incremental_style(kind: &str) -> straton_core::IncrementalStyle {
 
 pub fn build(kind: &str, config: &Value, secret: Option<&str>) -> Result<Box<dyn Connector>> {
     match kind {
+        "sqlserver" => return sqlserver::build(config, secret),
         "stripe" => return stripe::build(config, secret),
         "salesforce" => return salesforce::build(config, secret),
         _ => {}

@@ -35,6 +35,25 @@ pub async fn upsert(
         "column names starting with _straton_ are reserved"
     );
     let id:String=sqlx::query_scalar("INSERT INTO datasets(id,source_id,name) VALUES(?,?,?) ON CONFLICT(source_id,name) DO UPDATE SET name=excluded.name,stale=0 RETURNING id").bind(store::id()).bind(source).bind(&ds.dataset.name).fetch_one(&mut **tx).await?;
+    sqlx::query(
+        "UPDATE datasets SET dataset_type=?,definition=?,approximate_row_count=? WHERE id=?",
+    )
+    .bind(if ds.metadata.is_view { "view" } else { "table" })
+    .bind(&ds.metadata.definition)
+    .bind(ds.metadata.approximate_rows)
+    .bind(&id)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query("DELETE FROM dataset_indexes WHERE dataset_id=?")
+        .bind(&id)
+        .execute(&mut **tx)
+        .await?;
+    for index in &ds.metadata.indexes {
+        sqlx::query("INSERT INTO dataset_indexes(dataset_id,name,columns,\"unique\",clustered,kind,unique_constraint) VALUES(?,?,?,?,?,?,?)")
+            .bind(&id).bind(&index.name).bind(serde_json::to_string(&index.columns)?)
+            .bind(index.unique).bind(index.clustered).bind(&index.kind).bind(index.unique_constraint)
+            .execute(&mut **tx).await?;
+    }
     for c in &ds.columns {
         sqlx::query("INSERT INTO columns(id,dataset_id,name,data_type,nullable,primary_key) VALUES(?,?,?,?,?,?) ON CONFLICT(dataset_id,name) DO UPDATE SET data_type=excluded.data_type,nullable=excluded.nullable,primary_key=excluded.primary_key").bind(store::id()).bind(&id).bind(&c.name).bind(&c.data_type).bind(c.nullable).bind(c.primary_key).execute(&mut **tx).await?;
     }
@@ -52,7 +71,7 @@ pub async fn discover(pool: &SqlitePool, id: &str) -> Result<()> {
     let connector = connector(pool, id).await?;
     let schemas = connector.discover().await?;
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM relationships WHERE kind='declared_fk' AND from_dataset IN(SELECT id FROM datasets WHERE source_id=?)").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM relationships WHERE (kind='declared_fk' AND from_dataset IN(SELECT id FROM datasets WHERE source_id=?1)) OR (kind='lineage' AND to_dataset IN(SELECT id FROM datasets WHERE source_id=?1 AND dataset_type='view'))").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM relationships WHERE kind='inferred'")
         .execute(&mut *tx)
         .await?;
@@ -222,7 +241,7 @@ pub async fn datamap(pool: &SqlitePool) -> Result<Value> {
         }
         .unwrap_or_else(|| name.to_owned());
         let columns:Vec<_>=cols.iter().filter(|c|c.get::<&str,_>("dataset_id")==id).map(|c|json!({"name":c.get::<String,_>("name"),"type":c.get::<String,_>("data_type"),"nullable":c.get::<bool,_>("nullable"),"pk":c.get::<bool,_>("primary_key")})).collect();
-        nodes.push(json!({"type":"dataset","id":id,"source_id":d.get::<String,_>("source_id"),"name":name,"display_name":display_name,"stale":d.get::<bool,_>("stale"),"row_count":d.get::<Option<i64>,_>("row_count"),"last_synced_at":d.get::<Option<String>,_>("last_synced_at"),"sql_schema":schema_names[d.get::<&str,_>("source_id")],"sql_table":table_names[id],"columns":columns}));
+        nodes.push(json!({"type":"dataset","id":id,"source_id":d.get::<String,_>("source_id"),"name":name,"display_name":display_name,"dataset_type":d.get::<String,_>("dataset_type"),"definition":d.get::<Option<String>,_>("definition"),"approximate_row_count":d.get::<Option<i64>,_>("approximate_row_count"),"stale":d.get::<bool,_>("stale"),"row_count":d.get::<Option<i64>,_>("row_count"),"last_synced_at":d.get::<Option<String>,_>("last_synced_at"),"sql_schema":schema_names[d.get::<&str,_>("source_id")],"sql_table":table_names[id],"columns":columns}));
     }
     let edges:Result<Vec<_>>=edges.iter().map(|r|Ok(json!({"id":r.get::<String,_>("id"),"kind":r.get::<String,_>("kind"),"from_dataset":r.get::<String,_>("from_dataset"),"from_cols":serde_json::from_str::<Value>(r.get("from_cols"))?,"to_dataset":r.get::<String,_>("to_dataset"),"to_cols":serde_json::from_str::<Value>(r.get("to_cols"))?,"confidence":r.get::<Option<f64>,_>("confidence")}))).collect();
     tx.commit().await?;

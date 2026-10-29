@@ -30,3 +30,52 @@
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
+
+/* Data flow along pipeline edges: a hairline track plus a short glowing segment that
+   travels source → target. pathLength=100 on the pulse makes the dash maths edge-agnostic. */
+.flow-edge .flow-track {
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+.flow-edge.flow-done .flow-track {
+  stroke: color-mix(in srgb, var(--primary) 55%, var(--line));
+}
+.flow-edge.flow-flowing .flow-track {
+  stroke: color-mix(in srgb, var(--primary) 35%, var(--line));
+}
+.flow-edge.flow-blocked .flow-track {
+  stroke: var(--danger-ink);
+  stroke-dasharray: 4 4;
+}
+.flow-edge.selected .flow-track {
+  stroke: var(--primary);
+  stroke-width: 2;
+}
+.flow-pulse {
+  stroke: var(--primary);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 10 90;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--primary) 70%, transparent));
+  animation: flow-travel 1.6s linear infinite;
+  pointer-events: none;
+}
+/* At rest the editor only hints at direction: slower, fainter. */
+.flow-edge.flow-idle .flow-pulse {
+  opacity: 0.35;
+  animation-duration: 4.8s;
+  filter: none;
+}
+@keyframes flow-travel {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flow-pulse {
+    display: none;
+  }
+}

@@ -249,6 +249,7 @@ async fn save_source(
     }
     let kind = match s.kind {
         SourceKind::Postgres => "postgres",
+        SourceKind::Sqlserver => "sqlserver",
         SourceKind::Sqlite => "sqlite",
         SourceKind::Csv => "csv",
         SourceKind::External => "external",
@@ -267,10 +268,43 @@ async fn save_source(
         return Err(bad("credential_id must equal source id"));
     }
     validate_config(kind, &s.config)?;
+    let windows_auth = kind == "sqlserver" && s.config["auth"] == "windows";
+    if windows_auth {
+        s.credential_id = None;
+    }
+    if windows_auth && s.secret.is_some() {
+        return Err(bad(
+            "Windows authentication uses the engine account; omit secret",
+        ));
+    }
+    if kind == "sqlserver" && !windows_auth {
+        use secrecy::ExposeSecret;
+        let supplied = s
+            .secret
+            .as_ref()
+            .is_some_and(|s| !s.expose_secret().is_empty());
+        let saved = if update && s.secret.is_none() {
+            let credential: Option<String> =
+                sqlx::query_scalar("SELECT credential_id FROM sources WHERE id=?")
+                    .bind(&s.id)
+                    .fetch_optional(&a.pool)
+                    .await?
+                    .flatten();
+            credential.is_some()
+                && credentials::get(&s.id)?.is_some_and(|s| !s.expose_secret().is_empty())
+        } else {
+            false
+        };
+        if !supplied && !saved {
+            return Err(bad(
+                "SQL authentication requires a password in secret or the existing keychain",
+            ));
+        }
+    }
     catalog::path_component(&s.id).map_err(|_| bad("invalid source id"))?;
     let mut tx = a.pool.begin().await?;
     let query = if update {
-        "UPDATE sources SET name=?2,kind=?3,credential_id=COALESCE(?4,credential_id),config=?5 WHERE id=?1"
+        "UPDATE sources SET name=?2,kind=?3,credential_id=CASE WHEN ?3='sqlserver' AND json_extract(?5,'$.auth')='windows' THEN NULL ELSE COALESCE(?4,credential_id) END,config=?5 WHERE id=?1"
     } else {
         "INSERT INTO sources(id,name,kind,credential_id,config) VALUES(?1,?2,?3,?4,?5)"
     };
@@ -301,7 +335,9 @@ async fn save_source(
         "",
     )
     .await?;
-    if let Some(secret) = s.secret.take() {
+    if windows_auth {
+        credentials::delete(&s.id)?;
+    } else if let Some(secret) = s.secret.take() {
         credentials::set(&s.id, &secret)?;
     }
     tx.commit().await?;
@@ -425,7 +461,7 @@ async fn validate_incremental_job(pool: &SqlitePool, j: &Job) -> ApiResult<()> {
         })?;
     if !straton_core::eligible_watermark(column.get("data_type")) {
         return Err(bad(
-            "watermark_column must have an integer, date or timestamp type",
+            "watermark_column must have an integer, date, timestamp or rowversion type",
         ));
     }
     let keys = j.key_columns.clone().unwrap_or_else(|| {
@@ -704,6 +740,17 @@ fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
         .ok_or_else(|| bad("config must be an object"))?;
     let allowed: &[&str] = match kind {
         "postgres" => &["host", "port", "database", "username", "batch_size"],
+        "sqlserver" => &[
+            "host",
+            "port",
+            "instance",
+            "database",
+            "auth",
+            "username",
+            "encrypt",
+            "trust_server_certificate",
+            "batch_size",
+        ],
         "sqlite" => &["path", "batch_size"],
         "csv" => &["path", "batch_size", "sample_size"],
         "stripe" => &["account_label", "objects", "rate_limit_rps", "api_base"],
@@ -723,7 +770,11 @@ fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
         ));
     }
     for (k, v) in obj {
-        if k == "objects" {
+        if ["encrypt", "trust_server_certificate"].contains(&k.as_str()) {
+            if !v.is_boolean() {
+                return Err(bad("TLS config fields must be booleans"));
+            }
+        } else if k == "objects" {
             if !v.as_array().is_some_and(|a| a.iter().all(Value::is_string)) {
                 return Err(bad("objects must be a list of names"));
             }
@@ -1074,6 +1125,10 @@ async fn filtered_map(pool: &SqlitePool, p: &Principal, overview: bool) -> anyho
         n["row_filtered"] = json!(if overview { any } else { policy.filtered });
         if policy.filtered {
             n["row_count"] = Value::Null;
+            n["approximate_row_count"] = Value::Null;
+        }
+        if !p.admin() {
+            n["definition"] = Value::Null;
         }
         for c in n["columns"].as_array_mut().unwrap() {
             let name = c["name"].as_str().unwrap().to_owned();

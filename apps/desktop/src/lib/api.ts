@@ -122,6 +122,7 @@ export interface Connection {
 }
 export type SourceKind =
   | 'postgres'
+  | 'sqlserver'
   | 'sqlite'
   | 'csv'
   | 'stripe'
@@ -135,7 +136,7 @@ export interface Source {
   name: string;
   kind: SourceKind;
   credential_id: string | null;
-  config: Record<string, string | number | string[]>;
+  config: Record<string, string | number | boolean | string[]>;
 }
 export type SourceInput = Omit<Source, 'id' | 'credential_id'> & { secret?: string };
 export type Privilege = 'read' | 'sync_admin' | 'admin';
@@ -192,6 +193,9 @@ export interface MapSource {
   connected: boolean;
 }
 export interface Dataset {
+  dataset_type?: 'table' | 'view';
+  approximate_row_count?: number | null;
+  definition?: string | null;
   row_filtered?: boolean;
   type: 'dataset';
   display_name?: string;
@@ -677,7 +681,11 @@ export function api(connection: Connection) {
     deleteSavedQuery: (id: string) => request<void>('/v1/saved-queries/' + idPath(id), 'DELETE'),
     cancelSql: (id: string) => request<void>('/v1/sql/cancel/' + idPath(id), 'POST'),
     sqlQuery: (query: string, limit = 1000, query_id?: string) =>
-      request<SqlResult>('/v1/sql', 'POST', { query, limit, ...(query_id ? { query_id } : {}) }),
+      request<SqlResult>('/v1/sql', 'POST', {
+        query,
+        limit,
+        ...(query_id ? { query_id } : {}),
+      }),
     sqlExplain: (query: string) => request<SqlExplain>('/v1/sql/explain', 'POST', { query }),
     sqlTables: () => request<{ tables: SqlTable[] }>('/v1/sql/tables'),
     health: () => request<{ ok: boolean }>('/health'),

@@ -1,3 +1,5 @@
+import { Plus } from 'lucide-react';
+import { PageActions } from '@/components/workbench/primitives';
 import { useEffect, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { useQuery } from '@tanstack/react-query';
@@ -67,9 +69,12 @@ export default function Analytics({
             <p className="text-ink-2">
               Saved charts built from SQL, with your access rules applied.
             </p>
-            <Button disabled={readOnly} onClick={() => setEditing('new')}>
-              New chart
-            </Button>
+            <PageActions>
+              <Button disabled={readOnly} onClick={() => setEditing('new')}>
+                <Plus size={16} aria-hidden="true" />
+                New chart
+              </Button>
+            </PageActions>
           </div>
           {charts.isPending && <FeatureLoading label="Loading charts" />}
           <FeatureError error={charts.error} retry={() => void charts.refetch()} />

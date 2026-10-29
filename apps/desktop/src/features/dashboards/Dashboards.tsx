@@ -1,3 +1,5 @@
+import { Plus } from 'lucide-react';
+import { PageActions } from '@/components/workbench/primitives';
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type {
@@ -103,9 +105,12 @@ export default function Dashboards({
         <>
           <div className="section-toolbar">
             <p className="text-ink-2">Arrange saved charts into a shared view of your data.</p>
-            <Button disabled={readOnly} onClick={() => setId('new')}>
-              New dashboard
-            </Button>
+            <PageActions>
+              <Button disabled={readOnly} onClick={() => setId('new')}>
+                <Plus size={16} aria-hidden="true" />
+                New dashboard
+              </Button>
+            </PageActions>
           </div>
           {list.isPending && <FeatureLoading label="Loading dashboards" />}
           <FeatureError error={list.error} retry={() => void list.refetch()} />
