@@ -30,9 +30,11 @@ console.log('Relative times, backup filenames, loopback detection and chart boun
 // Check the light default, dark toggle, status chips, and UI marks.
 const { readFile } = await import('node:fs/promises');
 const css = await readFile(new URL('../src/styles/tailwind.css', import.meta.url), 'utf8');
-const declarations = block => Object.fromEntries([...block.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
-const light = declarations(css.match(/:root\s*\{([^}]+)\}/)[1]);
-const dark = { ...light, ...declarations(css.match(/\[data-theme=['"]dark['"]\]\s*\{([^}]+)\}/)[1]) };
+const { themeTokens } = await import('./css-tokens.mjs');
+const { light, dark } = themeTokens(css);
+// One switching mechanism: no token may still be overridden in a theme block.
+assert.ok(!/\[data-theme=['"]dark['"]\]\s*\{[^}]*--/.test(css), 'dark tokens must live in light-dark(), not a theme block');
+assert.ok(!/@media \(prefers-color-scheme: dark\)\s*\{\s*:root/.test(css), 'no duplicated prefers-color-scheme token block');
 const blend = (fg, bg, alpha) => fg.map((v, i) => v * alpha + bg[i] * (1-alpha));
 function resolve(palette, name) {
   const value = palette[name];
