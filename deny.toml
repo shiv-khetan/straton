@@ -2,8 +2,16 @@
 # OR alternatives need no exception when an allowed license satisfies the expression.
 [advisories]
 version = 2
-# Vulnerabilities are always denied by cargo-deny. No RustSec advisory is ignored.
-ignore = []
+# Vulnerabilities are denied by cargo-deny. Each ignore below is temporary and justified.
+ignore = [
+  # zstd 0.13 / zstd-safe 7 arrive only through arrow-ipc's default features. Arrow 59 pins
+  # zstd 0.13 and DataFusion 55.2 (latest) requires Arrow 59, so no patched path exists yet.
+  # Straton never reads or writes zstd-compressed Arrow IPC. Remove when DataFusion moves to
+  # Arrow 60 (zstd 0.14.3+ / zstd-safe 8.2+).
+  { id = "RUSTSEC-2026-0391", reason = "zstd via arrow-ipc defaults; IPC zstd unused; no compatible fix yet" },
+  { id = "RUSTSEC-2026-0398", reason = "zstd-safe via arrow-ipc defaults; seekable decompress unused; no compatible fix yet" },
+  { id = "RUSTSEC-2026-0403", reason = "zstd-safe via arrow-ipc defaults; legacy frame streaming unused; no compatible fix yet" },
+]
 yanked = "deny"
 
 [licenses]
