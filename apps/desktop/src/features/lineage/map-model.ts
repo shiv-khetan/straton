@@ -6,6 +6,10 @@ export type TableData = LayoutData & {
   dataset: Dataset;
   fk: string[];
   highlighted: boolean;
+  fieldFocus?: string;
+  fieldPath?: string[];
+  focusActive?: boolean;
+  onFieldFocus?: (dataset_id: string, column: string) => void;
   state?: string;
   batches?: number;
   external?: boolean;

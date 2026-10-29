@@ -47,6 +47,7 @@ import { safeStorage } from '@/stores/storage';
 const Pipelines = lazy(() => import('@/features/pipelines/Pipelines'));
 const Quality = lazy(() => import('@/features/quality/Quality'));
 const Analytics = lazy(() => import('@/features/analytics/Analytics'));
+const UsageChart = lazy(() => import('@/features/lineage/UsageChart'));
 const Dashboards = lazy(() => import('@/features/dashboards/Dashboards'));
 const Activity = lazy(() => import('@/features/activity/Activity'));
 const Schedules = lazy(() => import('@/features/schedules/Schedules'));
@@ -81,6 +82,10 @@ function AppContent() {
     runId?: string;
     nonce: number;
   } | null>(null);
+  const [usageChart, setUsageChart] = useState('');
+  useEffect(() => {
+    if (page !== 'Analytics') setUsageChart('');
+  }, [page]);
   const [mapFocus, setMapFocus] = useState('');
   const [mapStatusFilter, setMapStatusFilter] = useState('');
   const [jobStateFilter, setJobStateFilter] = useState('');
@@ -660,9 +665,17 @@ function AppContent() {
                         createRequest={qualityCreateRequest}
                       />
                     )}
-                    {page === 'Analytics' && (
-                      <Analytics client={client} me={me} scope={scope} readOnly={!online} />
-                    )}
+                    {page === 'Analytics' &&
+                      (usageChart ? (
+                        <UsageChart
+                          client={client}
+                          id={usageChart}
+                          scope={scope}
+                          onClose={() => setUsageChart('')}
+                        />
+                      ) : (
+                        <Analytics client={client} me={me} scope={scope} readOnly={!online} />
+                      ))}
                     {page === 'Dashboards' && (
                       <Dashboards
                         client={client}
@@ -860,6 +873,18 @@ function AppContent() {
                       jobs={jobs}
                       runs={runs}
                       events={events}
+                      onNavigateUsage={(entity) => {
+                        if (entity.kind === 'model') {
+                          setModelRequest({ id: entity.id, nonce: Date.now() });
+                          setPage('Models');
+                        } else if (entity.kind === 'check') {
+                          setEntityRequest({ kind: 'check', id: entity.id, nonce: Date.now() });
+                          setPage('Data Quality');
+                        } else {
+                          setUsageChart(entity.id);
+                          setPage('Analytics');
+                        }
+                      }}
                       focusId={mapFocus}
                       initialStatusFilter={mapStatusFilter}
                       consoleCollapsed={consoleCollapsed}

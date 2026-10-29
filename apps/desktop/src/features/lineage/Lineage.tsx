@@ -1,3 +1,9 @@
+import { Home } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { ColumnInspector } from './ColumnInspector';
+import type { UsageEntity } from './ColumnInspector';
+import { fieldKey, nextFieldIndex } from './column-model';
+import type { ColumnRef } from '@/lib/api';
 import { StatePill } from '@/components/workbench/primitives';
 import { Impact } from './Impact';
 import { Tabs } from '@/components/workbench/primitives';
@@ -72,11 +78,13 @@ type Props = {
   onQuery: (dataset: Dataset) => void;
   onCreateJob: (dataset: Dataset) => void;
   onSelection: (name: string, id?: string) => void;
+  onNavigateUsage: (entity: UsageEntity) => void;
 };
 const kinds: EdgeKind[] = ['declared_fk', 'inferred', 'lineage', 'manual'];
 function Table({ data }: NodeProps<TableNode>) {
   return (
     <article
+      data-field-table={data.dataset.id}
       className={
         'dataset-node state-' +
         (data.state ?? 'never-synced').replaceAll(' ', '-') +
@@ -104,16 +112,53 @@ function Table({ data }: NodeProps<TableNode>) {
         <Handle type="source" position={Position.Right} id="dataset:out" isConnectable={false} />
       </div>
       {data.dataset.columns.map((column) => (
-        <div className="dataset-column" key={column.name} style={{ height: TABLE_ROW_HEIGHT }}>
+        <div
+          className="dataset-column"
+          key={column.name}
+          data-field-home={data.fieldFocus === column.name}
+          data-field-dimmed={data.focusActive && !data.fieldPath?.includes(column.name)}
+          style={{ height: TABLE_ROW_HEIGHT }}
+        >
           <Handle
             type="target"
             position={Position.Left}
             id={'in:' + column.name}
             aria-label={'Connect to ' + column.name}
           />
-          <span className="column-name" title={column.name}>
+          <button
+            type="button"
+            data-field-button
+            className="column-name field-button nodrag nopan"
+            title={'Trace ' + column.name}
+            aria-pressed={data.fieldFocus === column.name}
+            onClick={(event) => {
+              event.stopPropagation();
+              data.onFieldFocus?.(data.dataset.id, column.name);
+            }}
+            onKeyDown={(event) => {
+              if (
+                ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(
+                  event.key,
+                )
+              ) {
+                event.preventDefault();
+                event.stopPropagation();
+                const buttons = Array.from(
+                  event.currentTarget
+                    .closest('[data-field-table]')!
+                    .querySelectorAll<HTMLButtonElement>('[data-field-button]'),
+                );
+                buttons[
+                  nextFieldIndex(buttons.indexOf(event.currentTarget), buttons.length, event.key)
+                ]?.focus();
+              } else if (event.key === 'Enter' || event.key === ' ') {
+                event.stopPropagation();
+              }
+            }}
+          >
+            {data.fieldFocus === column.name && <Home size={13} aria-label="Focal field" />}
             {column.name}
-          </span>
+          </button>
           <span className="column-type" title={column.type}>
             {column.type}
             {column.nullable ? '?' : ''}
@@ -234,9 +279,41 @@ function Canvas({
   onQuery,
   onCreateJob,
   onSelection,
+  onNavigateUsage,
 }: Props) {
   const [nodes, setNodes, onNodesChange] = useNodesState<MapNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<MapEdge>([]);
+  const [fieldFocus, setFieldFocus] = useState<ColumnRef | null>(null);
+  const onFieldFocus = useCallback(
+    (dataset_id: string, column: string) => {
+      setFieldFocus({ dataset_id, column });
+      setNodes((previous) => previous.map((node) => ({ ...node, selected: false })));
+      setEdges((previous) => previous.map((edge) => ({ ...edge, selected: false })));
+    },
+    [setNodes, setEdges],
+  );
+  const columnQuery = useQuery({
+    queryKey: ['engine', 'impact', 'columns', engineUrl, fieldFocus, map],
+    queryFn: () => client.columnLineage(fieldFocus!),
+    enabled: !!fieldFocus,
+  });
+  const fieldGraph = columnQuery.data;
+  const pathFields = useMemo(
+    () =>
+      new Set([
+        ...(fieldGraph?.nodes.map(fieldKey) ?? []),
+        ...(fieldFocus ? [fieldKey(fieldFocus)] : []),
+      ]),
+    [fieldGraph, fieldFocus],
+  );
+  const pathDatasets = useMemo(
+    () =>
+      new Set([
+        ...(fieldGraph?.nodes.map((n) => n.dataset_id) ?? []),
+        ...(fieldFocus ? [fieldFocus.dataset_id] : []),
+      ]),
+    [fieldGraph, fieldFocus],
+  );
   const [panelOpen, setPanelOpen] = useState(false);
   const [consoleTab, setConsoleTab] = useState('Live events');
   const [stateFilter, setStateFilter] = useState(initialStatusFilter);
@@ -332,25 +409,36 @@ function Canvas({
           ({
             ...node,
             hidden:
-              excluded.includes(node.id) ||
-              (!!node.parentId && excluded.includes(node.parentId)) ||
-              (!!sourceFilter &&
-                (node.type === 'source'
-                  ? node.id !== sourceFilter
-                  : node.parentId !== sourceFilter)),
+              !fieldFocus &&
+              (excluded.includes(node.id) ||
+                (!!node.parentId && excluded.includes(node.parentId)) ||
+                (!!sourceFilter &&
+                  (node.type === 'source'
+                    ? node.id !== sourceFilter
+                    : node.parentId !== sourceFilter))),
             style: {
               ...node.style,
               opacity:
-                node.type === 'table' &&
-                stateFilter &&
-                datasetState(node.data.dataset, jobs, runs) !== stateFilter
-                  ? 0.35
-                  : 1,
+                fieldFocus && node.type === 'table' && !pathDatasets.has(node.id)
+                  ? 0.22
+                  : node.type === 'table' &&
+                      stateFilter &&
+                      datasetState(node.data.dataset, jobs, runs) !== stateFilter
+                    ? 0.35
+                    : 1,
             },
             data:
               node.type === 'table'
                 ? {
                     ...node.data,
+                    focusActive: !!fieldFocus,
+                    fieldFocus: fieldFocus?.dataset_id === node.id ? fieldFocus.column : undefined,
+                    fieldPath: node.data.dataset.columns
+                      .filter((c) =>
+                        pathFields.has(fieldKey({ dataset_id: node.id, column: c.name })),
+                      )
+                      .map((c) => c.name),
+                    onFieldFocus,
                     state: datasetState(node.data.dataset, jobs, runs),
                     batches: datasetRun(node.data.dataset, jobs, runs)?.committed_batches,
                     external: !(
@@ -363,7 +451,20 @@ function Canvas({
                 : node.data,
           }) as MapNode,
       ),
-    [nodes, sourceFilter, query, excluded, stateFilter, map, jobs, runs],
+    [
+      nodes,
+      sourceFilter,
+      query,
+      excluded,
+      stateFilter,
+      map,
+      jobs,
+      runs,
+      fieldFocus,
+      pathDatasets,
+      pathFields,
+      onFieldFocus,
+    ],
   );
   const visibleIds = useMemo(
     () => new Set(visibleNodes.filter((n) => !n.hidden).map((n) => n.id)),
@@ -391,6 +492,7 @@ function Canvas({
             : ''),
         style: {
           ...edge.style,
+          opacity: fieldFocus ? 0.12 : 1,
           stroke:
             hoveredEdge === edge.id ||
             edge.selected ||
@@ -440,7 +542,28 @@ function Canvas({
       search,
       stateFilter,
       activeNodes,
+      fieldFocus,
     ],
+  );
+  const focusedEdges = useMemo<MapEdge[]>(
+    () =>
+      (fieldGraph?.edges ?? []).map((edge, index) => ({
+        id: 'field:' + index,
+        source: edge.from.dataset_id,
+        target: edge.to.dataset_id,
+        sourceHandle: 'out:' + edge.from.column,
+        targetHandle: 'in:' + edge.to.column,
+        type: 'smoothstep',
+        zIndex: 4,
+        deletable: false,
+        selectable: false,
+        ariaLabel: edge.from.column + ' to ' + edge.to.column + ': ' + edge.kind,
+        className: 'field-lineage-edge',
+        data: { relationshipId: 'field:' + index, kind: 'lineage', description: edge.kind },
+        style: { stroke: 'var(--primary)', strokeWidth: 2 },
+        markerEnd: { type: 'arrowclosed', color: 'var(--primary)' },
+      })),
+    [fieldGraph],
   );
   function connect(connection: FlowConnection) {
     if (!canManage) return;
@@ -517,7 +640,15 @@ function Canvas({
     if (match) selectDataset(match.id);
   }
   return (
-    <section className="map-section">
+    <section
+      className="map-section"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && fieldFocus) {
+          event.stopPropagation();
+          setFieldFocus(null);
+        }
+      }}
+    >
       <div className="map-library" data-collapsed={!panelOpen}>
         <div className="panel-heading">
           {panelOpen && <h2>Catalog</h2>}
@@ -681,7 +812,7 @@ function Canvas({
         >
           <ReactFlow<MapNode, MapEdge>
             nodes={visibleNodes}
-            edges={visibleEdges}
+            edges={[...visibleEdges, ...focusedEdges]}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             elevateNodesOnSelect={false}
@@ -690,7 +821,7 @@ function Canvas({
             onConnect={(connection) => {
               if (!busy) connect(connection);
             }}
-            nodesConnectable={canManage}
+            nodesConnectable={canManage && !fieldFocus}
             connectionMode={ConnectionMode.Loose}
             isValidConnection={(c) =>
               !!c.sourceHandle &&
@@ -817,7 +948,7 @@ function Canvas({
           />
         </ConsoleDrawer>
       </div>
-      {(selectedDataset || selectedEdge) && (
+      {!fieldFocus && (selectedDataset || selectedEdge) && (
         <Inspector
           entityId={selectedDataset?.id ?? selectedEdge!.id}
           label="Selection inspector"
@@ -1076,6 +1207,18 @@ function Canvas({
             )}
           </div>
         </Inspector>
+      )}
+      {(fieldFocus || (!selectedDataset && !selectedEdge)) && (
+        <ColumnInspector
+          focus={fieldFocus}
+          graph={fieldGraph}
+          loading={!!fieldFocus && columnQuery.isPending}
+          error={columnQuery.error}
+          retry={() => void columnQuery.refetch()}
+          onClose={() => setFieldFocus(null)}
+          onFocus={onFieldFocus}
+          onNavigate={onNavigateUsage}
+        />
       )}
       <span className="visually-hidden" role="status">
         {hover}

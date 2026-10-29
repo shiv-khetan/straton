@@ -5950,3 +5950,238 @@ async fn sqlserver_live_full_sync_and_resume() {
     drop(connector);
     f.close().await;
 }
+
+#[tokio::test]
+async fn column_lineage_chains_access_masks_and_incomplete() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let source = dataset_id(&f, "users").await;
+    let first = create_model(
+        &a,
+        "column_first",
+        "SELECT id AS user_id,name FROM app_db.users WHERE id > 0",
+        "view",
+        "manual",
+    )
+    .await;
+    let second = create_model(
+        &a,
+        "column_second",
+        "SELECT user_id + 1 AS result FROM models.column_first",
+        "view",
+        "manual",
+    )
+    .await;
+    let target: String = sqlx::query_scalar(
+        "SELECT id FROM datasets WHERE source_id='straton-models' AND name='column_second'",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    let (status, chart) = request(&a,"POST","/v1/charts",json!({"name":"Column usages","sql":"SELECT id,count(*) AS n FROM app_db.users WHERE id > 0 GROUP BY id","kind":"bar","config":{"x":"id","y":["n"]},"shared":true})).await;
+    assert_eq!(status, StatusCode::CREATED, "{chart}");
+    let (status, check) = request(
+        &a,
+        "POST",
+        "/v1/quality/checks",
+        quality_input("Column check", "not_null", &source, Some("id"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{check}");
+    let endpoint = format!("/v1/lineage/columns?dataset={target}&column=result&direction=upstream");
+    let (status, graph) = request(&a, "GET", &endpoint, json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{graph}");
+    assert_eq!(graph["nodes"].as_array().unwrap().len(), 3, "{graph}");
+    assert_eq!(graph["edges"].as_array().unwrap().len(), 2, "{graph}");
+    assert_eq!(graph["incomplete"], false, "{graph}");
+    assert!(
+        graph["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "rename" && e["via"]["model_id"] == first)
+    );
+    assert!(
+        graph["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "transform" && e["via"]["model_id"] == second)
+    );
+    assert!(
+        graph["usage"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u["role"] == "filter")
+    );
+    for kind in ["model", "chart", "check"] {
+        assert!(
+            graph["usage"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|u| u["in"]["kind"] == kind),
+            "{kind}: {graph}"
+        );
+    }
+    let (_, downstream) = request(
+        &a,
+        "GET",
+        &format!("/v1/lineage/columns?dataset={source}&column=id&direction=downstream"),
+        json!(null),
+    )
+    .await;
+    assert_eq!(
+        downstream["nodes"].as_array().unwrap().len(),
+        3,
+        "{downstream}"
+    );
+    let (_, zero) = request(&a, "GET", &format!("{endpoint}&depth=0"), json!(null)).await;
+    assert_eq!(zero["nodes"].as_array().unwrap().len(), 1);
+    let role = access_role(&a, "column reader").await;
+    access_grant(&a, &role, "source", "straton-models", "read").await;
+    let (_, token) = access_user(&a, "column reader", &[&role]).await;
+    let (_, hidden) = request_as(&a, &token, "GET", &endpoint, json!(null)).await;
+    assert!(
+        hidden["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n["dataset_id"] != source),
+        "{hidden}"
+    );
+    assert_eq!(
+        request_as(
+            &a,
+            &token,
+            "GET",
+            &format!("/v1/lineage/columns?dataset={source}&column=id"),
+            json!(null)
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    access_grant(&a, &role, "dataset", &source, "read").await;
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{source}/masks/{role}/id"),
+        json!({"kind":"null"}),
+    )
+    .await;
+    let (_, masked) = request_as(&a, &token, "GET", &endpoint, json!(null)).await;
+    assert_eq!(masked["nodes"].as_array().unwrap().len(), 3, "{masked}");
+    assert!(
+        masked["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["expression"].is_null()),
+        "{masked}"
+    );
+    let (_, admin) = request(&a, "GET", &endpoint, json!(null)).await;
+    assert!(
+        admin["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["expression"].is_string())
+    );
+    sqlx::query("UPDATE datasets SET lineage_incomplete=1 WHERE id=?")
+        .bind(&target)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let (_, incomplete) = request(&a, "GET", &endpoint, json!(null)).await;
+    assert_eq!(incomplete["incomplete"], true);
+    drop(a);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn column_lineage_view_discovery_persists_failure_without_guessing() {
+    let f = Fixture::new().await;
+    let mut table = straton_core::DatasetSchema {
+        dataset: straton_core::Dataset {
+            id: String::new(),
+            source_id: "source".into(),
+            name: "dbo.orders".into(),
+        },
+        columns: vec![straton_core::Column {
+            id: String::new(),
+            dataset_id: String::new(),
+            name: "amount".into(),
+            data_type: "Int64".into(),
+            nullable: false,
+            primary_key: false,
+        }],
+        relationships: vec![],
+        metadata: Default::default(),
+    };
+    let mut view = table.clone();
+    view.dataset.name = "dbo.totals".into();
+    view.columns[0].name = "total".into();
+    view.metadata.is_view = true;
+    view.metadata.definition =
+        Some("CREATE VIEW dbo.totals ([total]) AS SELECT amount FROM dbo.orders".into());
+    let mut tx = f.pool.begin().await.unwrap();
+    let mut ids = std::collections::BTreeMap::new();
+    for schema in [&table, &view] {
+        ids.insert(
+            schema.dataset.name.clone(),
+            crate::catalog::upsert(&mut tx, "source", schema)
+                .await
+                .unwrap(),
+        );
+    }
+    let schemas = vec![table.clone(), view.clone()];
+    crate::column_lineage::discover_views(&mut tx, &schemas, &ids)
+        .await
+        .unwrap();
+    let rows = sqlx::query("SELECT * FROM column_lineage WHERE target_dataset_id=?")
+        .bind(&ids["dbo.totals"])
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<&str, _>("target_column"), "total");
+    assert_eq!(rows[0].get::<&str, _>("kind"), "rename");
+    assert_eq!(rows[0].get::<&str, _>("view_dataset_id"), ids["dbo.totals"]);
+    table.metadata.definition = None;
+    view.metadata.definition = Some("CREATE VIEW dbo.totals AS SELECT mystery FROM missing".into());
+    crate::column_lineage::discover_views(&mut tx, &[table, view], &ids)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM column_lineage WHERE target_dataset_id=?"
+        )
+        .bind(&ids["dbo.totals"])
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap(),
+        0
+    );
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT lineage_incomplete FROM datasets WHERE id=?")
+            .bind(&ids["dbo.totals"])
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM relationships WHERE kind='lineage' AND to_dataset=?"
+        )
+        .bind(&ids["dbo.totals"])
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap(),
+        1
+    );
+    tx.commit().await.unwrap();
+    f.close().await;
+}

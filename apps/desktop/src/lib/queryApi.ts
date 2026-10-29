@@ -18,6 +18,7 @@ const reads: Partial<Record<keyof Api, QueryKey>> = {
   dashboards: queryKeys.dashboards,
   dashboard: queryKeys.dashboards,
   lineageImpact: queryKeys.impact,
+  columnLineage: [...queryKeys.impact, 'columns'],
   activity: queryKeys.activity,
   notifications: queryKeys.notifications,
   notificationCount: queryKeys.notifications,

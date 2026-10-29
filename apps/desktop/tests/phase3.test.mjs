@@ -229,6 +229,11 @@ try {
   await call('updateDashboard', ['d', dashboard], '/v1/dashboards/d', 'PUT', dashboard);
   await call('deleteDashboard', ['d'], '/v1/dashboards/d', 'DELETE');
   await call(
+    'columnLineage',
+    [{ dataset_id: 'a/b', column: 'gross margin', direction: 'upstream', depth: 2 }],
+    '/v1/lineage/columns?dataset=a%2Fb&column=gross+margin&direction=upstream&depth=2',
+  );
+  await call(
     'lineageImpact',
     [{ node: 'dataset:a/b', direction: 'both', depth: 2 }],
     '/v1/lineage/impact?node=dataset%3Aa%2Fb&direction=both&depth=2',

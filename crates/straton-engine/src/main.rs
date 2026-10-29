@@ -2,6 +2,7 @@ mod access;
 mod api;
 mod backup;
 mod catalog;
+mod column_lineage;
 mod config;
 mod credentials;
 mod keys;

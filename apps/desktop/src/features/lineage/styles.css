@@ -134,3 +134,116 @@
     }
   }
 }
+
+@layer components {
+  .dataset-column .field-button {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    border: 0;
+    border-radius: var(--radius-control);
+    padding: 2px 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .dataset-column .field-button:hover {
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .dataset-column[data-field-home='true'] {
+    background: var(--primary-tint);
+    color: var(--primary);
+  }
+  .dataset-column[data-field-dimmed='true'] {
+    opacity: 0.3;
+  }
+  .field-home {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    color: var(--primary);
+  }
+  .field-home code,
+  .field-link,
+  .field-usage code {
+    overflow-wrap: anywhere;
+    white-space: normal;
+    min-width: 0;
+  }
+  .field-chain,
+  .field-usage {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .field-chain > li,
+  .field-usage > li {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .field-operation {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+  }
+  .field-kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 1px 6px;
+    border-radius: var(--radius-chip);
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--ink-2);
+  }
+  .field-kind::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .field-expression {
+    margin: 8px 0;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-control);
+    background: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .field-link {
+    justify-content: flex-start;
+    height: auto;
+    padding: 2px 0;
+    text-align: left;
+  }
+  .field-usage > li {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .field-usage > li > span {
+    color: var(--ink-2);
+    font-size: 0.8125rem;
+  }
+  .field-warning {
+    color: var(--warning-ink);
+    border: 1px solid var(--line);
+    padding: 12px;
+    border-radius: var(--radius-control);
+  }
+  @media (pointer: coarse) {
+    .dataset-column .field-button {
+      min-height: 28px;
+    }
+  }
+}

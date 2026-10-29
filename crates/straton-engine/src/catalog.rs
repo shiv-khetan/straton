@@ -75,7 +75,7 @@ pub async fn discover(pool: &SqlitePool, id: &str) -> Result<()> {
     sqlx::query("DELETE FROM relationships WHERE kind='inferred'")
         .execute(&mut *tx)
         .await?;
-    let mut ids = std::collections::HashMap::new();
+    let mut ids = std::collections::BTreeMap::new();
     for ds in &schemas {
         ids.insert(ds.dataset.name.clone(), upsert(&mut tx, id, ds).await?);
     }
@@ -127,6 +127,7 @@ pub async fn discover(pool: &SqlitePool, id: &str) -> Result<()> {
             }
         }
     }
+    crate::column_lineage::discover_views(&mut tx, &schemas, &ids).await?;
     infer(&mut tx).await?;
     store::audit(&mut tx, "source.discovered", id, "").await?;
     tx.commit().await?;

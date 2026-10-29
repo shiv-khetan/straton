@@ -160,6 +160,7 @@ pub async fn register(
 pub struct Dependencies {
     pub datasets: BTreeSet<String>,
     pub models: BTreeSet<String>,
+    pub lineage: crate::column_lineage::Analysis,
 }
 pub async fn plan(sql: &Sql, text: &str) -> Result<(DataFrame, Dependencies)> {
     select(text)?;
@@ -175,7 +176,22 @@ pub async fn plan(sql: &Sql, text: &str) -> Result<(DataFrame, Dependencies)> {
         .fetch_all(&sql.pool)
         .await?;
     let (schemas, tables) = sql::catalog_names(&sources, &datasets);
-    let mut deps = Dependencies::default();
+    let lineage_tables = datasets
+        .iter()
+        .map(|d| {
+            (
+                (
+                    schemas[d.get::<&str, _>("source_id")].clone(),
+                    tables[d.get::<&str, _>("id")].clone(),
+                ),
+                d.get::<String, _>("id"),
+            )
+        })
+        .collect();
+    let mut deps = Dependencies {
+        lineage: crate::column_lineage::derive(frame.logical_plan(), &lineage_tables, "public"),
+        ..Default::default()
+    };
     frame.logical_plan().apply_with_subqueries(|p| {
         if let LogicalPlan::TableScan(scan) = p
             && let Some(d) = datasets.iter().find(|d| {
@@ -335,6 +351,7 @@ pub async fn catalog_model(
         )
         .await?;
     }
+    crate::column_lineage::replace(tx, &dataset, Some(id), &deps.lineage).await?;
     Ok(())
 }
 pub async fn revalidate(sql: &Sql, changed: &str) -> Result<()> {
@@ -352,6 +369,24 @@ pub async fn revalidate(sql: &Sql, changed: &str) -> Result<()> {
         let mut tx = sql.pool.begin().await?;
         if let Ok((frame, deps)) = &result {
             catalog_model(&mut tx, &id, r.get("name"), frame.schema().as_arrow(), deps).await?;
+        }
+        if result.is_err() {
+            let dataset: String = sqlx::query_scalar(
+                "SELECT id FROM datasets WHERE source_id='straton-models' AND name=?",
+            )
+            .bind(r.get::<&str, _>("name"))
+            .fetch_one(&mut *tx)
+            .await?;
+            crate::column_lineage::replace(
+                &mut tx,
+                &dataset,
+                Some(&id),
+                &crate::column_lineage::Analysis {
+                    incomplete: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
         }
         sqlx::query("UPDATE models SET status=?,error=? WHERE id=?")
             .bind(if result.is_ok() { "ready" } else { "broken" })

@@ -440,6 +440,27 @@ export interface AnalyticsDashboard extends DashboardInput {
   updated_at: number;
 }
 export type ImpactDirection = 'downstream' | 'upstream' | 'both';
+export interface ColumnRef {
+  dataset_id: string;
+  column: string;
+}
+export type ColumnLineageKind = 'passthrough' | 'rename' | 'transform' | 'aggregate';
+export interface ColumnGraph {
+  root: ColumnRef;
+  nodes: (ColumnRef & { dataset_name: string; kind: string })[];
+  edges: {
+    from: ColumnRef;
+    to: ColumnRef;
+    kind: ColumnLineageKind;
+    expression: string | null;
+    via: { model_id?: string; view_id?: string };
+  }[];
+  usage: (ColumnRef & {
+    role: 'join_key' | 'filter' | 'group_key';
+    in: { kind: 'model' | 'check' | 'chart'; id: string; name: string };
+  })[];
+  incomplete: boolean;
+}
 export interface ImpactRequest {
   node: string;
   direction?: ImpactDirection;
@@ -603,6 +624,16 @@ export function api(connection: Connection) {
     updateDashboard: (id: string, body: DashboardInput) =>
       request<AnalyticsDashboard>('/v1/dashboards/' + idPath(id), 'PUT', body),
     deleteDashboard: (id: string) => request<void>('/v1/dashboards/' + idPath(id), 'DELETE'),
+    columnLineage: (query: ColumnRef & { direction?: ImpactDirection; depth?: number }) =>
+      request<ColumnGraph>(
+        '/v1/lineage/columns' +
+          params({
+            dataset: query.dataset_id,
+            column: query.column,
+            direction: query.direction ?? 'both',
+            depth: query.depth ?? 50,
+          }),
+      ),
     lineageImpact: (query: ImpactRequest) =>
       request<ImpactGraph>('/v1/lineage/impact' + params(query)),
     activity: (query: ActivityFilter = {}) =>
