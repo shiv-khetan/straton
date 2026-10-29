@@ -28,6 +28,8 @@ const reads: Partial<Record<keyof Api, QueryKey>> = {
   me: queryKeys.me,
   status: queryKeys.status,
   health: ['engine', 'health'],
+  advisor: ['engine', 'optimizer', 'advisor'],
+  datasetOptimization: ['engine', 'optimizer', 'datasets'],
   sources: queryKeys.sources,
   source: queryKeys.sources,
   jobs: queryKeys.jobs,

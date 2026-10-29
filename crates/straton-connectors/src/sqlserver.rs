@@ -15,17 +15,25 @@ use tiberius::{AuthMethod, Client, Config, EncryptionLevel, Query, Row};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
+mod advisor;
+
 type Connection = Client<Compat<TcpStream>>;
 
 struct Sqlserver {
     config: SqlserverConfig,
     login: Config,
     has_password: bool,
+    advisor_may_write: bool,
 }
 
 pub(super) fn build(config: &Value, secret: Option<&str>) -> Result<Box<dyn Connector>> {
     // Never forward serde's errors: they can contain rejected config values.
-    let config: SqlserverConfig = serde_json::from_value(config.clone())
+    let advisor_may_write = config["advisor_may_write"] == true;
+    let mut connection_config = config.clone();
+    connection_config
+        .as_object_mut()
+        .map(|o| o.remove("advisor_may_write"));
+    let config: SqlserverConfig = serde_json::from_value(connection_config)
         .map_err(|_| invalid("invalid SQL Server configuration; credentials belong in secret"))?;
     config.validate()?;
     let mut login = Config::new();
@@ -60,6 +68,7 @@ pub(super) fn build(config: &Value, secret: Option<&str>) -> Result<Box<dyn Conn
         config,
         login,
         has_password: secret.is_some_and(|s| !s.is_empty()),
+        advisor_may_write,
     }))
 }
 
@@ -178,6 +187,9 @@ fn flag(row: &Row, name: &str) -> Result<bool> {
 
 impl Sqlserver {
     async fn connect(&self) -> Result<Connection> {
+        self.connect_mode(false).await
+    }
+    async fn connect_mode(&self, write: bool) -> Result<Connection> {
         if self.config.auth == SqlserverAuth::Sql && !self.has_password {
             return Err(invalid("SQL Server password is missing from the keychain"));
         }
@@ -192,6 +204,7 @@ impl Sqlserver {
                 .map_err(error)?;
             tcp.set_nodelay(true).map_err(error)?;
             let mut login = self.login.clone();
+            login.readonly(!write);
             login.port(port);
             if let Some(instance) = &self.config.instance {
                 login.instance_name(instance);
@@ -455,6 +468,20 @@ fn arrow_batch(columns: &[NativeColumn], values: Vec<Vec<Option<String>>>) -> Re
 }
 
 impl Connector for Sqlserver {
+    fn advisor_metadata(&self) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            tokio::time::timeout(Duration::from_secs(30), advisor::metadata(self))
+                .await
+                .map_err(error)?
+        })
+    }
+    fn advisor_execute<'a>(&'a self, ddl: &'a str) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            tokio::time::timeout(Duration::from_secs(60), advisor::execute(self, ddl))
+                .await
+                .map_err(error)?
+        })
+    }
     fn check(&self) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             self.connect()

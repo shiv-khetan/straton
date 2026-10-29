@@ -79,6 +79,8 @@ export function stateTone(state: string): Tone {
   const value = state.toLowerCase();
   return [
     'succeeded',
+    'applied',
+    'rolled_back',
     'passed',
     'live',
     'connected',
@@ -93,7 +95,7 @@ export function stateTone(state: string): Tone {
       ? 'danger'
       : ['queued', 'stale data', 'stale', 'warning'].includes(value)
         ? 'warning'
-        : value === 'running'
+        : ['running', 'applying'].includes(value)
           ? 'info'
           : 'neutral';
 }

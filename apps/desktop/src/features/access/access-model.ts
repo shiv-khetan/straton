@@ -35,7 +35,7 @@ export function canPage(me: Me | null, page: string): boolean {
       can(me, 'admin') ||
       !!me?.privileges.grants.some((g) => g.target_kind === 'source' && g.privilege === 'admin')
     );
-  if (['Backups', 'Access'].includes(page)) return can(me, 'admin');
+  if (['Backups', 'Access', 'Optimizer'].includes(page)) return can(me, 'admin');
   return can(me, page === 'Jobs' ? 'sync_admin' : 'read');
 }
 export function setMask(

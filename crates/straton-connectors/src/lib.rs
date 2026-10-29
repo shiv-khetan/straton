@@ -140,7 +140,9 @@ struct Connected {
     backend: Backend,
     batch_size: usize,
     sample_size: usize,
+    advisor_may_write: bool,
 }
+mod advisor;
 mod http;
 mod salesforce;
 #[cfg(test)]
@@ -244,6 +246,7 @@ pub fn build(kind: &str, config: &Value, secret: Option<&str>) -> Result<Box<dyn
         backend,
         batch_size,
         sample_size,
+        advisor_may_write: config["advisor_may_write"] == true,
     }))
 }
 impl Connected {
@@ -650,6 +653,25 @@ impl Connected {
     }
 }
 impl Connector for Connected {
+    fn advisor_metadata(&self) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            match &self.backend {
+                Backend::Postgres(pool) => advisor::metadata(pool).await,
+                _ => Err(invalid("source advisor is not supported")),
+            }
+        })
+    }
+    fn advisor_execute<'a>(&'a self, ddl: &'a str) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            if !self.advisor_may_write {
+                return Err(invalid("advisor writes are disabled"));
+            }
+            match &self.backend {
+                Backend::Postgres(pool) => advisor::execute(pool, ddl).await,
+                _ => Err(invalid("source advisor is not supported")),
+            }
+        })
+    }
     fn check(&self) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             match &self.backend {
@@ -794,7 +816,9 @@ pub fn write_parquet(
     std::fs::create_dir_all(path.parent().ok_or_else(|| invalid("missing parent"))?)
         .map_err(error)?;
     let temp = path.with_extension("partial");
-    let mut properties = parquet::file::properties::WriterProperties::builder();
+    let mut properties = parquet::file::properties::WriterProperties::builder()
+        .set_max_row_group_row_count(Some(65_536))
+        .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page);
     if let Some(encryption) = encryption {
         properties = properties.with_file_encryption_properties(encryption);
     }

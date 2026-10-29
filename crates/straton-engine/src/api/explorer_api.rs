@@ -250,7 +250,7 @@ async fn rows(
         };
         let frame=project(frame,&q,limit)?;
         let columns=crate::sql::columns(frame.schema().as_arrow());
-        let batches=frame.collect().await.map_err(df)?;
+        let batches=crate::query_stats::collect(&a.sql,frame).await?;
         let mut rows=Vec::new();
         for batch in batches { for r in 0..batch.num_rows() {
             rows.push(batch.columns().iter().map(|a|crate::sql::cell(a.as_ref(),r)).collect::<Result<Vec<_>,_>>()?);
@@ -282,7 +282,7 @@ async fn export(
             let _pin = crate::sql::SNAPSHOTS.read().await;
             let frame = project(frame(&a, &p, &q).await?, &q, max)?;
             let schema = std::sync::Arc::new(frame.schema().as_arrow().clone());
-            let mut stream = frame.execute_stream().await.map_err(df)?;
+            let mut stream = a.sql.stream(frame).await?;
             let mut bytes = Vec::new();
             if format == "csv" {
                 let mut writer = WriterBuilder::new().with_header(true).build(&mut bytes);

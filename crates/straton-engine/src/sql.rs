@@ -54,6 +54,7 @@ pub struct Sql {
     pub(crate) running: RunningQueries,
     pub config: config::Sql,
     runtime: Arc<RuntimeEnv>,
+    stats: crate::query_stats::Recorder,
 }
 #[derive(Debug)]
 pub struct Error {
@@ -256,6 +257,7 @@ impl Sql {
             .with_memory_pool(Arc::new(GreedyMemoryPool::new(bytes)))
             .build_arc()?;
         Ok(Self {
+            stats: crate::query_stats::Recorder::new(pool.clone()),
             pool,
             principal: None,
             running: Default::default(),
@@ -263,6 +265,22 @@ impl Sql {
             config: config.sql.clone(),
             runtime,
         })
+    }
+    pub(crate) async fn stream(
+        &self,
+        frame: DataFrame,
+    ) -> Result<futures::stream::BoxStream<'static, datafusion::common::Result<RecordBatch>>> {
+        let logical = frame.logical_plan().clone();
+        self.stream_observed(frame, &logical).await
+    }
+    pub(crate) async fn stream_observed(
+        &self,
+        frame: DataFrame,
+        logical: &LogicalPlan,
+    ) -> Result<futures::stream::BoxStream<'static, datafusion::common::Result<RecordBatch>>> {
+        self.stats
+            .stream(&self.pool, &self.data_dir, frame, logical)
+            .await
     }
     pub fn for_principal(&self, p: crate::access::Principal) -> Self {
         let mut sql = self.clone();
@@ -345,6 +363,7 @@ impl Sql {
                             uuid::Uuid::try_parse(&run).is_ok(),
                             "invalid current snapshot"
                         );
+                        crate::lake_layout::recover(&dir.join(&run))?;
                         let path = dir.join(&run).canonicalize()?;
                         ensure!(
                             path.parent() == Some(dir.canonicalize()?.as_path()),
@@ -522,6 +541,7 @@ impl Sql {
         if !params.is_empty() {
             frame = frame.with_param_values(params)?;
         }
+        let workload = frame.logical_plan().clone();
         if !matches!(mode, Mode::Describe) {
             let (optimized, _) = crate::optimizer::optimize(frame, true)?;
             frame = optimized;
@@ -562,7 +582,10 @@ impl Sql {
                     .to_string();
             }
             Mode::Query => {
-                let mut stream = frame.execute_stream().await?;
+                let mut stream = self
+                    .stats
+                    .stream(&self.pool, &self.data_dir, frame, &workload)
+                    .await?;
                 while let Some(batch) = stream.next().await {
                     let batch = batch?;
                     out.row_count += batch.num_rows();

@@ -420,7 +420,17 @@ async fn publish_snapshot(
     } else {
         output.join(format!(".staging-{id}"))
     };
+    crate::lake_layout::recover(&directory)?;
     let key = keys::snapshot(pool, &directory).await?;
+    let pending: bool =
+        sqlx::query_scalar("SELECT state='running' AND cancel_requested=0 FROM runs WHERE id=?")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+    if !pending {
+        return Ok(());
+    }
+    let layout = crate::lake_layout::publish(pool, &directory, key.as_ref(), id).await?;
     let mut tx = pool.begin().await?;
     // Serialize publishers and cancellation: once _current changes this run is successful.
     let updated = sqlx::query("UPDATE runs SET state='succeeded',updated_at=? WHERE id=? AND state='running' AND cancel_requested=0")
@@ -472,6 +482,7 @@ async fn publish_snapshot(
         .execute(&mut *tx).await?;
     incremental::publish_state(&mut tx, &snapshot, id, row_count).await?;
     let published: Vec<String> = sqlx::query_scalar("SELECT d.id FROM datasets d JOIN jobs j ON (d.source_id=j.source_id AND d.name=j.dataset) OR (d.source_id='straton-local-lake' AND d.name=j.source_id || '/' || j.dataset) JOIN runs r ON r.job_id=j.id WHERE r.id=?").bind(id).fetch_all(&mut *tx).await?;
+    crate::lake_layout::persist(&mut tx, &published, &layout).await?;
     let triggered = crate::models::enqueue_upstream(&mut tx, &published).await?;
     let temporary = output.join("_current.partial");
     let mut file = std::fs::File::create(&temporary)?;
@@ -595,9 +606,10 @@ async fn model_run(
         let sql = crate::sql::Sql::new(pool.clone(), backups.config())?.for_principal(owner);
         let (ctx, _) = sql.context().await?;
         let frame = sql.plan(&ctx, m.get("sql"), &[]).await?;
+        let workload = frame.logical_plan().clone();
         let (frame, _) = crate::optimizer::optimize(frame, m.get("optimize"))?;
         let schema = frame.schema().as_arrow().clone();
-        let mut stream = frame.execute_stream().await?;
+        let mut stream = sql.stream_observed(frame, &workload).await?;
         let mut number = 0;
         while let Some(batch) = stream.next().await {
             if cancelled(pool, id).await? {

@@ -26,6 +26,7 @@ mod explorer_api;
 mod lineage_api;
 mod models_api;
 mod notifications_api;
+mod optimizer_api;
 mod pipelines_api;
 mod quality_api;
 mod saved_queries_api;
@@ -53,6 +54,7 @@ pub fn router(app: App) -> Router {
         .merge(saved_queries_api::routes())
         .merge(storage_api::routes())
         .merge(models_api::routes())
+        .merge(optimizer_api::routes())
         .merge(security_api::routes())
         .route("/v1/me", get(me))
         .route("/v1/status", get(status))
@@ -135,6 +137,20 @@ async fn auth(State(app): State<App>, mut req: Request<axum::body::Body>, next: 
         p.admin()
     };
     if !allowed {
+        if req.method() == axum::http::Method::POST
+            && (path.starts_with("/v1/advisor") || path.starts_with("/v1/optimizer"))
+            && let Ok(mut tx) = app.pool.begin().await
+        {
+            let _ = store::audit_as(
+                &mut tx,
+                "optimizer.refused",
+                "",
+                "admin required",
+                Some(&p.user.id),
+            )
+            .await;
+            let _ = tx.commit().await;
+        }
         return forbidden().into_response();
     }
     let actor = p.user.id.clone();
@@ -236,6 +252,7 @@ async fn save_source(
     mut s: SourceInput,
     update: bool,
 ) -> ApiResult<Json<Value>> {
+    let _advisor_gate = crate::advisor::GATE.lock().await;
     if update {
         require_source_admin(&actor, &s.id)?;
     } else if !actor.admin() {
@@ -365,6 +382,7 @@ async fn delete_source(
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
     require_source_admin(&actor, &id)?;
+    let _advisor_gate = crate::advisor::GATE.lock().await;
     if id == "straton-models" || id == "straton-local-lake" {
         return Err(bad("built-in source is managed by the engine"));
     }
@@ -739,7 +757,14 @@ fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
         .as_object()
         .ok_or_else(|| bad("config must be an object"))?;
     let allowed: &[&str] = match kind {
-        "postgres" => &["host", "port", "database", "username", "batch_size"],
+        "postgres" => &[
+            "host",
+            "port",
+            "database",
+            "username",
+            "batch_size",
+            "advisor_may_write",
+        ],
         "sqlserver" => &[
             "host",
             "port",
@@ -750,6 +775,7 @@ fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
             "encrypt",
             "trust_server_certificate",
             "batch_size",
+            "advisor_may_write",
         ],
         "sqlite" => &["path", "batch_size"],
         "csv" => &["path", "batch_size", "sample_size"],
@@ -770,7 +796,7 @@ fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
         ));
     }
     for (k, v) in obj {
-        if ["encrypt", "trust_server_certificate"].contains(&k.as_str()) {
+        if ["encrypt", "trust_server_certificate", "advisor_may_write"].contains(&k.as_str()) {
             if !v.is_boolean() {
                 return Err(bad("TLS config fields must be booleans"));
             }

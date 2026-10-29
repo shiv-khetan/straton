@@ -563,7 +563,7 @@ async fn query(
                 .map_err(crate::sql::Error::from)?;
             let columns = crate::sql::columns(frame.schema().as_arrow());
             let mut rows = vec![];
-            for b in frame.collect().await.map_err(crate::sql::Error::from)? {
+            for b in crate::query_stats::collect(&sql, frame).await? {
                 for i in 0..b.num_rows() {
                     rows.push(
                         b.columns()

@@ -6185,3 +6185,6 @@ async fn column_lineage_view_discovery_persists_failure_without_guessing() {
     tx.commit().await.unwrap();
     f.close().await;
 }
+
+#[path = "optimizer_tests.rs"]
+mod optimizer_tests;

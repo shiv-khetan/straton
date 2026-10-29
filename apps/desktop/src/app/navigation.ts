@@ -30,6 +30,7 @@ export const navigation: { label: NavGroup; items: { route: Route; icon: IconNam
       { route: 'Models', icon: 'model' },
       { route: 'Jobs', icon: 'refresh' },
       { route: 'Schedules', icon: 'schedule' },
+      { route: 'Optimizer', icon: 'settings' },
     ],
   },
   {

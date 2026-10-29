@@ -1,4 +1,5 @@
 mod access;
+mod advisor;
 mod api;
 mod backup;
 mod catalog;
@@ -6,12 +7,14 @@ mod column_lineage;
 mod config;
 mod credentials;
 mod keys;
+mod lake_layout;
 mod models;
 mod notify;
 mod optimizer;
 mod pipeline;
 mod policies;
 mod quality;
+mod query_stats;
 mod runner;
 mod scheduler;
 mod security;
@@ -90,12 +93,14 @@ async fn run(config: config::Config) -> Result<()> {
         )
         .init();
     let pool = store::open(&config.data_dir).await?;
+    lake_layout::recover_all(&config.data_dir)?;
     keys::initialize(&pool).await?;
     access::bootstrap(&pool, secrecy::ExposeSecret::expose_secret(token.as_ref())).await?;
     let (events, _) = tokio::sync::broadcast::channel(256);
     notify::verify_audit(&pool, &events).await?;
     let backups = backup::Backups::new(config.clone());
     scheduler::seed_backup(&pool, &config.backup.cron).await?;
+    advisor::recover(&pool).await?;
     pipeline::recover(&pool, &events).await?;
     runner::recover(&pool, &events, config.max_attempts).await?;
     let mut runner = runner::Runner::new(

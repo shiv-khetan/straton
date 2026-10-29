@@ -259,6 +259,14 @@ pub type Batches<'a> = BoxStream<'a, Result<(RecordBatch, Cursor)>>;
 
 /// Connector errors must never embed credentials.
 pub trait Connector: Send + Sync {
+    /// Read-only advisor metadata; excludes sampled values and query text.
+    fn advisor_metadata(&self) -> futures::future::BoxFuture<'_, Result<serde_json::Value>> {
+        Box::pin(async { Err(Error::Invalid("source advisor is not supported".into())) })
+    }
+    /// Only the audited approval endpoint may call this method.
+    fn advisor_execute<'a>(&'a self, _ddl: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+        Box::pin(async { Err(Error::Invalid("advisor writes are disabled".into())) })
+    }
     fn check(&self) -> futures::future::BoxFuture<'_, Result<()>>;
     fn discover(&self) -> futures::future::BoxFuture<'_, Result<Vec<DatasetSchema>>>;
     fn read<'a>(

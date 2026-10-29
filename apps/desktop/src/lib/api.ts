@@ -721,6 +721,27 @@ export function api(connection: Connection) {
     sqlTables: () => request<{ tables: SqlTable[] }>('/v1/sql/tables'),
     health: () => request<{ ok: boolean }>('/health'),
     status: () => request<Status>('/v1/status'),
+    advisor: (source = '') =>
+      request<{ recommendations: AdvisorRecommendation[]; sources: AdvisorSource[] }>(
+        '/v1/advisor' + (source ? '?source=' + idPath(source) : ''),
+      ),
+    refreshAdvisor: (source: string) =>
+      request<{ recommendations: number; warnings: string[] }>(
+        '/v1/advisor/refresh?source=' + idPath(source),
+        'POST',
+      ),
+    applyAdvice: (id: string, approval_token: string) =>
+      request<{ ok: boolean }>('/v1/advisor/' + idPath(id) + '/apply', 'POST', { approval_token }),
+    rollbackAdvice: (id: string, approval_token: string) =>
+      request<{ ok: boolean }>('/v1/advisor/' + idPath(id) + '/rollback', 'POST', {
+        approval_token,
+      }),
+    dismissAdvice: (id: string) =>
+      request<{ ok: boolean }>('/v1/advisor/' + idPath(id) + '/dismiss', 'POST'),
+    datasetOptimization: (id: string) =>
+      request<DatasetOptimization>('/v1/optimizer/datasets/' + idPath(id)),
+    relayoutDataset: (id: string) =>
+      request<{ ok: boolean }>('/v1/optimizer/datasets/' + idPath(id) + '/relayout', 'POST'),
     sources: () => request<Source[]>('/v1/sources'),
     source: (id: string) => request<Source>('/v1/sources/' + idPath(id)),
     createSource: (body: SourceInput) => request<Source>('/v1/sources', 'POST', body),
@@ -758,6 +779,58 @@ export function api(connection: Connection) {
     backups: () => request<string[]>('/v1/backups'),
     backup: () => request<{ file: string }>('/v1/backups', 'POST'),
   };
+}
+export interface AdvisorRecommendation {
+  id: string;
+  source_id: string;
+  dataset_id: string | null;
+  target: string;
+  kind: string;
+  ddl: string;
+  rollback_ddl: string;
+  evidence: Record<string, unknown>;
+  estimated_benefit: number;
+  cost: string;
+  risk: string;
+  required_permission: string;
+  applicable: boolean;
+  approval_token: string;
+  status: 'open' | 'dismissed' | 'applying' | 'applied' | 'failed' | 'rolled_back';
+  applied_by: string | null;
+  applied_at: number | null;
+  error: string | null;
+}
+export interface AdvisorSource {
+  id: string;
+  name: string;
+  kind: string;
+  advisor_may_write: boolean;
+  connection_target: string;
+}
+export interface DatasetOptimization {
+  dataset_id: string;
+  name: string;
+  source_id: string;
+  stats: {
+    column: string;
+    role: string;
+    op: string;
+    count: number;
+    rows_scanned: number;
+    rows_returned: number;
+    elapsed_ms: number;
+    last_seen: number;
+  }[];
+  layout: {
+    sort_column: string | null;
+    bloom_columns: string[];
+    row_group_size: number;
+    reason: string;
+    updated_at: number;
+  } | null;
+  next_layout: { sort_column: string | null; reason: string };
+  hash_index: { enabled: boolean; reason: string };
+  metrics_note: string;
 }
 export type Api = ReturnType<typeof api>;
 export function subscribe(

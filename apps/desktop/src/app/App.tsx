@@ -44,6 +44,7 @@ import type { LibraryEntry } from '@/stores/library';
 import { LibraryPage } from '@/features/library/LibraryPage';
 import { LaterPage } from '@/features/library/LaterPage';
 import { safeStorage } from '@/stores/storage';
+const Optimizer = lazy(() => import('@/features/optimizer/Optimizer'));
 const Pipelines = lazy(() => import('@/features/pipelines/Pipelines'));
 const Quality = lazy(() => import('@/features/quality/Quality'));
 const Analytics = lazy(() => import('@/features/analytics/Analytics'));
@@ -781,6 +782,11 @@ function AppContent() {
                     }}
                   />
                 </ErrorBoundary>
+              )}
+              {client && !loading && me && canPage(me, 'Optimizer') && page === 'Optimizer' && (
+                <Suspense fallback={<p role="status">Loading optimizer…</p>}>
+                  <Optimizer client={client} me={me} datasets={datasets} readOnly={!online} />
+                </Suspense>
               )}
               {client && !loading && canPage(me, 'Backups') && page === 'Backups' && (
                 <BackupsView

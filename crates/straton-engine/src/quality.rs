@@ -216,8 +216,8 @@ async fn target(sql: &Sql, owner: &Principal, id: &str) -> Result<DataFrame> {
         ))
         .await?)
 }
-async fn number(frame: DataFrame) -> Result<i64> {
-    let batches = frame.collect().await?;
+async fn number(sql: &Sql, frame: DataFrame) -> Result<i64> {
+    let batches = crate::query_stats::collect(sql, frame).await?;
     Ok(batches
         .first()
         .filter(|b| b.num_rows() > 0)
@@ -226,8 +226,8 @@ async fn number(frame: DataFrame) -> Result<i64> {
         .and_then(|v| v.as_i64())
         .unwrap_or(0))
 }
-async fn rows(frame: DataFrame) -> Result<i64> {
-    number(frame.aggregate(vec![], vec![count(lit(1))])?).await
+async fn rows(sql: &Sql, frame: DataFrame) -> Result<i64> {
+    number(sql, frame.aggregate(vec![], vec![count(lit(1))])?).await
 }
 // Checks evaluate as their owner, so counts never reveal rows or columns the owner's policies hide.
 async fn evaluate(
@@ -243,7 +243,11 @@ async fn evaluate(
         models::select(text)?;
         let sql = sql.for_principal(owner.clone());
         let (ctx, _) = sql.context().await?;
-        let n = rows(sql.plan(&ctx, text, &[]).await?.limit(0, Some(10_000))?).await?;
+        let n = rows(
+            &sql,
+            sql.plan(&ctx, text, &[]).await?.limit(0, Some(10_000))?,
+        )
+        .await?;
         return Ok((n == 0, Some(n as f64), Some(n)));
     }
     let id = dataset(&sql.pool, q.dataset_id.as_deref(), q.model_id.as_deref())
@@ -267,14 +271,14 @@ async fn evaluate(
     let frame = target(sql, owner, &id).await?;
     let n = match q.kind.as_str() {
         "row_count" => {
-            let n = rows(frame).await?;
+            let n = rows(sql, frame).await?;
             let pass = q.config["min"].as_u64().is_none_or(|v| n as u64 >= v)
                 && q.config["max"].as_u64().is_none_or(|v| n as u64 <= v);
             return Ok((pass, Some(n as f64), None));
         }
         "not_null" => {
             let c = field(&frame, q.column_name.as_deref().unwrap_or(""))?;
-            rows(frame.filter(c.is_null())?).await?
+            rows(sql, frame.filter(c.is_null())?).await?
         }
         "unique" => {
             let c = field(&frame, q.column_name.as_deref().unwrap_or(""))?;
@@ -283,6 +287,7 @@ async fn evaluate(
                 vec![count(lit(1)).alias("__quality_count")],
             )?;
             number(
+                sql,
                 groups
                     .filter(col("__quality_count").gt(lit(1_i64)))?
                     .aggregate(vec![], vec![sum(col("__quality_count"))])?,
@@ -299,7 +304,7 @@ async fn evaluate(
             if let Some(v) = q.config.get("max") {
                 predicate = predicate.or(c.gt(typed(&frame, name, v)?))
             }
-            rows(frame.filter(predicate)?).await?
+            rows(sql, frame.filter(predicate)?).await?
         }
         _ => anyhow::bail!("unknown check kind"),
     };

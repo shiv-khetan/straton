@@ -332,6 +332,9 @@ impl EncryptionFactory for Decryption {
 }
 pub fn format(pool: &SqlitePool, ctx: &SessionContext, key: Option<&DataKey>) -> ParquetFormat {
     let mut options = TableParquetOptions::default();
+    options.global.bloom_filter_on_read = true;
+    options.global.enable_page_index = true;
+    options.global.pruning = true;
     if let Some(key) = key {
         let _ = ctx
             .runtime_env()

@@ -321,6 +321,26 @@ export default function Sources({
                 </fieldset>
               </>
             )}
+            {['sqlserver', 'postgres'].includes(kind) && (
+              <fieldset className="checklist">
+                <legend>Source advisor</legend>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={config.advisor_may_write === true}
+                    aria-describedby="advisor-write-warning"
+                    onChange={(e) => setConfig({ ...config, advisor_may_write: e.target.checked })}
+                  />
+                  Advisor may write
+                </label>
+                <p id="advisor-write-warning" className="hint">
+                  Allows an admin to execute each approved recommendation on this source database
+                  using its saved credentials. Index builds can block writes and consume disk and
+                  log space. Every apply is audited and includes rollback SQL. Nothing runs
+                  automatically.
+                </p>
+              </fieldset>
+            )}
             {(fields[kind] || [])
               .filter(
                 (key) => !(kind === 'sqlserver' && key === 'username' && config.auth !== 'sql'),
