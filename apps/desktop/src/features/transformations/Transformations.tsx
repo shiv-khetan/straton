@@ -17,7 +17,6 @@ import {
   Button,
   Card,
   EmptyState,
-  Icon,
   Inspector,
   Pill,
   Sheet,
@@ -273,16 +272,8 @@ export default function Models({
     <div className="models-workbench">
       <div className="models-toolbar">
         <Tabs id="model-view" items={['Canvas', 'List']} value={view} onChange={setView} />
+        {/* "New model" lives in the page title row, like every page's primary action. */}
         <span className="hint">{models.length} models · lineage from engine catalog</span>
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={busy || readOnly}
-          onClick={() => edit(null)}
-        >
-          <Icon name="plus" />
-          New model
-        </Button>
       </div>
       <div className="models-body">
         <div className="map-center">
@@ -420,60 +411,62 @@ export default function Models({
               )}
             </Card>
           )}
-          <ConsoleDrawer
-            tabs={['Live events', 'Run history', 'Explain']}
-            tab={consoleTab}
-            onTab={(value) => {
-              setConsoleTab(value);
-              if (value === 'Explain' && inspectedModel && canEditInspected) explainInspected();
-            }}
-            collapsed={consoleCollapsed}
-            onCollapsed={onConsoleCollapsed}
-            events={events}
-          >
-            {consoleTab === 'Explain' ? (
-              busy && !plans ? (
-                <Skeleton label="Planning…" />
+          {!consoleCollapsed && (
+            <ConsoleDrawer
+              tabs={['Live events', 'Run history', 'Explain']}
+              tab={consoleTab}
+              onTab={(value) => {
+                setConsoleTab(value);
+                if (value === 'Explain' && inspectedModel && canEditInspected) explainInspected();
+              }}
+              collapsed={consoleCollapsed}
+              onCollapsed={onConsoleCollapsed}
+              events={events}
+            >
+              {consoleTab === 'Explain' ? (
+                busy && !plans ? (
+                  <Skeleton label="Planning…" />
+                ) : (
+                  <ExplainPlan plans={plans} />
+                )
+              ) : inspectedModel ? (
+                <>
+                  <Table label="Selected model last run">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Model</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Last run</TableHead>
+                        <TableHead>Rows</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell>
+                          <code>{inspectedModel.name}</code>
+                        </TableCell>
+                        <TableCell>
+                          <StatusChip state={inspectedModel.last_run_status} />
+                        </TableCell>
+                        <TableCell>
+                          {relativeTime(
+                            inspectedModel.last_run ? inspectedModel.last_run * 1000 : null,
+                          )}
+                        </TableCell>
+                        <TableCell>{inspectedModel.row_count ?? '—'}</TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                  <p className="hint">
+                    The engine exposes the latest model run; a model history endpoint is not
+                    available.
+                  </p>
+                </>
               ) : (
-                <ExplainPlan plans={plans} />
-              )
-            ) : inspectedModel ? (
-              <>
-                <Table label="Selected model last run">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Model</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Last run</TableHead>
-                      <TableHead>Rows</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    <TableRow>
-                      <TableCell>
-                        <code>{inspectedModel.name}</code>
-                      </TableCell>
-                      <TableCell>
-                        <StatusChip state={inspectedModel.last_run_status} />
-                      </TableCell>
-                      <TableCell>
-                        {relativeTime(
-                          inspectedModel.last_run ? inspectedModel.last_run * 1000 : null,
-                        )}
-                      </TableCell>
-                      <TableCell>{inspectedModel.row_count ?? '—'}</TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-                <p className="hint">
-                  The engine exposes the latest model run; a model history endpoint is not
-                  available.
-                </p>
-              </>
-            ) : (
-              <p className="empty">Select a model to see its latest run.</p>
-            )}
-          </ConsoleDrawer>
+                <p className="empty">Select a model to see its latest run.</p>
+              )}
+            </ConsoleDrawer>
+          )}
         </div>
         {inspected && (
           <Inspector

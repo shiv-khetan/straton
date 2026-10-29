@@ -328,7 +328,11 @@ export default function Sources({
               .map((key) => (
                 <Field
                   key={key}
-                  label={key === 'path' ? 'Path on engine machine' : key.replaceAll('_', ' ')}
+                  label={
+                    key === 'path'
+                      ? 'Path on engine machine'
+                      : key[0].toUpperCase() + key.slice(1).replaceAll('_', ' ')
+                  }
                 >
                   <Input
                     required={['host', 'database', 'username', 'path'].includes(key)}

@@ -1,6 +1,7 @@
 import { StatePill } from '@/components/workbench/primitives';
 import { useState } from 'react';
 import { useSqlWorkspace } from '@/stores/sql-workspace';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 export default function QueryHistory({
@@ -12,6 +13,7 @@ export default function QueryHistory({
 }) {
   const entries = useSqlWorkspace((s) => s.history);
   const clear = useSqlWorkspace((s) => s.clear);
+  const restore = useSqlWorkspace((s) => s.restore);
   const [search, setSearch] = useState('');
   const history = entries.filter(
     (e) => e.scope === scope && e.sql.toLowerCase().includes(search.toLowerCase()),
@@ -30,7 +32,17 @@ export default function QueryHistory({
         <Button
           variant="outline"
           disabled={!entries.some((e) => e.scope === scope)}
-          onClick={() => clear(scope)}
+          onClick={() => {
+            const removed = entries.filter((e) => e.scope === scope);
+            clear(scope);
+            toast('Query history cleared', {
+              description:
+                removed.length +
+                (removed.length === 1 ? ' query' : ' queries') +
+                ' removed from this device.',
+              action: { label: 'Undo', onClick: () => restore(removed) },
+            });
+          }}
         >
           Clear history
         </Button>

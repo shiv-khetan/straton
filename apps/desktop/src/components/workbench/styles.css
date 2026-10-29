@@ -81,16 +81,7 @@
     max-width: 100%;
     max-height: 55vh;
   }
-  .row-actions {
-    opacity: 0;
-    transition: opacity var(--duration-fast) var(--ease-out-quart);
-  }
-  tr:hover .row-actions,
-  tr:focus-within .row-actions,
-  tr[data-state='selected'] .row-actions,
-  .row-actions:has([data-state='open']) {
-    opacity: 1;
-  }
+  /* Row actions stay visible: what a row can do should never depend on hovering it. */
   .empty {
     @apply p-3;
   }

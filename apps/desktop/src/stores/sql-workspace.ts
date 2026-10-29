@@ -13,6 +13,7 @@ interface State {
   close: (id: string) => void;
   record: (entry: HistoryEntry) => void;
   clear: (scope: string) => void;
+  restore: (entries: HistoryEntry[]) => void;
 }
 export const useSqlWorkspace = create<State>()(
   persist(
@@ -30,6 +31,16 @@ export const useSqlWorkspace = create<State>()(
       close: (id) => set((s) => closeTab(s.tabs, s.active, id)),
       record: (entry) => set((s) => ({ history: addHistory(s.history, entry) })),
       clear: (scope) => set((s) => ({ history: s.history.filter((e) => e.scope !== scope) })),
+      // Undo for clear(): put the removed entries back, newest first, without duplicates.
+      restore: (entries) =>
+        set((s) => {
+          const ids = new Set(s.history.map((e) => e.id));
+          return {
+            history: [...s.history, ...entries.filter((e) => !ids.has(e.id))].sort(
+              (a, b) => b.at - a.at,
+            ),
+          };
+        }),
     }),
     {
       name: 'straton:sql:v3',
