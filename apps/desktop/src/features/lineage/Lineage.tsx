@@ -1,74 +1,44 @@
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
-import { Choice } from '@/components/workbench/FeatureState';
-import { manualSelection, relationshipInput } from './relationship-form';
-import type { Relationship } from '@/lib/api';
-import { Home } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { ColumnInspector } from './ColumnInspector';
-import type { UsageEntity } from './ColumnInspector';
-import { fieldKey, nextFieldIndex } from './column-model';
-import type { ColumnRef } from '@/lib/api';
-import { StatePill } from '@/components/workbench/primitives';
-import { Impact } from './Impact';
-import { Tabs } from '@/components/workbench/primitives';
-import { Input } from '@/components/ui/input';
-import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
   Background,
-  BaseEdge,
-  Panel,
-  useViewport,
   MiniMap,
-  Handle,
-  Position,
   ConnectionMode,
   useEdgesState,
   useNodesState,
   useReactFlow,
 } from '@xyflow/react';
-import type { Connection as FlowConnection, EdgeProps, NodeProps } from '@xyflow/react';
-import type { Api, DataMap, Dataset, EdgeKind, MapSource, Job, Run, EngineEvent } from '@/lib/api';
-import {
-  Button,
-  Icon,
-  Inspector,
-  Pill,
-  SchemaTree,
-  Table as UiTable,
-} from '@/components/workbench/primitives';
-import { datasetLabel, relativeTime } from '@/lib/view-model';
-import { Field } from '@/components/workbench/Field';
-import {
-  ConsoleDrawer,
-  CopyButton,
-  RunHistory,
-  StatusChip,
-  Skeleton,
-} from '@/features/console/ConsoleDrawer';
-import { datasetState, datasetRun, datasetJobs } from '@/features/console/workbench-model';
-import { tableReference } from '@/features/sql/sql-model';
-import {
-  buildEdges,
-  layout,
-  loadPositions,
-  persist,
-  restorePositions,
-  routeEdges,
-  routedEdgePath,
-  TABLE_HEADER_HEIGHT,
-  TABLE_ROW_HEIGHT,
-  TABLE_FOOTER_HEIGHT,
-} from '@/features/lineage/map-model';
-import type { MapNode, MapEdge, TableNode, GroupNode } from '@/features/lineage/map-model';
+import type { Connection as FlowConnection } from '@xyflow/react';
+import type {
+  Api,
+  ColumnRef,
+  DataMap,
+  Dataset,
+  EdgeKind,
+  EngineEvent,
+  Job,
+  Relationship,
+  Run,
+} from '@/lib/api';
+import { Tabs } from '@/components/workbench/primitives';
+import { datasetLabel } from '@/lib/view-model';
+import { ConsoleDrawer, RunHistory, Skeleton } from '@/features/console/ConsoleDrawer';
+import { datasetJobs } from '@/features/console/workbench-model';
+import { CatalogPanel } from './CatalogPanel';
+import { ColumnInspector } from './ColumnInspector';
+import type { UsageEntity } from './ColumnInspector';
+import { Impact } from './Impact';
+import { MapEmptyState, MapLegend, MapTools } from './MapControls';
+import { edgeTypes, nodeTypes } from './MapNodes';
+import { edgeKinds, persist } from './map-model';
+import type { MapNode, MapEdge, TableNode } from './map-model';
+import { AddRelationshipDialog, RemoveRelationshipsDialog } from './RelationshipDialogs';
+import { manualSelection, relationshipInput } from './relationship-form';
+import { SelectionInspector } from './SelectionInspector';
+import { useMapLayout } from './use-map-layout';
+import { useVisibleGraph } from './use-visible-graph';
 type Props = {
   map: DataMap;
   jobs: Job[];
@@ -90,161 +60,6 @@ type Props = {
   onSelection: (name: string, id?: string) => void;
   onNavigateUsage: (entity: UsageEntity) => void;
 };
-const kinds: EdgeKind[] = ['declared_fk', 'inferred', 'lineage', 'manual'];
-function Table({ data }: NodeProps<TableNode>) {
-  return (
-    <article
-      data-field-table={data.dataset.id}
-      className={
-        'dataset-node state-' +
-        (data.state ?? 'never-synced').replaceAll(' ', '-') +
-        (data.external ? ' external-node' : '') +
-        (data.dataset.stale ? ' stale' : '') +
-        (data.highlighted ? ' highlighted' : '')
-      }
-    >
-      <div className="dataset-title" style={{ height: TABLE_HEADER_HEIGHT }}>
-        <Handle type="target" position={Position.Left} id="dataset:in" isConnectable={false} />
-        <div className="node-heading-row">
-          <Icon name="table" />
-          <strong title={datasetLabel(data.dataset)}>{datasetLabel(data.dataset)}</strong>
-        </div>
-        <div className="node-state-row">
-          {data.dataset.dataset_type === 'view' && <Pill>View</Pill>}
-          <StatusChip state={data.state} />
-          {data.dataset.row_filtered && (
-            <Pill title="Row filter active">
-              <Icon name="lock" />
-              Filtered
-            </Pill>
-          )}
-        </div>
-        <Handle type="source" position={Position.Right} id="dataset:out" isConnectable={false} />
-      </div>
-      {data.dataset.columns.map((column) => (
-        <div
-          className="dataset-column"
-          key={column.name}
-          data-field-home={data.fieldFocus === column.name}
-          data-field-dimmed={data.focusActive && !data.fieldPath?.includes(column.name)}
-          style={{ height: TABLE_ROW_HEIGHT }}
-        >
-          <Handle
-            type="target"
-            position={Position.Left}
-            id={'in:' + column.name}
-            aria-label={'Connect to ' + column.name}
-          />
-          <button
-            type="button"
-            data-field-button
-            className="column-name field-button nodrag nopan"
-            title={'Trace ' + column.name}
-            aria-pressed={data.fieldFocus === column.name}
-            onClick={(event) => {
-              event.stopPropagation();
-              data.onFieldFocus?.(data.dataset.id, column.name);
-            }}
-            onKeyDown={(event) => {
-              if (
-                ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(
-                  event.key,
-                )
-              ) {
-                event.preventDefault();
-                event.stopPropagation();
-                const buttons = Array.from(
-                  event.currentTarget
-                    .closest('[data-field-table]')!
-                    .querySelectorAll<HTMLButtonElement>('[data-field-button]'),
-                );
-                buttons[
-                  nextFieldIndex(buttons.indexOf(event.currentTarget), buttons.length, event.key)
-                ]?.focus();
-              } else if (event.key === 'Enter' || event.key === ' ') {
-                event.stopPropagation();
-              }
-            }}
-          >
-            {data.fieldFocus === column.name && <Home size={13} aria-label="Focal field" />}
-            {column.name}
-          </button>
-          <span className="column-type" title={column.type}>
-            {column.type}
-            {column.nullable ? '?' : ''}
-          </span>
-          <span className="column-badges">
-            {column.masked && <Pill title={column.mask_kind ?? 'Column mask'}>Masked</Pill>}
-            {column.pk && (
-              <Pill tone="primary" title="Primary key">
-                PK
-              </Pill>
-            )}
-            {data.fk.includes(column.name) && <Pill title="Foreign key">FK</Pill>}
-          </span>
-          <Handle
-            type="source"
-            position={Position.Right}
-            id={'out:' + column.name}
-            aria-label={'Connect from ' + column.name}
-          />
-        </div>
-      ))}
-      {data.state === 'running' && (
-        <div className="node-progress" role="status">
-          <span className="indeterminate-progress" />
-          <span className="visually-hidden">
-            Running · {data.batches ?? 0} committed batches; total unavailable
-          </span>
-        </div>
-      )}
-      <div className="dataset-footer" style={{ height: TABLE_FOOTER_HEIGHT }}>
-        <span>
-          {data.dataset.row_count?.toLocaleString() ??
-            (data.dataset.approximate_row_count != null
-              ? '≈ ' + data.dataset.approximate_row_count.toLocaleString()
-              : '—')}{' '}
-          rows
-        </span>
-        {data.state === 'running' && <span>{data.batches ?? 0} batches</span>}
-        <Pill title={data.dataset.last_synced_at ?? 'Never synced'}>
-          <Icon name="clock" />
-          {relativeTime(data.dataset.last_synced_at)}
-        </Pill>
-      </div>
-    </article>
-  );
-}
-function SourceGroup({ data }: NodeProps<GroupNode>) {
-  return (
-    <div className={'source-label mono-caption' + (data.external ? ' external-label' : '')}>
-      <Icon name="source" />
-      <span>{data.label}</span>
-      <StatePill state={data.stale ? 'Stale data' : data.external ? 'External' : 'Connected'} />
-    </div>
-  );
-}
-function RoutedEdge(props: EdgeProps<MapEdge>) {
-  const { path, label } = routedEdgePath(props.data?.route ?? []);
-  return (
-    <BaseEdge
-      id={props.id}
-      path={path}
-      style={props.style}
-      markerStart={props.markerStart}
-      markerEnd={props.markerEnd}
-      interactionWidth={props.interactionWidth}
-      label={props.label}
-      labelX={label.x}
-      labelY={label.y}
-      labelStyle={props.labelStyle}
-      labelShowBg={props.labelShowBg}
-      labelBgStyle={props.labelBgStyle}
-    />
-  );
-}
-const edgeTypes = { elk: RoutedEdge };
-const nodeTypes = { table: Table, source: SourceGroup };
 export default function DataMapView(props: Props) {
   const [mode, setMode] = useState('Lineage');
   return (
@@ -305,20 +120,18 @@ function Canvas({
     };
   }, [fieldInspectorOpen]);
   const [addingRelationship, setAddingRelationship] = useState(false);
-  const [relationshipError, setRelationshipError] = useState('');
-  const [sourceDataset, setSourceDataset] = useState('');
-  const [sourceColumn, setSourceColumn] = useState('');
-  const [targetDataset, setTargetDataset] = useState('');
-  const [targetColumn, setTargetColumn] = useState('');
   const [removal, setRemoval] = useState<Relationship[]>([]);
   const relationshipDatasets = map.nodes.filter((n): n is Dataset => n.type === 'dataset');
+  const clearSelection = useCallback(() => {
+    setNodes((previous) => previous.map((node) => ({ ...node, selected: false })));
+    setEdges((previous) => previous.map((edge) => ({ ...edge, selected: false })));
+  }, [setNodes, setEdges]);
   const onFieldFocus = useCallback(
     (dataset_id: string, column: string) => {
       setFieldFocus({ dataset_id, column });
-      setNodes((previous) => previous.map((node) => ({ ...node, selected: false })));
-      setEdges((previous) => previous.map((edge) => ({ ...edge, selected: false })));
+      clearSelection();
     },
-    [setNodes, setEdges],
+    [clearSelection],
   );
   const columnQuery = useQuery({
     queryKey: ['engine', 'impact', 'columns', engineUrl, fieldFocus, map],
@@ -326,42 +139,17 @@ function Canvas({
     enabled: !!fieldFocus,
   });
   const fieldGraph = columnQuery.data;
-  const pathFields = useMemo(
-    () =>
-      new Set([
-        ...(fieldGraph?.nodes.map(fieldKey) ?? []),
-        ...(fieldFocus ? [fieldKey(fieldFocus)] : []),
-      ]),
-    [fieldGraph, fieldFocus],
-  );
-  const pathDatasets = useMemo(
-    () =>
-      new Set([
-        ...(fieldGraph?.nodes.map((n) => n.dataset_id) ?? []),
-        ...(fieldFocus ? [fieldFocus.dataset_id] : []),
-      ]),
-    [fieldGraph, fieldFocus],
-  );
-  const [panelOpen, setPanelOpen] = useState(false);
   const [consoleTab, setConsoleTab] = useState('Live events');
   const [stateFilter, setStateFilter] = useState(initialStatusFilter);
   useEffect(() => setStateFilter(initialStatusFilter), [initialStatusFilter]);
   const [minimap, setMinimap] = useState(true);
   const [excluded, setExcluded] = useState<string[]>([]);
-  const { zoom } = useViewport();
   const [sourceFilter, setSourceFilter] = useState('');
-  const [enabledKinds, setEnabledKinds] = useState<EdgeKind[]>(kinds);
+  const [enabledKinds, setEnabledKinds] = useState<EdgeKind[]>(edgeKinds);
   const [search, setSearch] = useState('');
   const query = search.trim().toLowerCase();
   const [hover, setHover] = useState('');
   const [hoveredEdge, setHoveredEdge] = useState('');
-  const [layoutError, setLayoutError] = useState('');
-  const [layingOut, setLayingOut] = useState(false);
-  // Read Flow selection directly so its selection effect cannot feed back into local state.
-  const selected = useMemo(
-    () => edges.filter((edge) => edge.selected).map((edge) => edge.id),
-    [edges],
-  );
   const selectedDataset = nodes.find(
     (node): node is TableNode => node.type === 'table' && !!node.selected,
   )?.data.dataset;
@@ -378,253 +166,40 @@ function Canvas({
       selectedDataset?.id ?? selectedEdge?.id,
     );
   }, [selectedDataset, selectedEdge, onSelection]);
-  const { fitView, zoomIn, zoomOut } = useReactFlow<MapNode, MapEdge>();
-  const generation = useRef(0);
-  const arrange = useCallback(
-    async (restore: boolean) => {
-      const current = ++generation.current;
-      setLayingOut(true);
-      setLayoutError('');
-      try {
-        const next = await layout(map);
-        if (generation.current !== current) return;
-        const positioned = restore
-          ? restorePositions(next.nodes, loadPositions(engineUrl))
-          : next.nodes;
-        setNodes((previous) =>
-          positioned.map((node) => ({
-            ...node,
-            selected: previous.find((existing) => existing.id === node.id)?.selected ?? false,
-          })),
-        );
-        setEdges((previous) =>
-          next.edges.map((edge) => ({
-            ...edge,
-            selected: previous.find((existing) => existing.id === edge.id)?.selected ?? false,
-          })),
-        );
-        if (!restore) persist(engineUrl, positioned);
-        requestAnimationFrame(() => {
-          void fitView({ padding: 0.15 });
-        });
-      } catch {
-        if (generation.current === current)
-          setLayoutError('Layout failed. Try Re-layout or refresh the catalog.');
-      } finally {
-        if (generation.current === current) setLayingOut(false);
-      }
-    },
-    [map, engineUrl, setNodes, setEdges, fitView],
-  );
-  useEffect(() => {
-    void arrange(true);
-    return () => {
-      generation.current++;
-    };
-  }, [arrange]);
-  useEffect(() => {
-    setEdges((previous) =>
-      buildEdges(map).map((edge) => ({
-        ...edge,
-        selected: previous.find((existing) => existing.id === edge.id)?.selected ?? false,
-      })),
-    );
-  }, [map, setEdges]);
-  const visibleNodes = useMemo(
-    () =>
-      nodes.map(
-        (node) =>
-          ({
-            ...node,
-            hidden:
-              !fieldFocus &&
-              (excluded.includes(node.id) ||
-                (!!node.parentId && excluded.includes(node.parentId)) ||
-                (!!sourceFilter &&
-                  (node.type === 'source'
-                    ? node.id !== sourceFilter
-                    : node.parentId !== sourceFilter))),
-            style: {
-              ...node.style,
-              opacity:
-                fieldFocus && node.type === 'table' && !pathDatasets.has(node.id)
-                  ? 0.22
-                  : node.type === 'table' &&
-                      stateFilter &&
-                      datasetState(node.data.dataset, jobs, runs) !== stateFilter
-                    ? 0.35
-                    : 1,
-            },
-            data:
-              node.type === 'table'
-                ? {
-                    ...node.data,
-                    focusActive: !!fieldFocus,
-                    fieldFocus: fieldFocus?.dataset_id === node.id ? fieldFocus.column : undefined,
-                    fieldPath: node.data.dataset.columns
-                      .filter((c) =>
-                        pathFields.has(fieldKey({ dataset_id: node.id, column: c.name })),
-                      )
-                      .map((c) => c.name),
-                    onFieldFocus,
-                    state: datasetState(node.data.dataset, jobs, runs),
-                    batches: datasetRun(node.data.dataset, jobs, runs)?.committed_batches,
-                    external: !(
-                      map.nodes.find((n) => n.id === node.data.dataset.source_id) as
-                        MapSource | undefined
-                    )?.connected,
-                    highlighted:
-                      !!query && datasetLabel(node.data.dataset).toLowerCase().includes(query),
-                  }
-                : node.data,
-          }) as MapNode,
-      ),
-    [
-      nodes,
-      sourceFilter,
-      query,
-      excluded,
-      stateFilter,
-      map,
-      jobs,
-      runs,
-      fieldFocus,
-      pathDatasets,
-      pathFields,
-      onFieldFocus,
-    ],
-  );
-  const visibleIds = useMemo(
-    () => new Set(visibleNodes.filter((n) => !n.hidden).map((n) => n.id)),
-    [visibleNodes],
-  );
-  const activeNodes = useMemo(
-    () =>
-      new Set(
-        visibleNodes
-          .filter((node) => node.type === 'table' && node.data.state === 'running')
-          .map((node) => node.id),
-      ),
-    [visibleNodes],
-  );
-  const visibleEdges = useMemo(
-    () =>
-      routeEdges(edges, nodes).map((edge) => ({
-        ...edge,
-        className:
-          'edge-kind-' +
-          edge.data!.kind +
-          (edge.data?.kind === 'lineage' &&
-          (activeNodes.has(edge.source) || activeNodes.has(edge.target))
-            ? ' edge-active'
-            : ''),
-        style: {
-          ...edge.style,
-          opacity: fieldFocus ? 0.12 : 1,
-          stroke:
-            hoveredEdge === edge.id ||
-            edge.selected ||
-            enabledKinds.length !== kinds.length ||
-            !!sourceFilter ||
-            excluded.length > 0 ||
-            !!search ||
-            activeNodes.has(edge.source) ||
-            activeNodes.has(edge.target) ||
-            !!stateFilter
-              ? edge.style?.stroke
-              : 'var(--edge-quiet)',
-        },
-        markerEnd: {
-          type: 'arrowclosed' as const,
-          width: 12,
-          height: 12,
-          color:
-            hoveredEdge === edge.id ||
-            edge.selected ||
-            enabledKinds.length !== kinds.length ||
-            !!sourceFilter ||
-            excluded.length > 0 ||
-            !!search ||
-            !!stateFilter ||
-            activeNodes.has(edge.source) ||
-            activeNodes.has(edge.target)
-              ? String(edge.style?.stroke)
-              : 'var(--edge-quiet)',
-        },
-        label: hoveredEdge === edge.id ? edge.data?.description : undefined,
-        labelStyle: { fill: 'var(--ink)' },
-        labelBgStyle: { fill: 'var(--bg)' },
-        hidden:
-          !enabledKinds.includes(edge.data!.kind) ||
-          !visibleIds.has(edge.source) ||
-          !visibleIds.has(edge.target),
-      })),
-    [
-      edges,
-      nodes,
-      hoveredEdge,
-      enabledKinds,
-      visibleIds,
-      sourceFilter,
-      excluded,
-      search,
-      stateFilter,
-      activeNodes,
-      fieldFocus,
-    ],
-  );
-  const focusedEdges = useMemo<MapEdge[]>(
-    () =>
-      (fieldGraph?.edges ?? []).map((edge, index) => ({
-        id: 'field:' + index,
-        source: edge.from.dataset_id,
-        target: edge.to.dataset_id,
-        sourceHandle: 'out:' + edge.from.column,
-        targetHandle: 'in:' + edge.to.column,
-        type: 'smoothstep',
-        zIndex: 4,
-        deletable: false,
-        selectable: false,
-        ariaLabel: edge.from.column + ' to ' + edge.to.column + ': ' + edge.kind,
-        className: 'field-lineage-edge',
-        data: { relationshipId: 'field:' + index, kind: 'lineage', description: edge.kind },
-        style: { stroke: 'var(--primary)', strokeWidth: 2 },
-        markerEnd: { type: 'arrowclosed', color: 'var(--primary)' },
-      })),
-    [fieldGraph],
-  );
-  function createRelationship(
-    source: string,
-    from: string,
-    target: string,
-    to: string,
-    closeForm = false,
-  ) {
-    if (!canManage || busy) return;
-    void action(async () => {
-      try {
-        await client.createRelationship(
-          relationshipInput(relationshipDatasets, source, from, target, to),
-        );
-        if (closeForm) setAddingRelationship(false);
-      } catch (error) {
-        if (closeForm) setRelationshipError(String(error));
-        throw error;
-      }
-    }, 'Manual relationship created');
-  }
+  const { fitView } = useReactFlow<MapNode, MapEdge>();
+  const { arrange, layingOut, layoutError } = useMapLayout(map, engineUrl, setNodes, setEdges);
+  const rendered = useVisibleGraph({
+    nodes,
+    edges,
+    map,
+    jobs,
+    runs,
+    filters: { excluded, sourceFilter, stateFilter, enabledKinds, search },
+    fieldFocus,
+    fieldGraph,
+    hoveredEdge,
+    onFieldFocus,
+  });
+  // Dragging between column handles creates a manual relationship in either direction.
   function connect(connection: FlowConnection) {
-    if (!connection.sourceHandle || !connection.targetHandle) return;
+    if (!connection.sourceHandle || !connection.targetHandle || !canManage || busy) return;
     const forward = connection.sourceHandle.startsWith('out:');
     const source = forward ? connection.source : connection.target;
     const target = forward ? connection.target : connection.source;
     const from = forward ? connection.sourceHandle : connection.targetHandle;
     const to = forward ? connection.targetHandle : connection.sourceHandle;
-    createRelationship(
-      source,
-      from.slice(from.indexOf(':') + 1),
-      target,
-      to.slice(to.indexOf(':') + 1),
+    void action(
+      () =>
+        client.createRelationship(
+          relationshipInput(
+            relationshipDatasets,
+            source,
+            from.slice(from.indexOf(':') + 1),
+            target,
+            to.slice(to.indexOf(':') + 1),
+          ),
+        ),
+      'Manual relationship created',
     );
   }
   function removeSelected() {
@@ -632,7 +207,7 @@ function Canvas({
     setRemoval(
       manualSelection(
         map.edges,
-        edges.filter((e) => selected.includes(e.id)).map((e) => e.data!.relationshipId),
+        edges.filter((e) => e.selected).map((e) => e.data!.relationshipId),
       ),
     );
   }
@@ -664,7 +239,6 @@ function Canvas({
   }, [focusId, nodes]);
   const selectedJobs = selectedDataset ? datasetJobs(selectedDataset, jobs) : [];
   const selectedRuns = runs.filter((run) => selectedJobs.some((job) => job.id === run.job_id));
-  const lastRun = selectedDataset ? datasetRun(selectedDataset, jobs, runs) : undefined;
   function zoomSearch() {
     if (!query) return;
     const match = nodes.find(
@@ -686,143 +260,38 @@ function Canvas({
         }
       }}
     >
-      <div className="map-library" data-collapsed={!panelOpen}>
-        <div className="panel-heading">
-          {panelOpen && <h2>Catalog</h2>}
-          <Button
-            type="button"
-            variant="ghost"
-            aria-label={panelOpen ? 'Collapse catalog' : 'Expand catalog'}
-            aria-expanded={panelOpen}
-            onClick={() => setPanelOpen(!panelOpen)}
-          >
-            <Icon name="collapse" />
-          </Button>
-        </div>
-        {panelOpen && (
-          <>
-            <div className="library-content">
-              <Field label="Find dataset">
-                <Input
-                  type="search"
-                  value={search}
-                  placeholder="Search datasets…"
-                  aria-describedby="dataset-search-help"
-                  onChange={(e) => setSearch(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') zoomSearch();
-                  }}
-                />
-              </Field>
-              <p id="dataset-search-help" className="hint">
-                Filters the catalog and highlights canvas matches. Press Enter to select the first
-                match.
-              </p>
-              <Field label="Source">
-                <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
-                  <option value="">All sources</option>
-                  {map.nodes
-                    .filter((n): n is MapSource => n.type === 'source')
-                    .map((source) => (
-                      <option key={source.id} value={source.id}>
-                        {source.name}
-                      </option>
-                    ))}
-                </select>
-              </Field>
-            </div>
-            <SchemaTree
-              groups={map.nodes
-                .filter((n): n is MapSource => n.type === 'source')
-                .filter((source) => !sourceFilter || source.id === sourceFilter)
-                .map((source) => ({
-                  id: source.id,
-                  label: source.name,
-                  items: map.nodes
-                    .filter((n): n is Dataset => n.type === 'dataset' && n.source_id === source.id)
-                    .filter((d) => datasetLabel(d).toLowerCase().includes(query))
-                    .map((d) => ({ id: d.id, label: datasetLabel(d) })),
-                }))}
-              hidden={excluded}
-              onToggle={(id) =>
-                setExcluded((previous) =>
-                  previous.includes(id) ? previous.filter((v) => v !== id) : [...previous, id],
-                )
-              }
-              onSelect={selectDataset}
-              selected={selectedDataset?.id}
-            />
-            <fieldset className="edge-filters">
-              <legend>Relationships</legend>
-              {kinds.map((kind) => (
-                <label key={kind}>
-                  <input
-                    type="checkbox"
-                    checked={enabledKinds.includes(kind)}
-                    onChange={(e) =>
-                      setEnabledKinds(
-                        e.target.checked
-                          ? [...enabledKinds, kind]
-                          : enabledKinds.filter((k) => k !== kind),
-                      )
-                    }
-                  />
-                  <span className={'edge-sample ' + kind} />
-                  {kind.replaceAll('_', ' ')}
-                </label>
-              ))}
-            </fieldset>
-            {canManage && (
-              <p className="hint library-content">
-                Drag between column handles to create a manual relationship.
-              </p>
-            )}
-          </>
-        )}
-      </div>
+      <CatalogPanel
+        map={map}
+        search={search}
+        onSearch={setSearch}
+        onSearchEnter={zoomSearch}
+        sourceFilter={sourceFilter}
+        onSourceFilter={setSourceFilter}
+        excluded={excluded}
+        onToggleExcluded={(id) =>
+          setExcluded((previous) =>
+            previous.includes(id) ? previous.filter((v) => v !== id) : [...previous, id],
+          )
+        }
+        selectedId={selectedDataset?.id}
+        onSelect={selectDataset}
+        enabledKinds={enabledKinds}
+        onEnabledKinds={setEnabledKinds}
+        canManage={canManage}
+      />
       {layoutError && (
         <p className="map-feedback message" role="alert">
           {layoutError}
         </p>
       )}
-      {!map.nodes.some((n) => n.type === 'dataset') && (
-        <div className="map-feedback empty-state">
-          <p>Connect a source and run Discover to see your data here</p>
-          {onConnectSource && (
-            <Button type="button" variant="ghost" onClick={onConnectSource}>
-              Connect a source
-            </Button>
-          )}
-          {canManage &&
-            map.nodes
-              .filter(
-                (node): node is MapSource =>
-                  node.type === 'source' &&
-                  node.connected &&
-                  [
-                    'postgres',
-                    'sqlserver',
-                    'sqlite',
-                    'csv',
-                    'stripe',
-                    'salesforce',
-                    'noop',
-                  ].includes(node.kind),
-              )
-              .map((source) => (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  key={source.id}
-                  disabled={busy}
-                  onClick={() =>
-                    void action(() => client.discoverSource(source.id), 'Catalog discovered')
-                  }
-                >
-                  Discover {source.name}
-                </Button>
-              ))}
-        </div>
+      {!relationshipDatasets.length && (
+        <MapEmptyState
+          map={map}
+          onConnectSource={onConnectSource}
+          canManage={canManage}
+          busy={busy}
+          onDiscover={(id) => void action(() => client.discoverSource(id), 'Catalog discovered')}
+        />
       )}
       {layingOut && (
         <div className="map-feedback">
@@ -854,16 +323,14 @@ function Canvas({
           }}
         >
           <ReactFlow<MapNode, MapEdge>
-            nodes={visibleNodes}
-            edges={[...visibleEdges, ...focusedEdges]}
+            nodes={rendered.nodes}
+            edges={rendered.edges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             elevateNodesOnSelect={false}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
-            onConnect={(connection) => {
-              if (!busy) connect(connection);
-            }}
+            onConnect={connect}
             nodesConnectable={canManage && !fieldFocus}
             connectionMode={ConnectionMode.Loose}
             isValidConnection={(c) =>
@@ -891,27 +358,13 @@ function Canvas({
             maxZoom={2}
           >
             <Background gap={24} size={1} color="var(--grid-dot)" />
-            <Panel position="top-left" className="map-legend">
-              {(['succeeded', 'running', 'queued', 'stale', 'failed', 'never synced'] as const).map(
-                (state) => (
-                  <Button
-                    variant="ghost"
-                    key={state}
-                    aria-pressed={stateFilter === state}
-                    onClick={() => setStateFilter(stateFilter === state ? '' : state)}
-                  >
-                    <StatusChip state={state} />
-                    <code>
-                      {
-                        map.nodes
-                          .filter((d): d is Dataset => d.type === 'dataset')
-                          .filter((d) => datasetState(d, jobs, runs) === state).length
-                      }
-                    </code>
-                  </Button>
-                ),
-              )}
-            </Panel>
+            <MapLegend
+              map={map}
+              jobs={jobs}
+              runs={runs}
+              stateFilter={stateFilter}
+              onStateFilter={setStateFilter}
+            />
             {minimap && (
               <MiniMap
                 pannable
@@ -921,67 +374,14 @@ function Canvas({
                 }
               />
             )}
-            <Panel position="top-right" className="map-tools">
-              {canManage && (
-                <Button
-                  variant="outline"
-                  disabled={busy || relationshipDatasets.length === 0}
-                  onClick={() => {
-                    setRelationshipError('');
-                    setAddingRelationship(true);
-                  }}
-                >
-                  Add relationship
-                </Button>
-              )}
-              <Button
-                type="button"
-                variant="ghost"
-                aria-label="Fit to view"
-                title="Fit to view"
-                onClick={() => void fitView({ padding: 0.15 })}
-              >
-                <Icon name="fit" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                aria-label="Zoom out"
-                onClick={() => void zoomOut()}
-              >
-                <Icon name="minus" />
-              </Button>
-              <output aria-label="Zoom level">{Math.round(zoom * 100)}%</output>
-              <Button
-                type="button"
-                variant="ghost"
-                aria-label="Zoom in"
-                onClick={() => void zoomIn()}
-              >
-                <Icon name="plus" />
-              </Button>
-              <span className="tool-divider" />
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={layingOut}
-                title="Re-layout"
-                aria-label="Re-layout"
-                onClick={() => void arrange(false)}
-              >
-                <Icon name="refresh" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                aria-label="Toggle minimap"
-                aria-pressed={minimap}
-                title="Toggle minimap"
-                onClick={() => setMinimap(!minimap)}
-              >
-                <Icon name="map" />
-              </Button>
-            </Panel>
+            <MapTools
+              onAddRelationship={canManage ? () => setAddingRelationship(true) : undefined}
+              addDisabled={busy || relationshipDatasets.length === 0}
+              layingOut={layingOut}
+              onRelayout={() => void arrange(false)}
+              minimap={minimap}
+              onMinimap={setMinimap}
+            />
           </ReactFlow>
         </div>
         {/* Hidden until the title-bar console toggle opens it, as on every other page. */}
@@ -1007,270 +407,34 @@ function Canvas({
         )}
       </div>
       {!fieldFocus && (selectedDataset || selectedEdge) && (
-        <Inspector
-          entityId={selectedDataset?.id ?? selectedEdge!.id}
-          label="Selection inspector"
-          title={selectedDataset ? datasetLabel(selectedDataset) : 'Relationship'}
-          onClose={() => {
-            setNodes((previous) => previous.map((node) => ({ ...node, selected: false })));
-            setEdges((previous) => previous.map((edge) => ({ ...edge, selected: false })));
+        <SelectionInspector
+          dataset={selectedDataset}
+          edge={selectedEdge}
+          map={map}
+          jobs={jobs}
+          runs={runs}
+          canManage={canManage}
+          busy={busy}
+          client={client}
+          action={action}
+          canCreateJob={canCreateJob}
+          onQuery={onQuery}
+          onCreateJob={onCreateJob}
+          onClose={clearSelection}
+          onRemoveSelected={removeSelected}
+          onSelectRelationship={(id) => {
+            setNodes((previous) => previous.map((n) => ({ ...n, selected: false })));
+            setEdges((previous) =>
+              previous.map((edge) => ({ ...edge, selected: edge.data?.relationshipId === id })),
+            );
           }}
-        >
-          <div className="inspector-content">
-            {selectedDataset ? (
-              <>
-                <Pill>
-                  <code title={selectedDataset.id}>{selectedDataset.id}</code>
-                </Pill>
-                <StatusChip state={datasetState(selectedDataset, jobs, runs)} />
-                {selectedDataset.dataset_type === 'view' && <Pill>View</Pill>}
-                <h3>Target</h3>
-                <div className="target-path">
-                  <code>
-                    {tableReference(selectedDataset.sql_schema, selectedDataset.sql_table)}
-                  </code>
-                  <CopyButton
-                    text={tableReference(selectedDataset.sql_schema, selectedDataset.sql_table)}
-                    label="Copy SQL target"
-                  />
-                </div>
-                <h3>Runtime</h3>
-                <dl className="runtime-grid">
-                  <div>
-                    <dt>Duration</dt>
-                    <dd title="Run duration is not exposed by this engine">—</dd>
-                  </div>
-                  <div>
-                    <dt>Rows</dt>
-                    <dd>{selectedDataset.row_count?.toLocaleString() ?? '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Last sync</dt>
-                    <dd title={selectedDataset.last_synced_at ?? undefined}>
-                      {relativeTime(selectedDataset.last_synced_at)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Mode</dt>
-                    <dd>{lastRun?.mode_used ?? selectedJobs[0]?.mode ?? '—'}</dd>
-                  </div>
-                </dl>
-                {canManage && (
-                  <>
-                    <h3>Policies</h3>
-                    <div className="actions">
-                      <Pill>
-                        {selectedDataset.row_filtered ? 'Row filter active' : 'No row filter'}
-                      </Pill>
-                      <Pill>
-                        {selectedDataset.columns.filter((c) => c.masked).length} masked columns
-                      </Pill>
-                    </div>
-                  </>
-                )}
-                <h3>Columns</h3>
-                <UiTable label="Dataset columns">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Key</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {selectedDataset.columns.map((c) => (
-                      <TableRow key={c.name}>
-                        <TableCell>
-                          <code>{c.name}</code>
-                        </TableCell>
-                        <TableCell>
-                          <code>
-                            {c.type}
-                            {c.nullable ? '?' : ''}
-                          </code>
-                        </TableCell>
-                        <TableCell>
-                          {c.masked && <Pill>Masked</Pill>}
-                          {c.pk && <Pill tone="primary">PK</Pill>}
-                          {map.edges.some(
-                            (e) =>
-                              e.kind === 'declared_fk' &&
-                              e.from_dataset === selectedDataset.id &&
-                              e.from_cols.includes(c.name),
-                          ) && <Pill>FK</Pill>}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </UiTable>
-                {(['Incoming', 'Outgoing'] as const).map((direction) => (
-                  <div key={direction}>
-                    <h3>{direction === 'Incoming' ? 'Upstream' : 'Downstream'}</h3>
-                    {map.edges
-                      .filter(
-                        (e) =>
-                          (direction === 'Incoming' ? e.to_dataset : e.from_dataset) ===
-                          selectedDataset.id,
-                      )
-                      .map((e) => (
-                        <Button
-                          variant="ghost"
-                          className="relationship-item"
-                          key={e.id}
-                          onClick={() => {
-                            setNodes((previous) =>
-                              previous.map((n) => ({ ...n, selected: false })),
-                            );
-                            setEdges((previous) =>
-                              previous.map((edge) => ({
-                                ...edge,
-                                selected: edge.data?.relationshipId === e.id,
-                              })),
-                            );
-                          }}
-                        >
-                          <StatusChip
-                            state={(() => {
-                              const dataset = map.nodes.find(
-                                (node): node is Dataset =>
-                                  node.type === 'dataset' &&
-                                  node.id ===
-                                    (direction === 'Incoming' ? e.from_dataset : e.to_dataset),
-                              );
-                              return dataset ? datasetState(dataset, jobs, runs) : null;
-                            })()}
-                          />
-                          <span>
-                            {datasetLabel(
-                              map.nodes.find(
-                                (n) =>
-                                  n.type === 'dataset' &&
-                                  n.id ===
-                                    (direction === 'Incoming' ? e.from_dataset : e.to_dataset),
-                              ),
-                            )}
-                            <small>{e.kind.replaceAll('_', ' ')}</small>
-                          </span>
-                        </Button>
-                      ))}
-                    {!map.edges.some(
-                      (e) =>
-                        (direction === 'Incoming' ? e.to_dataset : e.from_dataset) ===
-                        selectedDataset.id,
-                    ) && <p className="hint">No relationships</p>}
-                  </div>
-                ))}
-                <div className="inspector-actions">
-                  {lastRun &&
-                    ['running', 'queued'].includes(lastRun.state) &&
-                    canCreateJob(selectedDataset) && (
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        disabled={busy}
-                        onClick={() =>
-                          void action(() => client.cancelRun(lastRun.id), 'Cancellation requested')
-                        }
-                      >
-                        Cancel run
-                      </Button>
-                    )}
-                  {selectedJobs[0] && canCreateJob(selectedDataset) && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      disabled={busy || selectedDataset.stale}
-                      onClick={() =>
-                        void action(() => client.runJob(selectedJobs[0].id), 'Run queued')
-                      }
-                    >
-                      Run now
-                    </Button>
-                  )}
-                  <Button type="button" variant="default" onClick={() => onQuery(selectedDataset)}>
-                    <Icon name="sql" />
-                    Query in SQL
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    disabled={
-                      busy ||
-                      !canCreateJob(selectedDataset) ||
-                      selectedDataset.stale ||
-                      ![
-                        'postgres',
-                        'sqlserver',
-                        'sqlite',
-                        'csv',
-                        'stripe',
-                        'salesforce',
-                        'noop',
-                      ].includes(
-                        (
-                          map.nodes.find((n) => n.id === selectedDataset.source_id) as
-                            MapSource | undefined
-                        )?.kind ?? '',
-                      )
-                    }
-                    onClick={() => onCreateJob(selectedDataset)}
-                  >
-                    <Icon name="plus" />
-                    Create sync job
-                  </Button>
-                </div>
-              </>
-            ) : (
-              selectedEdge && (
-                <>
-                  <Pill>{selectedEdge.kind.replaceAll('_', ' ')}</Pill>
-                  <dl>
-                    <dt>Confidence</dt>
-                    <dd>
-                      {selectedEdge.confidence === null
-                        ? 'Not specified'
-                        : Math.round(selectedEdge.confidence * 100) + '%'}
-                    </dd>
-                    <dt>From</dt>
-                    <dd className="mono">
-                      {datasetLabel(
-                        map.nodes.find(
-                          (n) => n.type === 'dataset' && n.id === selectedEdge.from_dataset,
-                        ),
-                      )}{' '}
-                      ({selectedEdge.from_cols.join(', ') || 'dataset'})
-                    </dd>
-                    <dt>To</dt>
-                    <dd className="mono">
-                      {datasetLabel(
-                        map.nodes.find(
-                          (n) => n.type === 'dataset' && n.id === selectedEdge.to_dataset,
-                        ),
-                      )}{' '}
-                      ({selectedEdge.to_cols.join(', ') || 'dataset'})
-                    </dd>
-                  </dl>
-                  {canManage && selectedEdge.kind === 'manual' && (
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      disabled={busy}
-                      onClick={removeSelected}
-                    >
-                      Delete manual edge
-                    </Button>
-                  )}
-                </>
-              )
-            )}
-          </div>
-        </Inspector>
+        />
       )}
       {fieldFocus && (
         <ColumnInspector
           focus={fieldFocus}
           graph={fieldGraph}
-          loading={!!fieldFocus && columnQuery.isPending}
+          loading={columnQuery.isPending}
           error={columnQuery.error}
           retry={() => void columnQuery.refetch()}
           onClose={() => setFieldFocus(null)}
@@ -1278,150 +442,24 @@ function Canvas({
           onNavigate={onNavigateUsage}
         />
       )}
-      <Dialog
+      <AddRelationshipDialog
         open={addingRelationship}
-        onOpenChange={(open) => {
-          if (!busy) setAddingRelationship(open);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add relationship</DialogTitle>
-            <DialogDescription>
-              Choose the source and target columns for a manual relationship.
-            </DialogDescription>
-          </DialogHeader>
-          <form
-            className="space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setRelationshipError('');
-              createRelationship(sourceDataset, sourceColumn, targetDataset, targetColumn, true);
-            }}
-          >
-            <Choice
-              label="Source dataset"
-              value={sourceDataset}
-              disabled={busy}
-              options={[
-                { value: '', label: 'Choose dataset' },
-                ...relationshipDatasets.map((d) => ({ value: d.id, label: datasetLabel(d) })),
-              ]}
-              onChange={(value) => {
-                setSourceDataset(value);
-                setSourceColumn('');
-              }}
-            />
-            <Choice
-              label="Source column"
-              value={sourceColumn}
-              disabled={busy || !sourceDataset}
-              options={[
-                { value: '', label: 'Choose column' },
-                ...(relationshipDatasets.find((d) => d.id === sourceDataset)?.columns ?? []).map(
-                  (c) => ({ value: c.name, label: c.name }),
-                ),
-              ]}
-              onChange={setSourceColumn}
-            />
-            <Choice
-              label="Target dataset"
-              value={targetDataset}
-              disabled={busy}
-              options={[
-                { value: '', label: 'Choose dataset' },
-                ...relationshipDatasets.map((d) => ({ value: d.id, label: datasetLabel(d) })),
-              ]}
-              onChange={(value) => {
-                setTargetDataset(value);
-                setTargetColumn('');
-              }}
-            />
-            <Choice
-              label="Target column"
-              value={targetColumn}
-              disabled={busy || !targetDataset}
-              options={[
-                { value: '', label: 'Choose column' },
-                ...(relationshipDatasets.find((d) => d.id === targetDataset)?.columns ?? []).map(
-                  (c) => ({ value: c.name, label: c.name }),
-                ),
-              ]}
-              onChange={setTargetColumn}
-            />
-            {relationshipError && (
-              <p role="alert" className="text-danger">
-                {relationshipError}
-              </p>
-            )}
-            <div className="flex justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={busy}
-                onClick={() => setAddingRelationship(false)}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={busy || !sourceColumn || !targetColumn}>
-                {busy ? 'Adding…' : 'Add relationship'}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-      <Dialog
-        open={removal.length > 0}
-        onOpenChange={(open) => {
-          if (!open && !busy) setRemoval([]);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              Delete{' '}
-              {removal.length === 1
-                ? 'manual relationship'
-                : removal.length + ' manual relationships'}
-              ?
-            </DialogTitle>
-            <DialogDescription>
-              This removes the selected relationships from the Data Map. This cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <ul className="max-h-48 overflow-auto text-sm">
-            {removal.map((edge) => (
-              <li key={edge.id}>
-                <code>
-                  {datasetLabel(relationshipDatasets.find((d) => d.id === edge.from_dataset))}.
-                  {edge.from_cols.join(', ')} →{' '}
-                  {datasetLabel(relationshipDatasets.find((d) => d.id === edge.to_dataset))}.
-                  {edge.to_cols.join(', ')}
-                </code>
-              </li>
-            ))}
-          </ul>
-          <div className="flex justify-end gap-2">
-            <Button autoFocus variant="outline" disabled={busy} onClick={() => setRemoval([])}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={busy || !canManage}
-              onClick={() =>
-                void action(async () => {
-                  for (const edge of removal) {
-                    await client.deleteRelationship(edge.id);
-                    setRemoval((pending) => pending.filter((item) => item.id !== edge.id));
-                  }
-                }, 'Manual relationships deleted')
-              }
-            >
-              {busy ? 'Deleting…' : 'Delete relationships'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={setAddingRelationship}
+        datasets={relationshipDatasets}
+        busy={busy}
+        canManage={canManage}
+        client={client}
+        action={action}
+      />
+      <RemoveRelationshipsDialog
+        removal={removal}
+        onRemoval={setRemoval}
+        datasets={relationshipDatasets}
+        busy={busy}
+        canManage={canManage}
+        client={client}
+        action={action}
+      />
       <span className="visually-hidden" role="status">
         {hover}
       </span>
