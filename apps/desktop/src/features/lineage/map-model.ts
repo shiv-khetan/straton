@@ -26,6 +26,7 @@ export type MapEdge = Edge<{
   description: string;
   route?: XYPosition[][];
 }>;
+export const edgeKinds: EdgeKind[] = ['declared_fk', 'inferred', 'lineage', 'manual'];
 export const TABLE_HEADER_HEIGHT = 64;
 export const TABLE_ROW_HEIGHT = 28;
 export const TABLE_FOOTER_HEIGHT = 32;

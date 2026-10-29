@@ -153,3 +153,13 @@ export function runKpi(runs: Run[], now = Date.now(), state?: string) {
   ).length;
   return { current, previous, delta: current - previous };
 }
+// Source kinds the sync engine can pull from; datasets on other sources cannot seed a job.
+export const syncableKinds = [
+  'postgres',
+  'sqlserver',
+  'sqlite',
+  'csv',
+  'stripe',
+  'salesforce',
+  'noop',
+];
