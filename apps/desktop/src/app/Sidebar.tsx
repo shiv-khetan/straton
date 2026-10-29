@@ -95,7 +95,7 @@ export function Sidebar({ me, onNavigate }: { me: Me | null; onNavigate: (route:
                               data-nav-focus
                               className={
                                 'flex min-h-8 w-full items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-left text-nav transition-colors duration-fast ease-workbench disabled:opacity-50 ' +
-                                (rail ? 'justify-center px-1 ' : 'pr-9 ') +
+                                (rail ? 'justify-center px-1 ' : 'pe-9 ') +
                                 (page === route
                                   ? 'bg-primary-soft font-medium text-primary'
                                   : 'text-ink-2 hover:bg-panel-2 hover:text-ink')

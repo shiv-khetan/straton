@@ -62,7 +62,7 @@ export function RunTable({
               <TableCell className="text-right tabular-nums">
                 <span title={run.fallback_reason ?? undefined}>{runStats(run)}</span>
                 {run.fallback_reason && (
-                  <span className="ml-2">
+                  <span className="ms-2">
                     <StatePill state="warning" label="Full refresh fallback" />
                     <span className="visually-hidden">{run.fallback_reason}</span>
                   </span>

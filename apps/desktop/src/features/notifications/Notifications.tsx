@@ -123,7 +123,7 @@ export function Notifications({
                 </div>
                 {n.body && <p className="break-words text-caption text-ink-2">{n.body}</p>}
                 <div className="flex flex-wrap items-center gap-2">
-                  <time className="mr-auto font-mono text-caption text-ink-2">
+                  <time className="me-auto font-mono text-caption text-ink-2">
                     {relativeTime(n.created_at * 1000)}
                   </time>
                   {!n.read && (

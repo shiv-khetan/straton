@@ -62,7 +62,7 @@
   .sparkline {
     display: block;
     flex-shrink: 0;
-    margin-left: auto;
+    margin-inline-start: auto;
     align-self: center;
     font-family: var(--font-ui);
     font-variant-numeric: tabular-nums;

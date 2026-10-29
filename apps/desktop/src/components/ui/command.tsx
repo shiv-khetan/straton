@@ -145,7 +145,7 @@ function CommandShortcut({ className, ...props }: React.ComponentProps<'span'>) 
   return (
     <span
       data-slot="command-shortcut"
-      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}
+      className={cn('ms-auto text-xs tracking-widest text-muted-foreground', className)}
       {...props}
     />
   );

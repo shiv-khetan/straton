@@ -171,7 +171,7 @@ function SyncActivity({ runs }: { runs: Run[] }) {
             {tooltip.rows.map(({ state, value }) => (
               <div className="tooltip-row" key={state}>
                 <StatePill state={state} />
-                <span className="ml-auto tabular-nums">{value}</span>
+                <span className="ms-auto tabular-nums">{value}</span>
               </div>
             ))}
           </div>

@@ -115,7 +115,7 @@ export function TitleBar({
   }
   return (
     <header
-      className="title-bar flex h-12 shrink-0 items-center gap-2 border-b border-line bg-surface pl-3"
+      className="title-bar flex h-12 shrink-0 items-center gap-2 border-b border-line bg-surface ps-3"
       data-tauri-drag-region
       onMouseDown={(event) => {
         if (
@@ -136,7 +136,7 @@ export function TitleBar({
       }}
     >
       <span
-        className="pointer-events-none flex shrink-0 items-center gap-2 pr-3 text-body font-semibold"
+        className="pointer-events-none flex shrink-0 items-center gap-2 pe-3 text-body font-semibold"
         data-tauri-drag-region
       >
         <img src={logo} width={22} height={22} alt="" draggable={false} />
@@ -156,7 +156,7 @@ export function TitleBar({
       </Button>
       <span
         role="status"
-        className="ml-auto flex shrink-0 items-center gap-1.5 px-1.5 text-caption text-ink-2"
+        className="ms-auto flex shrink-0 items-center gap-1.5 px-1.5 text-caption text-ink-2"
         title={workspace + ' · ' + live}
       >
         <span className={'size-1.5 rounded-full ' + (online ? 'bg-success' : 'bg-danger')} />
@@ -220,7 +220,7 @@ export function TitleBar({
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onShortcuts}>
             Keyboard shortcuts
-            <span className="ml-auto font-mono text-caption text-ink-3">?</span>
+            <span className="ms-auto font-mono text-caption text-ink-3">?</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onConnect}>Connect</DropdownMenuItem>
@@ -230,7 +230,7 @@ export function TitleBar({
         </DropdownMenuContent>
       </DropdownMenu>
       {native && (
-        <div className="ml-1 flex h-full shrink-0">
+        <div className="ms-1 flex h-full shrink-0">
           <button
             type="button"
             className="window-control"
