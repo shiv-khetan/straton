@@ -265,7 +265,7 @@
     z-index: var(--z-sticky);
   }
   .map-inspector .panel-heading h2 {
-    font: 600 var(--body-sm) var(--font-mono);
+    font: 600 var(--body-md) var(--font-ui);
     @apply overflow-hidden text-ellipsis;
   }
   .inspector-content {
