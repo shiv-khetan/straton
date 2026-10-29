@@ -38,6 +38,7 @@ export function TitleBar({
   consoleDisabled,
   onConsole,
   consoleCollapsed,
+  onShortcuts,
 }: {
   workspace: string;
   page: Route;
@@ -55,6 +56,7 @@ export function TitleBar({
   consoleDisabled: boolean;
   onConsole: () => void;
   consoleCollapsed: boolean;
+  onShortcuts: () => void;
 }) {
   const [accountPointerFocus, setAccountPointerFocus] = useState(false);
   useEffect(() => {
@@ -243,6 +245,11 @@ export function TitleBar({
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={onShortcuts}>
+            Keyboard shortcuts
+            <span className="ml-auto font-mono text-caption text-ink-3">?</span>
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onConnect}>Connect</DropdownMenuItem>
           <DropdownMenuItem variant="destructive" disabled={busy || !connected} onSelect={onForget}>

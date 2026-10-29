@@ -1,5 +1,5 @@
 import { StatePill } from '@/components/workbench/primitives';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { Star } from 'lucide-react';
@@ -29,6 +29,7 @@ import { datasetState } from '@/features/console/workbench-model';
 import { CommandPalette } from './CommandPalette';
 import { ErrorBoundary } from './ErrorBoundary';
 import { Sidebar } from './Sidebar';
+import { ShortcutsDialog } from './ShortcutsDialog';
 import { TitleBar } from './TitleBar';
 import { useEngineData } from './useEngineData';
 import { lastPage, useRouteStore } from '@/stores/route';
@@ -62,6 +63,7 @@ function AppContent() {
   const cache = useQueryClient();
   const { page, navigate: setPage, reset: resetRoute } = useRouteStore();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [consoleCollapsed, setConsoleCollapsedState] = useState(
     () => safeStorage.getItem('straton:console:collapsed') !== 'false',
   );
@@ -115,6 +117,9 @@ function AppContent() {
     loading,
     error: queryError,
   } = useEngineData(rawClient, asRole);
+  // Global key handlers are registered once; they read the current identity through this ref.
+  const meRef = useRef(me);
+  meRef.current = me;
   const { visit, toggle, favorites } = useLibrary();
   const scope = (connection?.url ?? 'disconnected') + '|' + (me?.user.id ?? 'anonymous');
   const workspace = connection ? new URL(connection.url).host : 'Not connected';
@@ -177,6 +182,23 @@ function AppContent() {
   }, [connection, cache]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing = !!target?.closest(
+        'input, textarea, select, [contenteditable="true"], .monaco-editor',
+      );
+      if (event.key === '?' && !typing && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        setShortcutsOpen(true);
+      }
+      // Alt+1..5 jumps to a top-bar section's first page the user can open.
+      if (event.altKey && !event.ctrlKey && /^[1-9]$/.test(event.key)) {
+        const group = navigation[Number(event.key) - 1];
+        const target = group?.items.find((item) => routeAvailable(meRef.current, item.route));
+        if (target) {
+          event.preventDefault();
+          useRouteStore.getState().navigate(target.route);
+        }
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setPaletteOpen((value) => !value);
@@ -441,6 +463,7 @@ function AppContent() {
         consoleDisabled={page === 'Connect'}
         consoleCollapsed={consoleCollapsed}
         onConsole={() => setConsoleCollapsed(!consoleCollapsed)}
+        onShortcuts={() => setShortcutsOpen(true)}
       />
       <div className="flex min-h-0 flex-1">
         <Sidebar me={me} onNavigate={setPage} />
@@ -892,6 +915,7 @@ function AppContent() {
           )}
         </main>
       </div>
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <CommandPalette
         open={paletteOpen}
         commands={commands}
