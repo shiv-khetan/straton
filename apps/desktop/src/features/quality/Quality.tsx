@@ -118,7 +118,7 @@ export default function Quality({
             <span className="text-2xl font-semibold tabular-nums">
               {total ? summary.data.score.toFixed(1) + '%' : '—'}
             </span>
-            <span className="ml-2 text-ink-2">
+            <span className="ms-2 text-ink-2">
               {total ? 'of latest check runs passed' : 'Run a check to measure quality'}
             </span>
           </div>
@@ -136,7 +136,7 @@ export default function Quality({
               }
             />
           </div>
-          <div className="ml-auto">
+          <div className="ms-auto">
             <p className="text-caption text-ink-2">Daily pass rate · 30 days</p>
             <Sparkline
               series={summary.data.daily.map((d) => (d.total ? d.score : null))}

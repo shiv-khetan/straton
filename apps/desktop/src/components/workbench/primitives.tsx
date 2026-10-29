@@ -221,7 +221,7 @@ export function Sheet({
         className="w-[480px] max-w-[calc(100vw-24px)] gap-0 overflow-y-auto bg-panel p-0 sm:max-w-[480px]"
         aria-describedby={undefined}
       >
-        <SheetHeader className="sticky top-0 z-sticky border-b border-line bg-panel p-4 pr-12">
+        <SheetHeader className="sticky top-0 z-sticky border-b border-line bg-panel p-4 pe-12">
           <SheetTitle>{title}</SheetTitle>
         </SheetHeader>
         <fieldset disabled={readOnly} className="min-w-0 border-0 p-4">
@@ -498,7 +498,7 @@ export function Sparkline({
   // A trend needs three readings; fewer is said in words rather than drawn as a stray mark.
   if (series.filter((n) => n !== null).length < minPoints)
     return (
-      <span className="ml-auto self-center text-xs text-ink-3" role="img" aria-label={label}>
+      <span className="ms-auto self-center text-xs text-ink-3" role="img" aria-label={label}>
         {hasData ? 'Not enough history' : 'No activity'}
       </span>
     );

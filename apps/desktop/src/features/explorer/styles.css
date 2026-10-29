@@ -12,7 +12,7 @@
     width: 200px;
     flex-shrink: 0;
     background: var(--surface);
-    border-right: 1px solid var(--line);
+    border-inline-end: 1px solid var(--line);
     overflow: auto;
     padding: 16px 12px;
   }
@@ -31,7 +31,7 @@
     margin-top: 8px;
   }
   .explorer-tree details details {
-    margin-left: 16px;
+    margin-inline-start: 16px;
   }
   .explorer-tree summary {
     display: flex;
@@ -143,7 +143,7 @@
     font-size: var(--body-sm);
   }
   .pagination > span {
-    margin-right: auto;
+    margin-inline-end: auto;
   }
   .pagination label {
     display: flex;
@@ -266,7 +266,7 @@
   }
   .column-resize {
     position: absolute;
-    right: 0;
+    inset-inline-end: 0;
     top: 0;
     height: 100%;
     width: 6px;
