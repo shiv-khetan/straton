@@ -929,24 +929,27 @@ function Canvas({
             </Panel>
           </ReactFlow>
         </div>
-        <ConsoleDrawer
-          tab={consoleTab}
-          onTab={setConsoleTab}
-          collapsed={consoleCollapsed}
-          onCollapsed={onConsoleCollapsed}
-          events={events}
-        >
-          <RunHistory
-            jobs={jobs}
-            runs={selectedRuns}
-            busy={busy}
-            cancel={
-              selectedDataset && canCreateJob(selectedDataset)
-                ? (id) => void action(() => client.cancelRun(id), 'Cancellation requested')
-                : undefined
-            }
-          />
-        </ConsoleDrawer>
+        {/* Hidden until the title-bar console toggle opens it, as on every other page. */}
+        {!consoleCollapsed && (
+          <ConsoleDrawer
+            tab={consoleTab}
+            onTab={setConsoleTab}
+            collapsed={consoleCollapsed}
+            onCollapsed={onConsoleCollapsed}
+            events={events}
+          >
+            <RunHistory
+              jobs={jobs}
+              runs={selectedRuns}
+              busy={busy}
+              cancel={
+                selectedDataset && canCreateJob(selectedDataset)
+                  ? (id) => void action(() => client.cancelRun(id), 'Cancellation requested')
+                  : undefined
+              }
+            />
+          </ConsoleDrawer>
+        )}
       </div>
       {!fieldFocus && (selectedDataset || selectedEdge) && (
         <Inspector
