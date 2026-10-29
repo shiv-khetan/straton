@@ -8,5 +8,6 @@ export default defineConfig({
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   clearScreen: false,
   server: { host: '127.0.0.1', port: 1420, strictPort: true },
-  build: { chunkSizeWarningLimit: 1600 },
+  // No public source maps in shipped bundles (web best practice).
+  build: { chunkSizeWarningLimit: 1600, sourcemap: false },
 });

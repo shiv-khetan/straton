@@ -73,9 +73,8 @@ test('run paging preserves order, handles the sentinel and reports exact page bo
 test('every essential edge state maintains at least 3:1 contrast in both themes', async () => {
   const css = await readFile(new URL('../src/styles/tailwind.css', import.meta.url), 'utf8');
   const edges = await readFile(new URL('../src/features/pipelines/styles.css', import.meta.url), 'utf8');
-  const declarations = (block) => Object.fromEntries([...block.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
-  const light = declarations(css.match(/:root\s*\{([^}]+)\}/)[1]);
-  const dark = { ...light, ...declarations(css.match(/\[data-theme=['"]dark['"]\]\s*\{([^}]+)\}/)[1]) };
+  const { themeTokens } = await import('./css-tokens.mjs');
+  const { light, dark } = themeTokens(css);
   const rgb = (hex) => hex.slice(1).match(/../g).map((part) => parseInt(part, 16));
   const luminance = (color) => color.map((channel) => channel / 255).map((value) => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
   const contrast = (a, b) => (Math.max(luminance(a), luminance(b)) + .05) / (Math.min(luminance(a), luminance(b)) + .05);

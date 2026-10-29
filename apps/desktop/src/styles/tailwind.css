@@ -14,66 +14,82 @@
 @import '../styles/flow.css';
 
 :root {
-  color-scheme: light;
+  /* One switching mechanism: tokens use light-dark(); color-scheme picks the side. */
+  color-scheme: light dark;
   font-family: var(--font-ui);
   --font-ui: 'Geist Variable', 'Segoe UI', system-ui, sans-serif;
   font-size: 16px;
   color: var(--ink);
   background: var(--bg);
-  --bg: #ffffff;
-  --bg-deep: #ffffff;
-  --panel: #f9fafb;
-  --panel-2: #f3f4f6;
-  --surface: #ffffff;
-  --surface-2: #f9fafb;
-  --surface-3: #f3f4f6;
-  --line: #e5e7eb;
-  --control-border: #89919f;
-  --ink: #111827;
-  --ink-2: #4b5563;
-  --ink-3: #5f6673;
-  --mark: #4f46e5;
-  --cell-empty: #f3f4f6;
-  --primary: #4f46e5;
+  --bg: light-dark(#ffffff, #0b0d12);
+  --bg-deep: light-dark(#ffffff, #08090d);
+  --panel: light-dark(#f9fafb, #111318);
+  --panel-2: light-dark(#f3f4f6, #1a1d24);
+  --surface: light-dark(#ffffff, #111318);
+  --surface-2: light-dark(#f9fafb, #181b22);
+  --surface-3: light-dark(#f3f4f6, #1f232b);
+  --line: light-dark(#e5e7eb, #262a33);
+  --control-border: light-dark(#89919f, #606b7e);
+  --ink: light-dark(#111827, #e5e7eb);
+  --ink-2: light-dark(#4b5563, #a8aebb);
+  --ink-3: light-dark(#5f6673, #8b919d);
+  --mark: light-dark(#4f46e5, #818cf8);
+  --cell-empty: light-dark(#f3f4f6, #181b22);
+  --primary: light-dark(#4f46e5, #818cf8);
   /* Categorical chart series: indigo-led, never status colours. */
-  --chart-1: #4f46e5;
-  --chart-2: #0284c7;
-  --chart-3: #0d9488;
-  --chart-4: #a16207;
-  --chart-5: #9333ea;
-  --primary-hover: #4338ca;
-  --primary-tint: #eef2ff;
-  --on-primary: #ffffff;
-  --on-primary-hover: #ffffff;
-  --running: #4f46e5;
-  --success: #15803d;
-  --warning: #b45309;
-  --danger: #dc2626;
-  --danger-container: #dc2626;
-  --running-tint: rgb(79 70 229 / 10%);
-  --success-tint: rgb(22 163 74 / 10%);
-  --warning-tint: rgb(217 119 6 / 12%);
-  --danger-tint: rgb(220 38 38 / 10%);
+  --chart-1: light-dark(#4f46e5, #818cf8);
+  --chart-2: light-dark(#0284c7, #38bdf8);
+  --chart-3: light-dark(#0d9488, #2dd4bf);
+  --chart-4: light-dark(#a16207, #facc15);
+  --chart-5: light-dark(#9333ea, #c084fc);
+  --primary-hover: light-dark(#4338ca, #a5b4fc);
+  --primary-tint: light-dark(#eef2ff, rgb(129 140 248 / 14%));
+  --on-primary: light-dark(#ffffff, #0b0d12);
+  --on-primary-hover: light-dark(#ffffff, #0b0d12);
+  --running: light-dark(#4f46e5, #818cf8);
+  --success: light-dark(#15803d, #4ade80);
+  --warning: light-dark(#b45309, #fbbf24);
+  --danger: light-dark(#dc2626, #f87171);
+  --danger-container: light-dark(#dc2626, #7f1d1d);
+  --running-tint: light-dark(rgb(79 70 229 / 10%), rgb(129 140 248 / 14%));
+  --success-tint: light-dark(rgb(22 163 74 / 10%), rgb(74 222 128 / 12%));
+  --warning-tint: light-dark(rgb(217 119 6 / 12%), rgb(251 191 36 / 12%));
+  --danger-tint: light-dark(rgb(220 38 38 / 10%), rgb(248 113 113 / 12%));
   /* Deeper status text preserves AA on the specified 10% chip tints. */
-  --success-ink: #166534;
-  --warning-ink: #92400e;
-  --danger-ink: #b91c1c;
-  --info-ink: #4338ca;
-  --primary-50: var(--primary-tint);
-  --success-50: color-mix(in srgb, var(--success) 10%, var(--surface));
-  --warning-50: color-mix(in srgb, var(--warning) 10%, var(--surface));
-  --danger-50: color-mix(in srgb, var(--danger-container) 10%, var(--surface));
-  --info-50: color-mix(in srgb, var(--running) 10%, var(--surface));
-  --muted: var(--panel);
+  --success-ink: light-dark(#166534, #4ade80);
+  --warning-ink: light-dark(#92400e, #fbbf24);
+  --danger-ink: light-dark(#b91c1c, #f87171);
+  --info-ink: light-dark(#4338ca, #a5b4fc);
+  --primary-50: light-dark(
+    var(--primary-tint),
+    color-mix(in srgb, var(--primary) 12%, var(--surface))
+  );
+  --success-50: light-dark(
+    color-mix(in srgb, var(--success) 10%, var(--surface)),
+    color-mix(in srgb, var(--success) 12%, var(--surface))
+  );
+  --warning-50: light-dark(
+    color-mix(in srgb, var(--warning) 10%, var(--surface)),
+    color-mix(in srgb, var(--warning) 12%, var(--surface))
+  );
+  --danger-50: light-dark(
+    color-mix(in srgb, var(--danger-container) 10%, var(--surface)),
+    color-mix(in srgb, var(--danger-container) 12%, var(--surface))
+  );
+  --info-50: light-dark(
+    color-mix(in srgb, var(--running) 10%, var(--surface)),
+    color-mix(in srgb, var(--running) 12%, var(--surface))
+  );
+  --muted: light-dark(var(--panel), var(--ink-3));
   --border: var(--line);
-  --selected: var(--primary-tint);
+  --selected: light-dark(var(--primary-tint), var(--surface-2));
   --primary-300: var(--primary);
   --edge-fk: var(--primary);
   --edge-inferred: var(--warning);
   --edge-lineage: var(--success);
   --edge-manual: var(--ink-2);
   --edge-quiet: var(--line);
-  --grid-dot: color-mix(in srgb, var(--line) 50%, transparent);
+  --grid-dot: light-dark(color-mix(in srgb, var(--line) 50%, transparent), rgb(229 231 235 / 5%));
   --font-code: 'JetBrains Mono Variable', Consolas, monospace;
   --code-sm: 0.8125rem;
   --body-sm: 0.8125rem;
@@ -110,134 +126,23 @@
   --duration-tooltip: 120ms;
   --z-dropdown: 35;
   --z-modal-backdrop: 40;
-  --on-danger: #ffffff;
+  --on-danger: light-dark(#ffffff, #1a0505);
   --scrim: rgb(17 24 39 / 45%);
-  --scroll-thumb: #d1d5db;
-  --scroll-thumb-hover: #9ca3af;
+  --scroll-thumb: light-dark(#d1d5db, #2f343e);
+  --scroll-thumb-hover: light-dark(#9ca3af, #454b57);
   --tooltip-bg: #111827;
   --tooltip-ink: #ffffff;
   --popover: var(--surface);
   --popover-foreground: var(--ink);
   --radius: var(--radius-control);
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) {
-    color-scheme: dark;
-    --scroll-thumb: #2f343e;
-    --scroll-thumb-hover: #454b57;
-    --bg: #0b0d12;
-    --bg-deep: #08090d;
-    --panel: #111318;
-    --surface: #111318;
-    --surface-2: #181b22;
-    --surface-3: #1f232b;
-    --line: #262a33;
-    --control-border: #606b7e;
-    --ink: #e5e7eb;
-    --ink-2: #a8aebb;
-    --ink-3: #8b919d;
-    --primary: #818cf8;
-    --chart-1: #818cf8;
-    --chart-2: #38bdf8;
-    --chart-3: #2dd4bf;
-    --chart-4: #facc15;
-    --chart-5: #c084fc;
-    --primary-hover: #a5b4fc;
-    --on-primary: #0b0d12;
-    --on-primary-hover: #0b0d12;
-    --running: #818cf8;
-    --success: #4ade80;
-    --warning: #fbbf24;
-    --danger: #f87171;
-    --danger-container: #7f1d1d;
-    --primary-tint: rgb(129 140 248 / 14%);
-    --running-tint: rgb(129 140 248 / 14%);
-    --success-tint: rgb(74 222 128 / 12%);
-    --warning-tint: rgb(251 191 36 / 12%);
-    --danger-tint: rgb(248 113 113 / 12%);
-    --success-ink: #4ade80;
-    --warning-ink: #fbbf24;
-    --danger-ink: #f87171;
-    --info-ink: #a5b4fc;
-    --primary-50: color-mix(in srgb, var(--primary) 12%, var(--surface));
-    --success-50: color-mix(in srgb, var(--success) 12%, var(--surface));
-    --warning-50: color-mix(in srgb, var(--warning) 12%, var(--surface));
-    --danger-50: color-mix(in srgb, var(--danger-container) 12%, var(--surface));
-    --info-50: color-mix(in srgb, var(--running) 12%, var(--surface));
-    --muted: var(--ink-3);
-    --border: var(--line);
-    --selected: var(--surface-2);
-    --primary-300: var(--primary);
-    --edge-fk: var(--primary);
-    --edge-inferred: var(--warning);
-    --edge-lineage: var(--success);
-    --edge-manual: var(--ink-2);
-    --edge-quiet: var(--line);
-    --grid-dot: rgb(229 231 235 / 5%);
-    --panel-2: #1a1d24;
-    --mark: #818cf8;
-    --cell-empty: #181b22;
-    --on-danger: #1a0505;
-  }
+[data-theme='light'] {
+  color-scheme: light;
 }
 [data-theme='dark'] {
   color-scheme: dark;
-  --scroll-thumb: #2f343e;
-  --scroll-thumb-hover: #454b57;
-  --bg: #0b0d12;
-  --bg-deep: #08090d;
-  --panel: #111318;
-  --surface: #111318;
-  --surface-2: #181b22;
-  --surface-3: #1f232b;
-  --line: #262a33;
-  --control-border: #606b7e;
-  --ink: #e5e7eb;
-  --ink-2: #a8aebb;
-  --ink-3: #8b919d;
-  --primary: #818cf8;
-  --chart-1: #818cf8;
-  --chart-2: #38bdf8;
-  --chart-3: #2dd4bf;
-  --chart-4: #facc15;
-  --chart-5: #c084fc;
-  --primary-hover: #a5b4fc;
-  --on-primary: #0b0d12;
-  --on-primary-hover: #0b0d12;
-  --running: #818cf8;
-  --success: #4ade80;
-  --warning: #fbbf24;
-  --danger: #f87171;
-  --danger-container: #7f1d1d;
-  --primary-tint: rgb(129 140 248 / 14%);
-  --running-tint: rgb(129 140 248 / 14%);
-  --success-tint: rgb(74 222 128 / 12%);
-  --warning-tint: rgb(251 191 36 / 12%);
-  --danger-tint: rgb(248 113 113 / 12%);
-  --success-ink: #4ade80;
-  --warning-ink: #fbbf24;
-  --danger-ink: #f87171;
-  --info-ink: #a5b4fc;
-  --primary-50: color-mix(in srgb, var(--primary) 12%, var(--surface));
-  --success-50: color-mix(in srgb, var(--success) 12%, var(--surface));
-  --warning-50: color-mix(in srgb, var(--warning) 12%, var(--surface));
-  --danger-50: color-mix(in srgb, var(--danger-container) 12%, var(--surface));
-  --info-50: color-mix(in srgb, var(--running) 12%, var(--surface));
-  --muted: var(--ink-3);
-  --border: var(--line);
-  --selected: var(--surface-2);
-  --primary-300: var(--primary);
-  --edge-fk: var(--primary);
-  --edge-inferred: var(--warning);
-  --edge-lineage: var(--success);
-  --edge-manual: var(--ink-2);
-  --edge-quiet: var(--line);
-  --grid-dot: rgb(229 231 235 / 5%);
-  --panel-2: #1a1d24;
-  --mark: #818cf8;
-  --cell-empty: #181b22;
-  --on-danger: #1a0505;
 }
+
 @theme inline {
   --color-background: var(--bg);
   --color-foreground: var(--ink);
