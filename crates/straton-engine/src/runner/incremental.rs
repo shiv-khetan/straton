@@ -212,9 +212,8 @@ pub(crate) async fn prepare(
                 .get::<Option<String>, _>("watermark_column")
                 .ok_or_else(|| anyhow::anyhow!("watermark column is required"))?;
             ensure!(
-                ds.columns
-                    .iter()
-                    .any(|c| c.name == column && straton_core::eligible_watermark(&c.data_type)),
+                ds.columns.iter().any(|c| c.name == column
+                    && straton_core::eligible_source_watermark(&kind, &column, &c.data_type)),
                 "watermark column is missing or no longer has an eligible type"
             );
             column

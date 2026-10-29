@@ -210,6 +210,39 @@ async fn active(pool: &SqlitePool, target: &str) -> Result<DataKey> {
     tx.commit().await?;
     Ok(key)
 }
+// Sidecars use the dataset DEK with purpose-bound authenticated data and fresh nonces.
+impl DataKey {
+    pub(crate) fn seal_lookup(&self, context: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+        let nonce = random::<12>()?;
+        let mut body = bytes.to_vec();
+        wrapping_key(&self.key)?
+            .seal_in_place_append_tag(
+                aead::Nonce::assume_unique_for_key(nonce),
+                aead::Aad::from(associated_data(&self.id, context)?),
+                &mut body,
+            )
+            .map_err(|_| anyhow::anyhow!("lookup encryption failed"))?;
+        let mut result = nonce.to_vec();
+        result.extend(body);
+        Ok(result)
+    }
+    pub(crate) fn open_lookup(&self, context: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+        ensure!(
+            bytes.len() >= 12 + aead::AES_256_GCM.tag_len(),
+            "invalid lookup ciphertext"
+        );
+        let nonce = bytes[..12].try_into()?;
+        let mut body = bytes[12..].to_vec();
+        let plain = wrapping_key(&self.key)?
+            .open_in_place(
+                aead::Nonce::assume_unique_for_key(nonce),
+                aead::Aad::from(associated_data(&self.id, context)?),
+                &mut body,
+            )
+            .map_err(|_| anyhow::anyhow!("lookup authentication failed"))?;
+        Ok(plain.to_vec())
+    }
+}
 fn durable(path: &Path, value: &str) -> Result<()> {
     let temporary = path.with_extension("partial");
     let mut file = std::fs::File::create(&temporary)?;

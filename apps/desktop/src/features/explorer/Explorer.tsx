@@ -341,6 +341,12 @@ function TableView({
                 {table.columns.filter((c) => c.masked).length} masked columns
               </dd>
             </dl>
+            {table.sampled_documents != null && (
+              <p className="hint">
+                Inferred from {table.sampled_documents.toLocaleString()} sampled documents. Fields
+                may vary outside this sample.
+              </p>
+            )}
             <h3>Columns</h3>
             {table.columns.map((c) => (
               <div key={c.name} className="metadata-column">
@@ -348,6 +354,12 @@ function TableView({
                 <code>{c.name}</code>
                 <code className="hint">{c.type}</code>
                 {c.pk && <span className="policy-badge">PK</span>}
+                {table.sampled_documents != null && (
+                  <span className="hint">
+                    {table.field_coverage?.[c.name] ?? 0}/{table.sampled_documents} sampled ·{' '}
+                    {c.nullable ? 'Nullable' : 'Required in sample'}
+                  </span>
+                )}
                 {c.masked && <span className="policy-badge">Masked</span>}
               </div>
             ))}

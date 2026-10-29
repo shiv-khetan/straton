@@ -144,6 +144,9 @@ struct Connected {
 }
 mod advisor;
 mod http;
+mod mongodb;
+mod mysql;
+mod postgres_tls;
 mod salesforce;
 #[cfg(test)]
 mod salesforce_tests;
@@ -156,7 +159,7 @@ mod stripe_tests;
 pub fn incremental_style(kind: &str) -> straton_core::IncrementalStyle {
     use straton_core::IncrementalStyle::*;
     match kind {
-        "sqlite" | "postgres" | "sqlserver" => Column,
+        "sqlite" | "postgres" | "sqlserver" | "mysql" | "mongodb" => Column,
         "stripe" => Events {
             horizon_secs: Some(stripe::EVENT_HORIZON_SECS),
         },
@@ -170,6 +173,8 @@ pub fn incremental_style(kind: &str) -> straton_core::IncrementalStyle {
 pub fn build(kind: &str, config: &Value, secret: Option<&str>) -> Result<Box<dyn Connector>> {
     match kind {
         "sqlserver" => return sqlserver::build(config, secret),
+        "mysql" => return mysql::build(config, secret),
+        "mongodb" => return mongodb::build(config, secret),
         "stripe" => return stripe::build(config, secret),
         "salesforce" => return salesforce::build(config, secret),
         _ => {}
@@ -204,7 +209,7 @@ pub fn build(kind: &str, config: &Value, secret: Option<&str>) -> Result<Box<dyn
         ),
         "csv" => Backend::Csv(PathBuf::from(path()?)),
         "postgres" => {
-            let mut opts = PgConnectOptions::new()
+            let mut opts = postgres_tls::options(config)?
                 .host(
                     config
                         .get("host")
@@ -231,9 +236,7 @@ pub fn build(kind: &str, config: &Value, secret: Option<&str>) -> Result<Box<dyn
                         .and_then(Value::as_str)
                         .unwrap_or("postgres"),
                 );
-            if let Some(password) = secret {
-                opts = opts.password(password);
-            }
+            opts = opts.password(secret.unwrap_or_default());
             Backend::Postgres(
                 PgPoolOptions::new()
                     .max_connections(2)

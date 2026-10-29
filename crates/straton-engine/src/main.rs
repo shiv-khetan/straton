@@ -1,11 +1,14 @@
 mod access;
 mod advisor;
 mod api;
+#[cfg(test)]
+mod api_contract_tests;
 mod backup;
 mod catalog;
 mod column_lineage;
 mod config;
 mod credentials;
+mod hash_lookup;
 mod keys;
 mod lake_layout;
 mod models;

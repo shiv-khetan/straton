@@ -262,11 +262,29 @@ pub async fn view_plan(
     ids: &BTreeMap<String, String>,
     default_schema: &str,
 ) -> Result<Analysis> {
+    view_plan_dialect(definition, schemas, ids, default_schema, false).await
+}
+async fn view_plan_dialect(
+    definition: &str,
+    schemas: &[straton_core::DatasetSchema],
+    ids: &BTreeMap<String, String>,
+    default_schema: &str,
+    mysql: bool,
+) -> Result<Analysis> {
     use datafusion::sql::{
         parser::Statement,
-        sqlparser::{ast::Statement as Ast, dialect::MsSqlDialect, parser::Parser},
+        sqlparser::{
+            ast::Statement as Ast,
+            dialect::{Dialect, MsSqlDialect, MySqlDialect},
+            parser::Parser,
+        },
     };
-    let mut statements = Parser::parse_sql(&MsSqlDialect {}, definition)?;
+    let dialect: &dyn Dialect = if mysql {
+        &MySqlDialect {}
+    } else {
+        &MsSqlDialect {}
+    };
+    let mut statements = Parser::parse_sql(dialect, definition)?;
     ensure!(statements.len() == 1, "one view definition required");
     let Ast::CreateView(view) = statements.remove(0) else {
         anyhow::bail!("expected CREATE VIEW");
@@ -341,19 +359,30 @@ pub async fn discover_views(
     for ds in schemas.iter().filter(|d| d.metadata.is_view) {
         let dataset = &ids[&ds.dataset.name];
         let planned = match &ds.metadata.definition {
-            Some(definition) => {
-                view_plan(
-                    definition,
-                    schemas,
-                    ids,
-                    ds.dataset
-                        .name
-                        .split_once('.')
-                        .map_or("dbo", |(schema, _)| schema),
-                )
-                .await
+            Some(definition) if ds.metadata.dialect.as_deref() != Some("mongodb") => {
+                if ds.metadata.dialect.as_deref() == Some("mysql") {
+                    view_plan_dialect(
+                        definition,
+                        schemas,
+                        ids,
+                        ds.dataset.name.split_once('.').map_or("public", |(s, _)| s),
+                        true,
+                    )
+                    .await
+                } else {
+                    view_plan(
+                        definition,
+                        schemas,
+                        ids,
+                        ds.dataset
+                            .name
+                            .split_once('.')
+                            .map_or("dbo", |(schema, _)| schema),
+                    )
+                    .await
+                }
             }
-            None => Err(anyhow::anyhow!("view definition unavailable")),
+            _ => Err(anyhow::anyhow!("view definition unavailable")),
         };
         let mut analysis = planned.unwrap_or_else(|_| Analysis {
             incomplete: true,
@@ -373,13 +402,51 @@ pub async fn discover_views(
             analysis.usage.clear();
         }
         replace(tx, dataset, None, &analysis).await?;
-        let sources: BTreeSet<_> = analysis
+        let mut sources: BTreeSet<_> = analysis
             .outputs
             .iter()
             .flat_map(|(_, origins)| origins.iter())
             .chain(analysis.usage.iter())
             .map(|o| o.dataset.clone())
             .collect();
+        if analysis.incomplete
+            && ds.metadata.dialect.as_deref() == Some("mysql")
+            && let Some(definition) = &ds.metadata.definition
+        {
+            use datafusion::sql::sqlparser::{
+                ast::{Statement, visit_relations},
+                dialect::MySqlDialect,
+                parser::Parser,
+            };
+            if let Ok(statements) = Parser::parse_sql(&MySqlDialect {}, definition) {
+                for statement in statements {
+                    if let Statement::CreateView(view) = statement {
+                        let _ = visit_relations(&view.query, |name| {
+                            let parts: Option<Vec<_>> = name
+                                .0
+                                .iter()
+                                .map(|p| p.as_ident().map(|i| i.value.clone()))
+                                .collect();
+                            if let Some(parts) = parts {
+                                let name = if parts.len() == 1 {
+                                    format!(
+                                        "{}.{}",
+                                        ds.dataset.name.split_once('.').map_or("", |(s, _)| s),
+                                        parts[0]
+                                    )
+                                } else {
+                                    parts.join(".")
+                                };
+                                if let Some(id) = ids.get(&name) {
+                                    sources.insert(id.clone());
+                                }
+                            }
+                            std::ops::ControlFlow::<()>::Continue(())
+                        });
+                    }
+                }
+            }
+        }
         for source in sources {
             let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM relationships WHERE from_dataset=? AND to_dataset=? AND kind='lineage')").bind(&source).bind(dataset).fetch_one(&mut **tx).await?;
             if exists {

@@ -259,8 +259,18 @@ async fn columns(
         }
     }
     let mut edges = vec![];
-    let mut uses = BTreeSet::<(String, String, String, String)>::new();
+    let mut uses = BTreeSet::<(String, String, String, String, String)>::new();
     let model_names: BTreeMap<String,String> = sqlx::query("SELECT m.id,m.name,d.id AS dataset_id FROM models m JOIN datasets d ON d.source_id='straton-models' AND d.name=m.name").fetch_all(&a.pool).await?.into_iter().filter(|r|readable.contains(r.get::<&str,_>("dataset_id"))).map(|r|(r.get("id"),r.get("name"))).collect();
+    let view_names: BTreeMap<String, String> = fields
+        .values()
+        .filter(|f| f["kind"] == "view")
+        .map(|f| {
+            (
+                f["dataset_id"].as_str().unwrap().to_owned(),
+                f["dataset_name"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
     for r in &rows {
         let source = (
             r.get::<String, _>("source_dataset_id"),
@@ -279,7 +289,11 @@ async fn columns(
             if let Some(model) = model
                 && model_names.contains_key(&model)
             {
-                uses.insert((source.0, source.1, kind.into(), model));
+                uses.insert((source.0, source.1, kind.into(), "model".into(), model));
+            } else if let Some(view) = r.get::<Option<String>, _>("view_dataset_id")
+                && view_names.contains_key(&view)
+            {
+                uses.insert((source.0, source.1, kind.into(), "view".into(), view));
             }
             continue;
         }
@@ -325,7 +339,7 @@ async fn columns(
             .into_iter()
             .collect();
     let incomplete = seen.iter().any(|(dataset, _)| flags.contains(dataset));
-    let mut usage: Vec<Value> = uses.into_iter().filter(|(d,c,_,_)|seen.contains(&(d.clone(),c.clone()))).map(|(d,c,role,id)|json!({"dataset_id":d,"column":c,"role":role,"in":{"kind":"model","id":id,"name":model_names[&id]}})).collect();
+    let mut usage: Vec<Value> = uses.into_iter().filter(|(d,c,_,_,_)|seen.contains(&(d.clone(),c.clone()))).map(|(d,c,role,kind,id)|json!({"dataset_id":d,"column":c,"role":role,"in":{"kind":kind,"id":id,"name":if kind == "view" { &view_names[&id] } else { &model_names[&id] }}})).collect();
     let sql = a.sql.for_principal(p.clone());
     let _snapshot = crate::sql::SNAPSHOTS.read().await;
     let mut consumers = vec![];

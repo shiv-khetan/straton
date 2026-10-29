@@ -1,5 +1,9 @@
 import type { Column, Run } from '@/lib/api';
-export function eligibleWatermarkColumns(columns: Column[]): Column[] {
+export function eligibleWatermarkColumns(columns: Column[], kind?: string): Column[] {
+  if (kind === 'mongodb')
+    return columns.filter(
+      (c) => c.type.startsWith('Timestamp(') || (c.name === '_id' && c.type === 'Utf8'),
+    );
   return columns.filter(
     (c) =>
       /^(?:U?Int(?:8|16|32|64)|Date(?:32|64))$/.test(c.type) ||

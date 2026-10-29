@@ -122,6 +122,8 @@ export interface Connection {
 }
 export type SourceKind =
   | 'postgres'
+  | 'mysql'
+  | 'mongodb'
   | 'sqlserver'
   | 'sqlite'
   | 'csv'
@@ -194,6 +196,8 @@ export interface MapSource {
 }
 export interface Dataset {
   dataset_type?: 'table' | 'view';
+  sampled_documents?: number | null;
+  field_coverage?: Record<string, number>;
   approximate_row_count?: number | null;
   definition?: string | null;
   row_filtered?: boolean;
@@ -457,7 +461,7 @@ export interface ColumnGraph {
   }[];
   usage: (ColumnRef & {
     role: 'join_key' | 'filter' | 'group_key';
-    in: { kind: 'model' | 'check' | 'chart'; id: string; name: string };
+    in: { kind: 'model' | 'view' | 'check' | 'chart'; id: string; name: string };
   })[];
   incomplete: boolean;
 }
@@ -829,7 +833,13 @@ export interface DatasetOptimization {
     updated_at: number;
   } | null;
   next_layout: { sort_column: string | null; reason: string };
-  hash_index: { enabled: boolean; reason: string };
+  hash_index: {
+    enabled: boolean;
+    key_column: string | null;
+    generation: string | null;
+    size_bytes: number;
+    reason: string;
+  };
   metrics_note: string;
 }
 export type Api = ReturnType<typeof api>;

@@ -455,7 +455,22 @@ export default function Optimizer({
                     </Table>
                   )}
                   <p className="hint">{lake.data.metrics_note}</p>
-                  <p className="hint">Hash lookup index: {lake.data.hash_index.reason}</p>
+                  <h2>Hash lookup index</h2>
+                  <dl>
+                    <dt>Status</dt>
+                    <dd>{lake.data.hash_index.enabled ? 'Enabled' : 'Disabled'}</dd>
+                    <dt>Key column</dt>
+                    <dd>
+                      <code>{lake.data.hash_index.key_column ?? 'None'}</code>
+                    </dd>
+                    <dt>Generation</dt>
+                    <dd>
+                      <code>{lake.data.hash_index.generation ?? 'None'}</code>
+                    </dd>
+                    <dt>Size</dt>
+                    <dd>{lake.data.hash_index.size_bytes.toLocaleString()} bytes</dd>
+                  </dl>
+                  <p className="hint">{lake.data.hash_index.reason}</p>
                 </>
               )
             )}

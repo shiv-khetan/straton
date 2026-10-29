@@ -17,6 +17,8 @@ pub type Cursor = serde_json::Value;
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Postgres,
+    Mysql,
+    Mongodb,
     #[serde(rename = "sqlserver")]
     Sqlserver,
     Sqlite,
@@ -91,6 +93,13 @@ pub struct DatasetMetadata {
     pub approximate_rows: Option<i64>,
     #[serde(default)]
     pub indexes: Vec<DatasetIndex>,
+    /// Number of sampled documents and non-null observations per inferred field.
+    #[serde(default)]
+    pub sampled_documents: Option<usize>,
+    #[serde(default)]
+    pub field_coverage: std::collections::BTreeMap<String, usize>,
+    #[serde(default)]
+    pub dialect: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -253,6 +262,15 @@ pub fn eligible_watermark(data_type: &str) -> bool {
             | "Date64"
             | "FixedSizeBinary(8)"
     ) || data_type.starts_with("Timestamp(")
+}
+
+/// ObjectId watermarks are exposed as lossless hex strings in the lake.
+pub fn eligible_source_watermark(kind: &str, name: &str, data_type: &str) -> bool {
+    if kind == "mongodb" {
+        (name == "_id" && data_type == "Utf8") || data_type.starts_with("Timestamp(")
+    } else {
+        eligible_watermark(data_type)
+    }
 }
 
 pub type Batches<'a> = BoxStream<'a, Result<(RecordBatch, Cursor)>>;

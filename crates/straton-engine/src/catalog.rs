@@ -36,11 +36,13 @@ pub async fn upsert(
     );
     let id:String=sqlx::query_scalar("INSERT INTO datasets(id,source_id,name) VALUES(?,?,?) ON CONFLICT(source_id,name) DO UPDATE SET name=excluded.name,stale=0 RETURNING id").bind(store::id()).bind(source).bind(&ds.dataset.name).fetch_one(&mut **tx).await?;
     sqlx::query(
-        "UPDATE datasets SET dataset_type=?,definition=?,approximate_row_count=? WHERE id=?",
+        "UPDATE datasets SET dataset_type=?,definition=?,approximate_row_count=?,sampled_documents=?,field_coverage=? WHERE id=?",
     )
     .bind(if ds.metadata.is_view { "view" } else { "table" })
     .bind(&ds.metadata.definition)
     .bind(ds.metadata.approximate_rows)
+    .bind(ds.metadata.sampled_documents.map(|n| n as i64))
+    .bind(serde_json::to_string(&ds.metadata.field_coverage)?)
     .bind(&id)
     .execute(&mut **tx)
     .await?;
@@ -72,7 +74,8 @@ pub async fn discover(pool: &SqlitePool, id: &str) -> Result<()> {
     let schemas = connector.discover().await?;
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM relationships WHERE (kind='declared_fk' AND from_dataset IN(SELECT id FROM datasets WHERE source_id=?1)) OR (kind='lineage' AND to_dataset IN(SELECT id FROM datasets WHERE source_id=?1 AND dataset_type='view'))").bind(id).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM relationships WHERE kind='inferred'")
+    sqlx::query("DELETE FROM relationships WHERE kind='inferred' AND from_dataset IN (SELECT id FROM datasets WHERE source_id=?)")
+        .bind(id)
         .execute(&mut *tx)
         .await?;
     let mut ids = std::collections::BTreeMap::new();
@@ -118,7 +121,11 @@ pub async fn discover(pool: &SqlitePool, id: &str) -> Result<()> {
             .await?;
     }
     for ds in &schemas {
-        for r in &ds.relationships {
+        for r in ds
+            .relationships
+            .iter()
+            .filter(|r| !matches!(r.kind, straton_core::RelationshipKind::Inferred))
+        {
             if let (Some(from), Some(to)) = (ids.get(&r.from_dataset), ids.get(&r.to_dataset)) {
                 let mut r = r.clone();
                 r.from_dataset = from.clone();
@@ -129,6 +136,24 @@ pub async fn discover(pool: &SqlitePool, id: &str) -> Result<()> {
     }
     crate::column_lineage::discover_views(&mut tx, &schemas, &ids).await?;
     infer(&mut tx).await?;
+    // Generic name inference cannot distinguish BSON ObjectId from string IDs.
+    for ds in schemas
+        .iter()
+        .filter(|d| d.metadata.dialect.as_deref() == Some("mongodb"))
+    {
+        for r in ds
+            .relationships
+            .iter()
+            .filter(|r| matches!(r.kind, straton_core::RelationshipKind::Inferred))
+        {
+            if let (Some(from), Some(to)) = (ids.get(&r.from_dataset), ids.get(&r.to_dataset)) {
+                let mut r = r.clone();
+                r.from_dataset = from.clone();
+                r.to_dataset = to.clone();
+                edge(&mut tx, &r).await?;
+            }
+        }
+    }
     store::audit(&mut tx, "source.discovered", id, "").await?;
     tx.commit().await?;
     Ok(())
@@ -137,10 +162,10 @@ fn compatible(a: &str, b: &str) -> bool {
     a == b || (["Int16", "Int32", "Int64"].contains(&a) && ["Int16", "Int32", "Int64"].contains(&b))
 }
 pub async fn infer(tx: &mut Transaction<'_, Sqlite>) -> Result<()> {
-    sqlx::query("DELETE FROM relationships WHERE kind='inferred'")
+    sqlx::query("DELETE FROM relationships WHERE kind='inferred' AND from_dataset IN (SELECT d.id FROM datasets d JOIN sources s ON s.id=d.source_id WHERE s.kind!='mongodb')")
         .execute(&mut **tx)
         .await?;
-    let cols=sqlx::query("SELECT c.*,d.source_id,d.name AS dataset_name FROM columns c JOIN datasets d ON d.id=c.dataset_id WHERE d.stale=0").fetch_all(&mut **tx).await?;
+    let cols=sqlx::query("SELECT c.*,d.source_id,d.name AS dataset_name FROM columns c JOIN datasets d ON d.id=c.dataset_id JOIN sources s ON s.id=d.source_id WHERE d.stale=0 AND s.kind!='mongodb'").fetch_all(&mut **tx).await?;
     let declared = sqlx::query("SELECT * FROM relationships WHERE kind='declared_fk'")
         .fetch_all(&mut **tx)
         .await?;
@@ -242,7 +267,7 @@ pub async fn datamap(pool: &SqlitePool) -> Result<Value> {
         }
         .unwrap_or_else(|| name.to_owned());
         let columns:Vec<_>=cols.iter().filter(|c|c.get::<&str,_>("dataset_id")==id).map(|c|json!({"name":c.get::<String,_>("name"),"type":c.get::<String,_>("data_type"),"nullable":c.get::<bool,_>("nullable"),"pk":c.get::<bool,_>("primary_key")})).collect();
-        nodes.push(json!({"type":"dataset","id":id,"source_id":d.get::<String,_>("source_id"),"name":name,"display_name":display_name,"dataset_type":d.get::<String,_>("dataset_type"),"definition":d.get::<Option<String>,_>("definition"),"approximate_row_count":d.get::<Option<i64>,_>("approximate_row_count"),"stale":d.get::<bool,_>("stale"),"row_count":d.get::<Option<i64>,_>("row_count"),"last_synced_at":d.get::<Option<String>,_>("last_synced_at"),"sql_schema":schema_names[d.get::<&str,_>("source_id")],"sql_table":table_names[id],"columns":columns}));
+        nodes.push(json!({"type":"dataset","id":id,"source_id":d.get::<String,_>("source_id"),"name":name,"display_name":display_name,"dataset_type":d.get::<String,_>("dataset_type"),"definition":d.get::<Option<String>,_>("definition"),"approximate_row_count":d.get::<Option<i64>,_>("approximate_row_count"),"sampled_documents":d.get::<Option<i64>,_>("sampled_documents"),"field_coverage":serde_json::from_str::<Value>(d.get("field_coverage"))?,"stale":d.get::<bool,_>("stale"),"row_count":d.get::<Option<i64>,_>("row_count"),"last_synced_at":d.get::<Option<String>,_>("last_synced_at"),"sql_schema":schema_names[d.get::<&str,_>("source_id")],"sql_table":table_names[id],"columns":columns}));
     }
     let edges:Result<Vec<_>>=edges.iter().map(|r|Ok(json!({"id":r.get::<String,_>("id"),"kind":r.get::<String,_>("kind"),"from_dataset":r.get::<String,_>("from_dataset"),"from_cols":serde_json::from_str::<Value>(r.get("from_cols"))?,"to_dataset":r.get::<String,_>("to_dataset"),"to_cols":serde_json::from_str::<Value>(r.get("to_cols"))?,"confidence":r.get::<Option<f64>,_>("confidence")}))).collect();
     tx.commit().await?;

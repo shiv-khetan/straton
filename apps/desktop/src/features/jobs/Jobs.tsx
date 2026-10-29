@@ -241,6 +241,8 @@ export default function Jobs({
                     [
                       'postgres',
                       'sqlserver',
+                      'mysql',
+                      'mongodb',
                       'sqlite',
                       'csv',
                       'stripe',
@@ -308,11 +310,13 @@ export default function Jobs({
                     <option value="">
                       Select an integer, date, timestamp or rowversion column
                     </option>
-                    {eligibleWatermarkColumns(selectedDataset?.columns ?? []).map((c) => (
-                      <option key={c.name} value={c.name}>
-                        {c.name} · {c.type}
-                      </option>
-                    ))}
+                    {eligibleWatermarkColumns(selectedDataset?.columns ?? [], sourceKind).map(
+                      (c) => (
+                        <option key={c.name} value={c.name}>
+                          {c.name} · {c.type}
+                        </option>
+                      ),
+                    )}
                   </select>
                 </Field>
                 <Field label="Key columns">

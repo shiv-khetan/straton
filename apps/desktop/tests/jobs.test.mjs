@@ -18,3 +18,16 @@ console.log('Event-feed incremental validation and required watermark/key checks
 
 assert.deepEqual(eligibleWatermarkColumns([{name:'version', type:'FixedSizeBinary(8)'}, {name:'bytes', type:'Binary'}]).map(c=>c.name), ['version']);
 assert.equal(hasIncrementalSettings('sqlserver','version',['id']),true);
+
+const { databaseSslMode, mongoTlsDefault } = await import('../src/features/connections/source-model.ts');
+assert.equal(databaseSslMode('postgres', {host:'ep-test-pooler.us-east-2.aws.neon.tech'}), 'require');
+assert.equal(databaseSslMode('postgres', {host:'::1'}), 'prefer');
+assert.equal(databaseSslMode('mysql', {host:'db.example.net'}), 'required');
+assert.equal(databaseSslMode('mysql', {host:'127.0.0.2'}), 'preferred');
+assert.equal(databaseSslMode('mysql', {host:'127.999.1.1'}), 'required');
+assert.equal(databaseSslMode('postgres', {host:'localhost',sslmode:'verify-full'}), 'verify-full');
+assert.equal(mongoTlsDefault({hosts:['localhost:27017','[::1]:27018']}), false);
+assert.equal(mongoTlsDefault({hosts:['localhost:27017','remote:27017']}), true);
+assert.equal(mongoTlsDefault({host:'mongodb+srv://cluster.example.net'}), true);
+assert.deepEqual(eligibleWatermarkColumns([{name:'_id',type:'Utf8'},{name:'other',type:'Utf8'},{name:'n',type:'Int64'},{name:'updatedAt',type:'Timestamp(Millisecond, Some("+00:00"))'}], 'mongodb').map(c=>c.name), ['_id','updatedAt']);
+console.log('Database TLS defaults and MongoDB watermark eligibility passed.');

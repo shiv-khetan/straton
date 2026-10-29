@@ -33,6 +33,8 @@ pub struct Layout {
     pub bloom_columns: Vec<String>,
     pub row_group_size: usize,
     pub reason: String,
+    #[serde(default)]
+    pub hash_index: crate::hash_lookup::Status,
 }
 pub fn choose(counts: &[(String, String, String, i64)]) -> Layout {
     let mut scores = BTreeMap::<String, i64>::new();
@@ -56,6 +58,7 @@ pub fn choose(counts: &[(String, String, String, i64)]) -> Layout {
         bloom_columns: vec![],
         row_group_size: 65_536,
         reason,
+        hash_index: Default::default(),
     }
 }
 pub async fn decision(pool: &SqlitePool, ids: &[String]) -> Result<(Layout, Vec<String>)> {
@@ -65,7 +68,8 @@ pub async fn decision(pool: &SqlitePool, ids: &[String]) -> Result<(Layout, Vec<
         .iter()
         .map(|r| (r.get("column"), r.get("role"), r.get("op"), r.get("n")))
         .collect();
-    let layout = choose(&counts);
+    let mut layout = choose(&counts);
+    layout.hash_index.key_column = crate::hash_lookup::choose(pool, ids).await?;
     let bloom = counts
         .iter()
         .filter(|(_, role, op, n)| {
@@ -147,7 +151,8 @@ fn copy_directory(from: &Path, to: &Path, root: bool) -> Result<()> {
             copy_directory(&e.path(), &dst, false)?;
         } else if !root
             || (e.path().extension().is_none_or(|e| e != "parquet")
-                && e.file_name() != "_layout.json")
+                && e.file_name() != "_layout.json"
+                && e.file_name() != "_hash_lookup.bin")
         {
             std::fs::copy(e.path(), dst)?;
         }
@@ -292,6 +297,16 @@ pub async fn rewrite(
             let file = writer.into_inner()?;
             file.sync_all()?;
         }
+        if let Some(column) = layout.hash_index.key_column.clone() {
+            layout.hash_index = match crate::hash_lookup::build(path, &temporary, key, &column) {
+                Ok(status) => status,
+                Err(_) => crate::hash_lookup::Status {
+                    key_column: Some(column),
+                    reason: "Eligible workload, but this generation has an unsupported key or insufficient measured storage/pruning benefit.".into(),
+                    ..Default::default()
+                },
+            };
+        }
         let manifest = File::create(temporary.join("_layout.json"))?;
         serde_json::to_writer(&manifest, &layout)?;
         manifest.sync_all()?;
@@ -322,8 +337,8 @@ pub async fn persist(
     layout: &Layout,
 ) -> Result<()> {
     for id in ids {
-        sqlx::query("INSERT INTO dataset_layout(dataset_id,sort_column,bloom_columns,row_group_size,reason,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(dataset_id) DO UPDATE SET sort_column=excluded.sort_column,bloom_columns=excluded.bloom_columns,row_group_size=excluded.row_group_size,reason=excluded.reason,updated_at=excluded.updated_at")
- .bind(id).bind(&layout.sort_column).bind(serde_json::to_string(&layout.bloom_columns)?).bind(layout.row_group_size as i64).bind(&layout.reason).bind(store::now()).execute(&mut **tx).await?;
+        sqlx::query("INSERT INTO dataset_layout(dataset_id,sort_column,bloom_columns,row_group_size,reason,updated_at,hash_index_enabled) VALUES(?,?,?,?,?,?,?) ON CONFLICT(dataset_id) DO UPDATE SET sort_column=excluded.sort_column,bloom_columns=excluded.bloom_columns,row_group_size=excluded.row_group_size,reason=excluded.reason,updated_at=excluded.updated_at,hash_index_enabled=excluded.hash_index_enabled")
+ .bind(id).bind(&layout.sort_column).bind(serde_json::to_string(&layout.bloom_columns)?).bind(layout.row_group_size as i64).bind(&layout.reason).bind(store::now()).bind(layout.hash_index.enabled).execute(&mut **tx).await?;
     }
     Ok(())
 }
@@ -335,7 +350,7 @@ pub async fn publish(
 ) -> Result<Layout> {
     let ids:Vec<String>=sqlx::query_scalar("SELECT d.id FROM datasets d JOIN jobs j ON (d.source_id=j.source_id AND d.name=j.dataset) OR (d.source_id='straton-local-lake' AND d.name=j.source_id || '/' || j.dataset) JOIN runs r ON r.job_id=j.id WHERE r.id=?").bind(run).fetch_all(pool).await?;
     let (layout, bloom) = decision(pool, &ids).await?;
-    if layout.sort_column.is_none() {
+    if layout.sort_column.is_none() && layout.hash_index.key_column.is_none() {
         return Ok(layout);
     }
     rewrite(pool, path, key, layout, &bloom).await

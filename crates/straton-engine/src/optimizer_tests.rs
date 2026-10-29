@@ -421,6 +421,7 @@ async fn lake_layout_glob_safe_global_sort_bloom_statistics_and_recovery() {
         bloom_columns: vec![],
         row_group_size: 256,
         reason: "test workload".into(),
+        hash_index: Default::default(),
     };
     let layout = lake_layout::rewrite(&f.pool, &path, None, layout, &["id".into()])
         .await
@@ -500,4 +501,186 @@ async fn advisor_sqlserver_metadata_read_only_gated() {
         }
     }
     // This test deliberately never calls advisor_execute or any source mutation API.
+}
+
+#[test]
+fn mysql_and_mongodb_advice_uses_existing_indexes_and_escaped_commands() {
+    let mut t = workload();
+    t.name = "scratch.ord`ers".into();
+    t.workload[0].column = "em`ail".into();
+    t.columns.push("em`ail".into());
+    let metadata = json!({"version":"8.0.36","tables":[{"schema":"scratch","table":"ord`ers","engine":"InnoDB"}]});
+    let recommendations = advisor::generate("mysql", &t, &metadata);
+    assert_eq!(recommendations.len(), 1);
+    let r = &recommendations[0];
+    assert!(
+        r.ddl
+            .contains("ON `scratch`.`ord``ers` (`em``ail`) ALGORITHM=INPLACE LOCK=NONE;")
+    );
+    assert!(r.rollback_ddl.starts_with("DROP INDEX `ix_straton_"));
+    assert!(r.applicable);
+    let mut indexed = metadata.clone();
+    indexed["indexes"] =
+        json!([{"schema":"scratch","table":"ord`ers","name":"existing","columns":["em`ail","id"]}]);
+    assert!(advisor::generate("mysql", &t, &indexed).is_empty());
+    assert!(
+        !advisor::generate("mysql", &t, &json!({"version":"5.5.0"}))[0]
+            .ddl
+            .contains("LOCK=NONE")
+    );
+    t.name = "ord\"ers".into();
+    t.workload[0].column = "user\"Id".into();
+    t.columns.push("user\"Id".into());
+    let r = advisor::generate("mongodb", &t, &json!({})).remove(0);
+    let command: serde_json::Value = serde_json::from_str(&r.ddl).unwrap();
+    assert_eq!(command["createIndexes"], t.name);
+    assert_eq!(command["indexes"][0]["key"]["user\"Id"], 1);
+    let rollback: serde_json::Value = serde_json::from_str(&r.rollback_ddl).unwrap();
+    assert_eq!(rollback["index"], command["indexes"][0]["name"]);
+    assert!(
+        advisor::generate(
+            "mongodb",
+            &t,
+            &json!({"indexes":[{"table":t.name,"name":"existing","columns":["user\"Id"]}]})
+        )
+        .is_empty()
+    );
+}
+#[tokio::test]
+async fn mysql_and_mongo_apply_require_opt_in_and_keep_rollback_audit() {
+    for kind in ["mysql", "mongodb"] {
+        let f = Fixture::new().await;
+        sqlx::query("UPDATE sources SET kind=? WHERE id='source'")
+            .bind(kind)
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        insert_advice(&f, "new-advice").await;
+        let config = json!({});
+        sqlx::query("UPDATE advisor_recommendations SET source_config=? WHERE id='new-advice'")
+            .bind(advisor::config_hash(kind, &config))
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        assert!(
+            advisor::execute_with(&f.pool, "new-advice", "admin", false, |_, _| async {
+                panic!("disabled advisor must not execute")
+            })
+            .await
+            .is_err()
+        );
+        sqlx::query("UPDATE sources SET config=? WHERE id='source'")
+            .bind(json!({"advisor_may_write":true}).to_string())
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            advisor::execute_with(&f.pool, "new-advice", "admin", false, |_, _| async {
+                Ok(())
+            })
+            .await
+            .unwrap()["ok"],
+            true
+        );
+        assert_eq!(
+            advisor::execute_with(&f.pool, "new-advice", "admin", true, |_, ddl| async move {
+                assert!(ddl.starts_with("DROP INDEX"));
+                Ok(())
+            })
+            .await
+            .unwrap()["ok"],
+            true
+        );
+        let actions: Vec<String> =
+            sqlx::query_scalar("SELECT action FROM audit_log WHERE entity_id='new-advice'")
+                .fetch_all(&f.pool)
+                .await
+                .unwrap();
+        assert!(actions.contains(&"advisor.apply".into()));
+        assert!(actions.contains(&"advisor.rollback".into()));
+    }
+}
+
+// The sidecar is only a pruning hint: with it present, corrupt or missing, equality
+// queries must return exactly what a plain scan returned, encrypted or not.
+#[tokio::test]
+async fn hash_sidecar_never_changes_results() {
+    for encrypted in [false, true] {
+        let mut f = sql_fixture().await;
+        f.config.encryption.enabled = encrypted;
+        // 300k rows over 2,000 repeated names: enough row groups for the sidecar to pay off.
+        let input =
+            sqlx::SqlitePool::connect(&format!("sqlite:{}", f.dir.join("sql-input.db").display()))
+                .await
+                .unwrap();
+        sqlx::raw_sql("WITH RECURSIVE c(x) AS (SELECT 3 UNION ALL SELECT x+1 FROM c WHERE x<300000) INSERT INTO users SELECT x,'u'||(x%2000) FROM c;")
+            .execute(&input).await.unwrap();
+        input.close().await;
+        sqlx::query(
+            "UPDATE sources SET config=json_set(config,'$.batch_size',100000) WHERE id='source'",
+        )
+        .execute(&f.pool)
+        .await
+        .unwrap();
+        sql_sync(&f).await;
+        let id = dataset_id(&f, "users").await;
+        let a = app(&f);
+        let queries = [
+            "SELECT count(*) FROM app_db.users WHERE name='u7'",
+            "SELECT min(id),max(id) FROM app_db.users WHERE name='u1999'",
+            "SELECT count(*) FROM app_db.users WHERE name='absent'",
+            "SELECT id,name FROM app_db.users WHERE name='Alice'",
+            "SELECT count(*) FROM app_db.users",
+        ];
+        let run = |sql: &'static str| {
+            let a = a.clone();
+            async move {
+                let (s, v) = request(&a, "POST", "/v1/sql", json!({ "query": sql })).await;
+                assert_eq!(s, StatusCode::OK, "{v}");
+                v["rows"].clone()
+            }
+        };
+        let mut baseline = vec![];
+        for sql in queries {
+            baseline.push(run(sql).await);
+        }
+        assert_eq!(baseline[0], json!([[150]]));
+        sqlx::query("INSERT INTO query_stats(dataset_id,column,role,op,count,rows_scanned,rows_returned,elapsed_ms,last_seen) VALUES(?,'name','filter','equality',150,3000000,150,1,?) ON CONFLICT(dataset_id,column,role,op) DO UPDATE SET count=count+150,rows_scanned=rows_scanned+3000000")
+            .bind(&id).bind(crate::store::now()).execute(&f.pool).await.unwrap();
+        let (s, v) = request(
+            &a,
+            "POST",
+            &format!("/v1/optimizer/datasets/{id}/relayout"),
+            json!(null),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(
+            v["layout"]["hash_index"]["enabled"], true,
+            "encrypted={encrypted} {v}"
+        );
+        let output = f.dir.join("data/source/users");
+        let snapshot = output.join(
+            std::fs::read_to_string(output.join("_current"))
+                .unwrap()
+                .trim(),
+        );
+        let sidecar = snapshot.join("_hash_lookup.bin");
+        for stage in ["present", "corrupt", "missing"] {
+            match stage {
+                "corrupt" => std::fs::write(&sidecar, b"not a sidecar").unwrap(),
+                "missing" => std::fs::remove_file(&sidecar).unwrap(),
+                _ => assert!(sidecar.exists(), "sidecar should exist after relayout"),
+            }
+            for (sql, rows) in queries.iter().zip(&baseline) {
+                assert_eq!(
+                    run(sql).await,
+                    *rows,
+                    "encrypted={encrypted} stage={stage} {sql}"
+                );
+            }
+        }
+        drop(a);
+        f.close().await;
+    }
 }

@@ -5759,6 +5759,7 @@ async fn sqlserver_api_credentials_validation_and_metadata() {
                 kind: "NONCLUSTERED".into(),
                 unique_constraint: true,
             }],
+            ..Default::default()
         },
     };
     let mut tx = f.pool.begin().await.unwrap();
@@ -6188,3 +6189,118 @@ async fn column_lineage_view_discovery_persists_failure_without_guessing() {
 
 #[path = "optimizer_tests.rs"]
 mod optimizer_tests;
+
+#[tokio::test]
+async fn mysql_view_fallback_and_mongo_sample_metadata() {
+    use straton_core::{
+        Column, Dataset, DatasetMetadata, DatasetSchema, Relationship, RelationshipKind,
+    };
+    let f = Fixture::new().await;
+    let make = |name: &str, definition: Option<&str>| DatasetSchema {
+        dataset: Dataset {
+            id: String::new(),
+            source_id: "source".into(),
+            name: name.into(),
+        },
+        columns: vec![Column {
+            id: String::new(),
+            dataset_id: String::new(),
+            name: "id".into(),
+            data_type: "Int64".into(),
+            nullable: false,
+            primary_key: true,
+        }],
+        relationships: vec![],
+        metadata: DatasetMetadata {
+            is_view: definition.is_some(),
+            definition: definition.map(str::to_owned),
+            dialect: Some("mysql".into()),
+            ..Default::default()
+        },
+    };
+    let schemas = vec![
+        make("db.orders", None),
+        make(
+            "db.direct",
+            Some("CREATE VIEW db.direct AS SELECT id FROM db.orders"),
+        ),
+        make(
+            "db.complex",
+            Some(
+                "CREATE VIEW db.complex AS SELECT unsupported_source_function(id) AS id FROM db.orders",
+            ),
+        ),
+    ];
+    let mut tx = f.pool.begin().await.unwrap();
+    let mut ids = std::collections::BTreeMap::new();
+    for ds in &schemas {
+        ids.insert(
+            ds.dataset.name.clone(),
+            crate::catalog::upsert(&mut tx, "source", ds).await.unwrap(),
+        );
+    }
+    crate::column_lineage::discover_views(&mut tx, &schemas, &ids)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(
+        !sqlx::query_scalar::<_, bool>("SELECT lineage_incomplete FROM datasets WHERE id=?")
+            .bind(&ids["db.direct"])
+            .fetch_one(&f.pool)
+            .await
+            .unwrap()
+    );
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT lineage_incomplete FROM datasets WHERE id=?")
+            .bind(&ids["db.complex"])
+            .fetch_one(&f.pool)
+            .await
+            .unwrap()
+    );
+    assert!(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM relationships WHERE from_dataset=? AND to_dataset=? AND kind='lineage')").bind(&ids["db.orders"]).bind(&ids["db.complex"]).fetch_one(&f.pool).await.unwrap());
+    sqlx::query("UPDATE sources SET kind='mongodb' WHERE id='source'")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let mut ds = make("users", None);
+    ds.metadata.dialect = Some("mongodb".into());
+    ds.metadata.sampled_documents = Some(2);
+    ds.metadata.field_coverage.insert("id".into(), 1);
+    let mut tx = f.pool.begin().await.unwrap();
+    let users = crate::catalog::upsert(&mut tx, "source", &ds)
+        .await
+        .unwrap();
+    crate::catalog::edge(
+        &mut tx,
+        &Relationship {
+            id: String::new(),
+            from_dataset: users.clone(),
+            from_cols: vec!["id".into()],
+            to_dataset: ids["db.orders"].clone(),
+            to_cols: vec!["id".into()],
+            kind: RelationshipKind::Inferred,
+            confidence: Some(0.45),
+        },
+    )
+    .await
+    .unwrap();
+    crate::catalog::infer(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let map = crate::catalog::datamap(&f.pool).await.unwrap();
+    let node = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == users)
+        .unwrap();
+    assert_eq!(node["sampled_documents"], 2);
+    assert_eq!(node["field_coverage"]["id"], 1);
+    assert!(
+        map["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["from_dataset"] == users && e["confidence"] == 0.45)
+    );
+    f.close().await;
+}

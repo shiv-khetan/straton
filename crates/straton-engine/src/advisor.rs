@@ -41,13 +41,18 @@ pub struct Table {
     pub workload: Vec<Workload>,
 }
 fn ident(kind: &str, name: &str) -> String {
-    if kind == "sqlserver" {
+    if kind == "mysql" {
+        format!("`{}`", name.replace('`', "``"))
+    } else if kind == "sqlserver" {
         format!("[{}]", name.replace(']', "]]"))
     } else {
         format!("\"{}\"", name.replace('"', "\"\""))
     }
 }
 fn object(kind: &str, name: &str) -> String {
+    if kind == "mongodb" {
+        return name.into();
+    }
     let (s, t) = name
         .split_once('.')
         .unwrap_or((if kind == "sqlserver" { "dbo" } else { "public" }, name));
@@ -70,6 +75,9 @@ fn names(v: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 fn matches_table(v: &Value, t: &Table) -> bool {
+    if v["schema"].is_null() {
+        return v["table"] == t.name;
+    }
     format!(
         "{}.{}",
         v["schema"].as_str().unwrap_or(""),
@@ -84,6 +92,9 @@ pub fn config_hash(kind: &str, config: &Value) -> String {
     format!("{:x}", Sha256::digest(format!("{kind}:{c}").as_bytes()))
 }
 pub fn generate(kind: &str, t: &Table, metadata: &Value) -> Vec<Recommendation> {
+    if kind == "mysql" || kind == "mongodb" {
+        return generate_document_and_mysql(kind, t, metadata);
+    }
     let mut t = t.clone();
     let source_indexes: Vec<_> = rows(metadata, "indexes")
         .into_iter()
@@ -218,7 +229,7 @@ pub fn generate(kind: &str, t: &Table, metadata: &Value) -> Vec<Recommendation> 
 pub async fn refresh(pool: &SqlitePool, source: &str) -> Result<Value> {
     let _gate = GATE.lock().await;
     let s = sqlx::query(
-        "SELECT kind,config FROM sources WHERE id=? AND kind IN ('sqlserver','postgres')",
+        "SELECT kind,config FROM sources WHERE id=? AND kind IN ('sqlserver','postgres','mysql','mongodb')",
     )
     .bind(source)
     .fetch_one(pool)
@@ -253,6 +264,11 @@ pub async fn refresh(pool: &SqlitePool, source: &str) -> Result<Value> {
             .fetch_all(pool)
             .await?
             .into_iter()
+            .filter(|r| match kind {
+                "mysql" => r.get::<&str, _>("kind").eq_ignore_ascii_case("BTREE"),
+                "mongodb" => r.get::<&str, _>("kind") == "btree",
+                _ => true,
+            })
             .map(|r| Index {
                 name: r.get("name"),
                 columns: serde_json::from_str(r.get("columns")).unwrap_or_default(),
@@ -276,7 +292,7 @@ pub async fn refresh(pool: &SqlitePool, source: &str) -> Result<Value> {
     }
     if let Some(settings) = metadata["settings"].as_object() {
         for (key, current) in settings {
-            recommendations.push((None,Recommendation{kind:"setting_review".into(),target:format!("database setting: {key}"),ddl:format!("-- Review {key} with the DBA; no automatic setting change is proposed."),rollback_ddl:"-- No setting change is proposed.".into(),evidence:json!({"setting":key,"current_value":current}),estimated_benefit:0.,cost:"Depends on concurrency, memory, storage and the source workload.".into(),risk:match key.as_str(){"work_mem"=>"Memory is allocated per operation and worker; measure concurrency before increasing.","random_page_cost"=>"Calibrate to the actual storage; a lower value can change all query plans.","compatibility_level"=>"Changing compatibility can alter cardinality estimation and existing plans; test a replay first.","auto_update_statistics_async"=>"Asynchronous updates can avoid compile waits but temporarily use stale statistics.",_=>"Review Query Store capture, retention and disk limits with the DBA."}.into(),required_permission:"DBA review / ALTER DATABASE or server configuration privilege".into(),applicable:false}));
+            recommendations.push((None,Recommendation{kind:"setting_review".into(),target:format!("database setting: {key}"),ddl:format!("-- Review {key} with the DBA; no automatic setting change is proposed."),rollback_ddl:"-- No setting change is proposed.".into(),evidence:json!({"setting":key,"current_value":current}),estimated_benefit:0.,cost:"Depends on concurrency, memory, storage and the source workload.".into(),risk:match key.as_str(){"work_mem"=>"Memory is allocated per operation and worker; measure concurrency before increasing.","random_page_cost"=>"Calibrate to the actual storage; a lower value can change all query plans.","compatibility_level"=>"Changing compatibility can alter cardinality estimation and existing plans; test a replay first.","innodb_buffer_pool_size"=>"Compare the buffer pool with data_size_bytes and available memory; leave room for connections and the OS.","data_size_bytes"=>"Compare estimated InnoDB data size with the buffer pool and measured cache misses.","slow_query_log"=>"Enable only after reviewing disk space, retention and sensitive query literals.","was"|"slowms"|"sampleRate"=>"Review profiler overhead, slow query thresholds and retention with the database admin.","auto_update_statistics_async"=>"Asynchronous updates can avoid compile waits but temporarily use stale statistics.",_=>"Review Query Store capture, retention and disk limits with the DBA."}.into(),required_permission:"DBA review / ALTER DATABASE or server configuration privilege".into(),applicable:false}));
         }
     }
     let mut tx = pool.begin().await?;
@@ -422,4 +438,85 @@ where
     .await?;
     tx.commit().await?;
     Ok(json!({"ok":success,"error":error}))
+}
+
+fn generate_document_and_mysql(kind: &str, t: &Table, metadata: &Value) -> Vec<Recommendation> {
+    let mut indexes = t.indexes.clone();
+    for i in rows(metadata, "indexes")
+        .iter()
+        .filter(|i| matches_table(i, t))
+    {
+        if i["filtered"] != true {
+            indexes.push(Index {
+                name: i["name"].as_str().unwrap_or_default().into(),
+                columns: names(i, "columns"),
+                protected: i["unique"] == true || i["primary"] == true,
+            });
+        }
+    }
+    let target = object(kind, &t.name);
+    let mut proposed = std::collections::BTreeSet::new();
+    let mut out = vec![];
+    for w in &t.workload {
+        if w.count < 5
+            || !(w.role == "join_key"
+                || w.role == "filter" && ["equality", "range"].contains(&w.op.as_str()))
+            || !t.columns.contains(&w.column)
+            || !proposed.insert(w.column.clone())
+            || indexes.iter().any(|i| i.columns.first() == Some(&w.column))
+        {
+            continue;
+        }
+        let hash = format!(
+            "{:x}",
+            Sha256::digest(format!("{}:{}", t.name, w.column).as_bytes())
+        );
+        let name = format!("ix_straton_{}", &hash[..16]);
+        let (ddl, rollback, permission, online) = if kind == "mongodb" {
+            let key = serde_json::Map::from_iter([(w.column.clone(), json!(1))]);
+            (
+                json!({"createIndexes":t.name,"indexes":[{"key":key,"name":name}]}).to_string(),
+                json!({"dropIndexes":t.name,"index":name}).to_string(),
+                "createIndex and dropIndex on the collection",
+                true,
+            )
+        } else {
+            let version = metadata["version"].as_str().unwrap_or_default();
+            let numbers = version
+                .split('.')
+                .take(2)
+                .map(|s| s.parse::<u32>().unwrap_or(0))
+                .collect::<Vec<_>>();
+            let supported = if version.contains("MariaDB") {
+                numbers.first().copied().unwrap_or(0) >= 10
+            } else {
+                numbers.first().copied().unwrap_or(0) > 5
+                    || numbers.first() == Some(&5) && numbers.get(1).copied().unwrap_or(0) >= 6
+            };
+            let online = supported
+                && rows(metadata, "tables").iter().any(|v| {
+                    matches_table(v, t)
+                        && v["engine"]
+                            .as_str()
+                            .is_some_and(|s| s.eq_ignore_ascii_case("InnoDB"))
+                });
+            (
+                format!(
+                    "CREATE INDEX {} ON {target} ({}){};",
+                    ident(kind, &name),
+                    ident(kind, &w.column),
+                    if online {
+                        " ALGORITHM=INPLACE LOCK=NONE"
+                    } else {
+                        ""
+                    }
+                ),
+                format!("DROP INDEX {} ON {target};", ident(kind, &name)),
+                "INDEX on the target table",
+                online,
+            )
+        };
+        out.push(Recommendation { kind:"create_index".into(), target:target.clone(), ddl, rollback_ddl:rollback, evidence:json!({"observations":w.count,"rows_scanned":w.scanned,"role":w.role,"op":w.op,"source_table":rows(metadata,"tables").into_iter().find(|v|matches_table(v,t))}), estimated_benefit:(w.scanned as f64*(w.count as f64).ln_1p()).clamp(0.,1e15), cost:"Adds index storage and work on inserts, updates and deletes.".into(), risk:format!("Source workload may differ from lake queries. Verify field types and key widths before approval. {} A timed-out build may require manual inspection.",if online { "Builds still need disk space and brief locks." } else { "This server or storage engine may block writers during the build." }), required_permission:permission.into(), applicable:true });
+    }
+    out
 }

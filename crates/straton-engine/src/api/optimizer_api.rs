@@ -29,8 +29,16 @@ async fn dataset(State(a): State<App>, Path(id): Path<String>) -> ApiResult<Json
     let stats=sqlx::query("SELECT column,role,op,SUM(count) AS count,SUM(rows_scanned) AS rows_scanned,SUM(rows_returned) AS rows_returned,SUM(elapsed_ms) AS elapsed_ms,MAX(last_seen) AS last_seen FROM query_stats WHERE dataset_id IN (SELECT value FROM json_each(?)) GROUP BY column,role,op ORDER BY count DESC,column,role,op").bind(serde_json::to_string(&ids).map_err(anyhow::Error::from)?).fetch_all(&a.pool).await?.into_iter().map(|r|json!({"column":r.get::<String,_>("column"),"role":r.get::<String,_>("role"),"op":r.get::<String,_>("op"),"count":r.get::<i64,_>("count"),"rows_scanned":r.get::<i64,_>("rows_scanned"),"rows_returned":r.get::<i64,_>("rows_returned"),"elapsed_ms":r.get::<i64,_>("elapsed_ms"),"last_seen":r.get::<i64,_>("last_seen")})).collect::<Vec<_>>();
     let layout=sqlx::query("SELECT * FROM dataset_layout WHERE dataset_id=?").bind(&id).fetch_optional(&a.pool).await?.map(|r|json!({"sort_column":r.get::<Option<String>,_>("sort_column"),"bloom_columns":serde_json::from_str::<Value>(r.get("bloom_columns")).unwrap_or(json!([])),"row_group_size":r.get::<i64,_>("row_group_size"),"reason":r.get::<String,_>("reason"),"updated_at":r.get::<i64,_>("updated_at")}));
     let (next, _) = lake_layout::decision(&a.pool, &ids).await?;
+    let _pin = crate::sql::SNAPSHOTS.read().await;
+    let dir = a.sql.data_dir.join("data").join(source).join(name);
+    let hash_index = match tokio::fs::read_to_string(dir.join("_current")).await {
+        Ok(current) if uuid::Uuid::parse_str(&current).is_ok() => {
+            crate::hash_lookup::status(&a.pool, &dir.join(current)).await
+        }
+        _ => crate::hash_lookup::Status::default(),
+    };
     Ok(Json(
-        json!({"dataset_id":id,"source_id":d.get::<String,_>("source_id"),"name":d.get::<String,_>("name"),"stats":stats,"layout":layout,"next_layout":next,"hash_index":{"enabled":false,"reason":"Deferred: build a versioned key-to-row-group sidecar only after sustained selective equality traffic, with exact Parquet rechecks and a scan fallback. Never a dependency for correctness."},"metrics_note":"Scan counters are decoded scan output plus pushed-down rejected rows, after row-group/page pruning. Returned rows and elapsed time describe the whole query; per-column counters overlap. Bounded telemetry may drop samples under backpressure."}),
+        json!({"dataset_id":id,"source_id":d.get::<String,_>("source_id"),"name":d.get::<String,_>("name"),"stats":stats,"layout":layout,"next_layout":next,"hash_index":hash_index,"metrics_note":"Scan counters are decoded scan output plus pushed-down rejected rows, after row-group/page pruning. Returned rows and elapsed time describe the whole query; per-column counters overlap. Bounded telemetry may drop samples under backpressure."}),
     ))
 }
 async fn relayout(
@@ -78,7 +86,7 @@ async fn recommendations(
     Query(q): Query<SourceQuery>,
 ) -> ApiResult<Json<Value>> {
     let rows=sqlx::query("SELECT * FROM advisor_recommendations WHERE (?1 IS NULL OR source_id=?1) ORDER BY estimated_benefit DESC,created_at,id").bind(&q.source).fetch_all(&a.pool).await?;
-    let sources=sqlx::query("SELECT id,name,kind,config FROM sources WHERE kind IN ('sqlserver','postgres') ORDER BY name").fetch_all(&a.pool).await?.into_iter().map(|r|{let c:Value=serde_json::from_str(r.get("config")).unwrap_or(Value::Null);json!({"id":r.get::<String,_>("id"),"name":r.get::<String,_>("name"),"kind":r.get::<String,_>("kind"),"advisor_may_write":c["advisor_may_write"]==true,"connection_target":format!("{}:{}/{}",c["host"].as_str().unwrap_or("localhost"),c["port"].as_u64().unwrap_or(if r.get::<&str,_>("kind")=="sqlserver"{1433}else{5432}),c["database"].as_str().unwrap_or(""))})}).collect::<Vec<_>>();
+    let sources=sqlx::query("SELECT id,name,kind,config FROM sources WHERE kind IN ('sqlserver','postgres','mysql','mongodb') ORDER BY name").fetch_all(&a.pool).await?.into_iter().map(|r|{let c:Value=serde_json::from_str(r.get("config")).unwrap_or(Value::Null);json!({"id":r.get::<String,_>("id"),"name":r.get::<String,_>("name"),"kind":r.get::<String,_>("kind"),"advisor_may_write":c["advisor_may_write"]==true,"connection_target":format!("{}:{}/{}",c["host"].as_str().unwrap_or("localhost"),c["port"].as_u64().unwrap_or(if r.get::<&str,_>("kind")=="sqlserver"{1433}else{5432}),c["database"].as_str().unwrap_or(""))})}).collect::<Vec<_>>();
     Ok(Json(
         json!({"recommendations":rows.iter().map(advisor::value).collect::<Vec<_>>(),"sources":sources}),
     ))
@@ -93,7 +101,7 @@ async fn refresh(
     }
     let source = q.source.ok_or_else(|| bad("source is required"))?;
     let supported: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sources WHERE id=? AND kind IN ('sqlserver','postgres'))",
+        "SELECT EXISTS(SELECT 1 FROM sources WHERE id=? AND kind IN ('sqlserver','postgres','mysql','mongodb'))",
     )
     .bind(&source)
     .fetch_one(&a.pool)

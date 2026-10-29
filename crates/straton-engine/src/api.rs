@@ -266,6 +266,8 @@ async fn save_source(
     }
     let kind = match s.kind {
         SourceKind::Postgres => "postgres",
+        SourceKind::Mysql => "mysql",
+        SourceKind::Mongodb => "mongodb",
         SourceKind::Sqlserver => "sqlserver",
         SourceKind::Sqlite => "sqlite",
         SourceKind::Csv => "csv",
@@ -294,7 +296,10 @@ async fn save_source(
             "Windows authentication uses the engine account; omit secret",
         ));
     }
-    if kind == "sqlserver" && !windows_auth {
+    if (kind == "sqlserver" && !windows_auth)
+        || kind == "mysql"
+        || (kind == "mongodb" && s.config["username"].is_string())
+    {
         use secrecy::ExposeSecret;
         let supplied = s
             .secret
@@ -314,7 +319,7 @@ async fn save_source(
         };
         if !supplied && !saved {
             return Err(bad(
-                "SQL authentication requires a password in secret or the existing keychain",
+                "Database authentication requires a password in secret or the existing keychain",
             ));
         }
     }
@@ -477,7 +482,11 @@ async fn validate_incremental_job(pool: &SqlitePool, j: &Job) -> ApiResult<()> {
         .ok_or_else(|| {
             bad("watermark_column must exist in the catalog; discover the dataset first")
         })?;
-    if !straton_core::eligible_watermark(column.get("data_type")) {
+    if !straton_core::eligible_source_watermark(
+        kind.as_deref().unwrap_or_default(),
+        watermark,
+        column.get("data_type"),
+    ) {
         return Err(bad(
             "watermark_column must have an integer, date, timestamp or rowversion type",
         ));
@@ -764,6 +773,30 @@ fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
             "username",
             "batch_size",
             "advisor_may_write",
+            "sslmode",
+            "ca_cert_path",
+            "options",
+        ],
+        "mysql" => &[
+            "host",
+            "port",
+            "database",
+            "username",
+            "ssl_mode",
+            "batch_size",
+            "advisor_may_write",
+        ],
+        "mongodb" => &[
+            "host",
+            "hosts",
+            "database",
+            "username",
+            "auth_source",
+            "tls",
+            "replica_set",
+            "sample_size",
+            "batch_size",
+            "advisor_may_write",
         ],
         "sqlserver" => &[
             "host",
@@ -796,11 +829,18 @@ fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
         ));
     }
     for (k, v) in obj {
-        if ["encrypt", "trust_server_certificate", "advisor_may_write"].contains(&k.as_str()) {
+        if [
+            "encrypt",
+            "trust_server_certificate",
+            "advisor_may_write",
+            "tls",
+        ]
+        .contains(&k.as_str())
+        {
             if !v.is_boolean() {
                 return Err(bad("TLS config fields must be booleans"));
             }
-        } else if k == "objects" {
+        } else if k == "objects" || k == "hosts" {
             if !v.as_array().is_some_and(|a| a.iter().all(Value::is_string)) {
                 return Err(bad("objects must be a list of names"));
             }

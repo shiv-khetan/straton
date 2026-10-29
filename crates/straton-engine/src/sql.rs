@@ -439,7 +439,11 @@ impl Sql {
             let table = ListingTable::try_new(cfg)?;
             let (schema, provider) = &schemas[source];
             let alias = &table_names[d.get::<&str, _>("id")];
-            let frame = ctx.read_table(Arc::new(table))?;
+            let frame = ctx.read_table(Arc::new(crate::hash_lookup::LookupTable::new(
+                table,
+                path.clone(),
+                self.pool.clone(),
+            )))?;
             let Some(policy) =
                 crate::policies::effective(&self.pool, principal, source, d.get("id"), &frame)
                     .await?

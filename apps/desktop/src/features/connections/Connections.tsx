@@ -1,3 +1,4 @@
+import { databaseSslMode, mongoTlsDefault } from './source-model';
 import { StatePill } from '@/components/workbench/primitives';
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { Input } from '@/components/ui/input';
@@ -11,7 +12,9 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Api, Source, SourceKind } from '@/lib/api';
 import { Tray, RowMenu, Sheet, Table as UiTable } from '@/components/workbench/primitives';
 const fields: Record<string, string[]> = {
-  postgres: ['host', 'port', 'database', 'username', 'batch_size'],
+  postgres: ['host', 'port', 'database', 'username', 'ca_cert_path', 'options', 'batch_size'],
+  mysql: ['host', 'port', 'database', 'username', 'batch_size'],
+  mongodb: ['database', 'username', 'auth_source', 'replica_set', 'sample_size', 'batch_size'],
   sqlserver: ['host', 'port', 'instance', 'database', 'username', 'batch_size'],
   sqlite: ['path', 'batch_size'],
   csv: ['path', 'batch_size', 'sample_size'],
@@ -51,6 +54,7 @@ export default function Sources({
   const [kind, setKind] = useState<SourceKind>('postgres');
   const [config, setConfig] = useState<Record<string, string | number | boolean | string[]>>({});
   const [secret, setSecret] = useState('');
+  const sslMode = databaseSslMode(kind, config);
   const [manual, setManual] = useState('');
   const [datasetName, setDatasetName] = useState('');
   const [columns, setColumns] = useState([
@@ -118,6 +122,8 @@ export default function Sources({
                     {[
                       'postgres',
                       'sqlserver',
+                      'mysql',
+                      'mongodb',
                       'sqlite',
                       'csv',
                       'stripe',
@@ -187,6 +193,8 @@ export default function Sources({
                         {[
                           'postgres',
                           'sqlserver',
+                          'mysql',
+                          'mongodb',
                           'sqlite',
                           'csv',
                           'stripe',
@@ -254,13 +262,28 @@ export default function Sources({
                   setSecret('');
                 }}
               >
-                {['postgres', 'sqlserver', 'sqlite', 'csv', 'stripe', 'salesforce', 'external'].map(
-                  (k) => (
-                    <option key={k} value={k}>
-                      {k === 'sqlserver' ? 'SQL Server' : k}
-                    </option>
-                  ),
-                )}
+                {[
+                  'postgres',
+                  'sqlserver',
+                  'mysql',
+                  'mongodb',
+                  'sqlite',
+                  'csv',
+                  'stripe',
+                  'salesforce',
+                  'external',
+                ].map((k) => (
+                  <option key={k} value={k}>
+                    {(
+                      {
+                        sqlserver: 'SQL Server',
+                        mysql: 'MySQL / MariaDB',
+                        mongodb: 'MongoDB',
+                        postgres: 'Postgres / Neon',
+                      } as Record<string, string>
+                    )[k] ?? k}
+                  </option>
+                ))}
               </select>
             </Field>
             {kind === 'sqlserver' && (
@@ -321,7 +344,98 @@ export default function Sources({
                 </fieldset>
               </>
             )}
-            {['sqlserver', 'postgres'].includes(kind) && (
+            {['postgres', 'mysql'].includes(kind) && (
+              <fieldset className="checklist">
+                <legend>Connection security</legend>
+                <Field label="SSL mode">
+                  <select
+                    aria-describedby="database-ssl-help"
+                    value={sslMode}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        [kind === 'postgres' ? 'sslmode' : 'ssl_mode']: e.target.value,
+                      })
+                    }
+                  >
+                    {(kind === 'postgres'
+                      ? ['disable', 'prefer', 'require', 'verify-full']
+                      : ['disabled', 'preferred', 'required', 'verify_identity']
+                    ).map((mode) => (
+                      <option key={mode} value={mode}>
+                        {mode.replaceAll('_', ' ')}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <p id="database-ssl-help" className="hint">
+                  Remote hosts require encryption by default. Use{' '}
+                  {kind === 'postgres' ? 'verify-full' : 'verify identity'} to verify the
+                  certificate and hostname. Preferred mode can fall back to an unencrypted
+                  connection.
+                </p>
+                {['disable', 'disabled', 'prefer', 'preferred'].includes(sslMode) && (
+                  <p role="status" className="message">
+                    This mode allows data to travel unencrypted.
+                  </p>
+                )}
+                {['require', 'required'].includes(sslMode) && (
+                  <p role="status" className="message">
+                    Encryption is required; the server's identity is not verified.
+                  </p>
+                )}
+              </fieldset>
+            )}
+            {kind === 'mongodb' && (
+              <>
+                <Field label="Hosts (comma-separated) or mongodb+srv host">
+                  <Input
+                    required
+                    placeholder="localhost:27017 or mongodb+srv://cluster.example.net"
+                    value={
+                      (config.host as string | undefined) ??
+                      (config.hosts as string[] | undefined)?.join(', ') ??
+                      ''
+                    }
+                    onChange={(e) => {
+                      const next = { ...config };
+                      delete next.host;
+                      delete next.hosts;
+                      if (e.target.value.startsWith('mongodb+srv://')) next.host = e.target.value;
+                      else next.hosts = e.target.value.split(',').map((h) => h.trim());
+                      setConfig(next);
+                    }}
+                  />
+                </Field>
+                <fieldset className="checklist">
+                  <legend>Connection security</legend>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={(config.tls as boolean | undefined) ?? mongoTlsDefault(config)}
+                      onChange={(e) => setConfig({ ...config, tls: e.target.checked })}
+                      aria-describedby="mongo-tls-help"
+                    />
+                    Encrypt connection (TLS)
+                  </label>
+                  <p id="mongo-tls-help" className="hint">
+                    TLS verifies the server certificate and hostname. It is enabled by default for
+                    remote hosts. Enter hosts only; passwords are stored in the engine OS keychain.
+                  </p>
+                  {(config.tls ?? mongoTlsDefault(config)) === false && (
+                    <p role="status" className="message">
+                      Encryption is disabled. Data may travel unencrypted.
+                    </p>
+                  )}
+                </fieldset>
+                <p className="hint">
+                  Schema inference samples up to 1,000 documents by default. Explorer shows field
+                  coverage; inferred relationships are suggestions. ObjectId watermarks track
+                  inserts by creation time; use an updated timestamp to track edits.
+                </p>
+              </>
+            )}
+            {['sqlserver', 'postgres', 'mysql', 'mongodb'].includes(kind) && (
               <fieldset className="checklist">
                 <legend>Source advisor</legend>
                 <label>
@@ -336,7 +450,7 @@ export default function Sources({
                 <p id="advisor-write-warning" className="hint">
                   Allows an admin to execute each approved recommendation on this source database
                   using its saved credentials. Index builds can block writes and consume disk and
-                  log space. Every apply is audited and includes rollback SQL. Nothing runs
+                  log space. Every apply is audited and includes a rollback command. Nothing runs
                   automatically.
                 </p>
               </fieldset>
@@ -349,26 +463,40 @@ export default function Sources({
                 <Field
                   key={key}
                   label={
-                    key === 'path'
-                      ? 'Path on engine machine'
-                      : key[0].toUpperCase() + key.slice(1).replaceAll('_', ' ')
+                    key === 'ca_cert_path'
+                      ? 'CA certificate path on engine machine (optional)'
+                      : key === 'options'
+                        ? 'Neon endpoint option (optional)'
+                        : key === 'path'
+                          ? 'Path on engine machine'
+                          : key[0].toUpperCase() + key.slice(1).replaceAll('_', ' ')
                   }
                 >
                   <Input
-                    required={['host', 'database', 'username', 'path'].includes(key)}
+                    required={
+                      ['host', 'database', 'path'].includes(key) ||
+                      (key === 'username' && kind !== 'mongodb')
+                    }
                     type={numericFields.includes(key) ? 'number' : 'text'}
                     min="1"
                     max={
                       key === 'port' ? '65535' : key === 'rate_limit_rps' ? '1000' : '2147483647'
                     }
                     placeholder={
-                      kind === 'sqlserver' && key === 'port'
-                        ? '1433 (default)'
-                        : key === 'rate_limit_rps'
-                          ? (kind === 'salesforce' ? '10' : '25') + ' (default)'
-                          : key === 'login_url'
-                            ? 'https://login.salesforce.com (or test.salesforce.com)'
-                            : undefined
+                      key === 'options'
+                        ? 'endpoint=ep-example'
+                        : key === 'port' && ['mysql', 'postgres', 'sqlserver'].includes(kind)
+                          ? (
+                              { mysql: '3306', postgres: '5432', sqlserver: '1433' } as Record<
+                                string,
+                                string
+                              >
+                            )[kind] + ' (default)'
+                          : key === 'rate_limit_rps'
+                            ? (kind === 'salesforce' ? '10' : '25') + ' (default)'
+                            : key === 'login_url'
+                              ? 'https://login.salesforce.com (or test.salesforce.com)'
+                              : undefined
                     }
                     value={(config[key] as string | number | undefined) ?? ''}
                     onChange={(e) => setConfig({ ...config, [key]: e.target.value })}
@@ -401,13 +529,18 @@ export default function Sources({
               </fieldset>
             )}
             {(kind === 'postgres' ||
+              kind === 'mysql' ||
+              kind === 'mongodb' ||
               kind === 'stripe' ||
               (kind === 'sqlserver' && config.auth === 'sql')) && (
               <Field label={kind === 'stripe' ? 'API key (write-only)' : 'Password (write-only)'}>
                 <Input
                   type="password"
                   required={
-                    kind === 'sqlserver' && !sources.find((s) => s.id === editing)?.credential_id
+                    (kind === 'sqlserver' ||
+                      kind === 'mysql' ||
+                      (kind === 'mongodb' && Boolean(config.username))) &&
+                    !sources.find((s) => s.id === editing)?.credential_id
                   }
                   autoComplete="new-password"
                   value={secret}
