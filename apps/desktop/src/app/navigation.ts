@@ -1,8 +1,8 @@
 import type { Me } from '@/lib/api';
-import { canPage } from '@/features/access/access-model';
+import { canPage } from '../features/access/access-model.ts';
 import type { IconName } from '@/components/workbench/Icon';
 import type { NavGroup } from '@/stores/sidebar-state';
-import { laterRoutes } from '@/stores/route-history';
+import { laterRoutes } from '../stores/route-history.ts';
 import type { Route } from '@/stores/route-history';
 export const navigation: { label: NavGroup; items: { route: Route; icon: IconName }[] }[] = [
   {
@@ -59,7 +59,7 @@ export function routeAvailable(me: Me | null, route: Route) {
     canPage(me, route)
   );
 }
-// Top-bar section names; the sidebar lists the active section's pages.
+// Shared section names for sidebar headings, breadcrumbs and shortcuts.
 export const sectionLabels: Record<NavGroup, string> = {
   Workspace: 'Overview',
   Data: 'Data',

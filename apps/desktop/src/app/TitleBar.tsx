@@ -20,11 +20,8 @@ import { Notifications } from '@/features/notifications/Notifications';
 import type { Api, Me } from '@/lib/api';
 import { useThemeStore } from '@/stores/theme';
 import type { Route } from '@/stores/route-history';
-import { navigation, routeAvailable, sectionLabels, sectionOf } from './navigation';
 export function TitleBar({
   workspace,
-  page,
-  onNavigate,
   me,
   online,
   live,
@@ -67,7 +64,6 @@ export function TitleBar({
   const native = isTauri();
   const [maximized, setMaximized] = useState(false);
   const { preference, setTheme } = useThemeStore();
-  const active = sectionOf(page);
   const initials =
     me?.user.name
       .split(/\s+/)
@@ -146,33 +142,9 @@ export function TitleBar({
         <img src={logo} width={22} height={22} alt="" draggable={false} />
         <span className="max-[680px]:hidden">Straton</span>
       </span>
-      <nav
-        aria-label="Sections"
-        className="scrollbar-hidden flex h-full min-w-0 items-stretch gap-1 overflow-x-auto"
-      >
-        {navigation.map((group) => {
-          const target = group.items.find((item) => routeAvailable(me, item.route));
-          const current = group === active;
-          return (
-            <button
-              key={group.label}
-              type="button"
-              className={
-                'section-tab relative flex items-center whitespace-nowrap px-2.5 text-body transition-colors duration-fast ' +
-                (current ? 'font-medium text-ink' : 'text-ink-2 hover:text-ink')
-              }
-              aria-current={current ? 'page' : undefined}
-              disabled={!target}
-              onClick={() => target && onNavigate(target.route)}
-            >
-              {sectionLabels[group.label]}
-            </button>
-          );
-        })}
-      </nav>
       <Button
         variant="ghost"
-        className="ml-auto h-8 w-60 justify-start rounded-sm border border-line bg-surface px-2.5 font-normal text-ink-3 hover:bg-surface-2 hover:text-ink-2 max-[1100px]:w-44 max-[760px]:w-8 max-[760px]:px-2"
+        className="h-8 w-60 justify-start rounded-sm border border-line bg-surface px-2.5 font-normal text-ink-3 hover:bg-surface-2 hover:text-ink-2 max-[1100px]:w-44 max-[760px]:w-8 max-[760px]:px-2"
         onClick={onSearch}
         aria-label="Search workspace (Ctrl or Command K)"
       >
@@ -184,7 +156,7 @@ export function TitleBar({
       </Button>
       <span
         role="status"
-        className="flex shrink-0 items-center gap-1.5 px-1.5 text-caption text-ink-2"
+        className="ml-auto flex shrink-0 items-center gap-1.5 px-1.5 text-caption text-ink-2"
         title={workspace + ' · ' + live}
       >
         <span className={'size-1.5 rounded-full ' + (online ? 'bg-success' : 'bg-danger')} />

@@ -883,6 +883,8 @@ function AppContent() {
                         if (entity.kind === 'model') {
                           setModelRequest({ id: entity.id, nonce: Date.now() });
                           setPage('Models');
+                        } else if (entity.kind === 'view') {
+                          setMapFocus(entity.id);
                         } else if (entity.kind === 'check') {
                           setEntityRequest({ kind: 'check', id: entity.id, nonce: Date.now() });
                           setPage('Data Quality');
