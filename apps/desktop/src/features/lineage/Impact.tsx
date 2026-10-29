@@ -1,3 +1,4 @@
+import { StatePill } from '@/components/workbench/primitives';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -40,7 +41,7 @@ function Entity({ data }: NodeProps<EntityNode>) {
         {data.root ? ' · selected root' : ''}
       </span>
       <strong className="my-2 block break-words">{data.name}</strong>
-      <Pill>{data.status ?? 'No runs'}</Pill>
+      <StatePill state={data.status ?? 'No runs'} />
       <Handle type="source" position={Position.Right} isConnectable={false} />
     </article>
   );

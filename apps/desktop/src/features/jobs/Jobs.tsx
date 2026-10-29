@@ -3,9 +3,17 @@ import { Button } from '@/components/ui/button';
 import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
 import { useEffect, useState } from 'react';
 import { Field } from '@/components/workbench/Field';
+import { Choice } from '@/components/workbench/FeatureState';
 import type { Action } from '@/components/workbench/Field';
 import type { Api, Dataset, EngineEvent, Job, Run, Source } from '@/lib/api';
-import { Tray, Pill, Sheet, RowMenu, Table as UiTable } from '@/components/workbench/primitives';
+import {
+  Tray,
+  Pill,
+  StatePill,
+  Sheet,
+  RowMenu,
+  Table as UiTable,
+} from '@/components/workbench/primitives';
 import { datasetLabel } from '@/lib/view-model';
 import { eligibleWatermarkColumns, hasIncrementalSettings } from './job-model';
 import { RunTable } from './RunTable';
@@ -95,7 +103,7 @@ export default function Jobs({
           <p className="hint">Keep your local lake in sync.</p>
         </div>
       </div>
-      <Tray title="Sync jobs">
+      <Tray title="Sync jobs" className="jobs-table">
         <UiTable label="Sync jobs">
           <TableHeader>
             <TableRow>
@@ -103,19 +111,21 @@ export default function Jobs({
               <TableHead scope="col">Dataset</TableHead>
               <TableHead scope="col">Mode / watermark</TableHead>
               <TableHead scope="col">Schedule (UTC)</TableHead>
-              <TableHead scope="col">Actions</TableHead>
+              <TableHead scope="col">
+                <span className="visually-hidden">Actions</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {jobs.map((job) => (
               <TableRow key={job.id}>
                 <TableCell>
-                  {job.name}
-                  <small>
-                    <Pill tone={job.enabled ? 'success' : 'neutral'}>
-                      {job.enabled ? 'Enabled' : 'Disabled'}
-                    </Pill>
-                  </small>
+                  <div className="flex items-center gap-2 whitespace-nowrap">
+                    <span className="max-w-44 truncate" title={job.name}>
+                      {job.name}
+                    </span>
+                    <StatePill state={job.enabled ? 'Enabled' : 'Disabled'} />
+                  </div>
                 </TableCell>
                 <TableCell>
                   {datasetLabel(
@@ -125,12 +135,14 @@ export default function Jobs({
                   )}
                 </TableCell>
                 <TableCell>
-                  <Pill tone={job.mode === 'incremental' ? 'info' : 'neutral'}>
-                    {job.mode === 'incremental' ? 'Incremental' : 'Full refresh'}
-                  </Pill>
-                  <small>
-                    <code>{job.watermark ?? '—'}</code>
-                  </small>
+                  <div className="flex items-center gap-2 whitespace-nowrap">
+                    <Pill>{job.mode === 'incremental' ? 'Incremental' : 'Full refresh'}</Pill>
+                    {job.mode === 'incremental' && (
+                      <code className="text-ink-2" title="Watermark">
+                        {job.watermark ?? 'No watermark yet'}
+                      </code>
+                    )}
+                  </div>
                 </TableCell>
                 <TableCell>
                   <code>{job.cron || 'Manual'}</code>
@@ -383,26 +395,28 @@ export default function Jobs({
           )}
         </section>
       )}
-      <Tray title="Run history">
+      <Tray title="Run history" className="run-history-card">
         <div className="toolbar">
-          <Field label="Job">
-            <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)}>
-              <option value="">All jobs</option>
-              {jobs.map((j) => (
-                <option key={j.id} value={j.id}>
-                  {j.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="State">
-            <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
-              <option value="">All states</option>
-              {['queued', 'running', 'succeeded', 'failed', 'interrupted', 'cancelled'].map((s) => (
-                <option key={s}>{s}</option>
-              ))}
-            </select>
-          </Field>
+          <Choice
+            label="Job"
+            value={jobFilter}
+            onChange={setJobFilter}
+            options={[
+              { value: '', label: 'All jobs' },
+              ...jobs.map((j) => ({ value: j.id, label: j.name })),
+            ]}
+          />
+          <Choice
+            label="State"
+            value={stateFilter}
+            onChange={setStateFilter}
+            options={[
+              { value: '', label: 'All states' },
+              ...['queued', 'running', 'succeeded', 'failed', 'interrupted', 'cancelled'].map(
+                (state) => ({ value: state, label: state[0].toUpperCase() + state.slice(1) }),
+              ),
+            ]}
+          />
         </div>
         <RunTable
           runs={runs.filter(

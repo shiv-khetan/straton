@@ -77,14 +77,14 @@ for (const [theme,palette] of [['dark',dark],['light',light]]) {
   }
   for(const text of ['info-ink','success-ink','warning-ink','danger-ink']) for(const bg of surfaces) check(text,bg);
 }
-assert.equal(dark['--ink-3'], '#908fa0');
-assert.equal(dark['--bg'],'#0b1326');assert.equal(dark['--primary'],'#c0c1ff');
-assert.equal(light['--primary'],'#1d50a2');assert.equal(light['--running'],'#1d50a2');
-assert.equal(light['--success'],'#0f8a63');assert.equal(light['--danger'],'#c0392b');
-assert.equal(light['--bg'], '#ffffff'); assert.equal(light['--panel'], '#eef3fb');
-assert.equal(light['--ink'], '#0b0f17'); assert.equal(light['--mark'], '#111827');
-assert.equal(light['--ink-2'], '#4a5568'); assert.equal(light['--ink-3'], '#5f6b7e');
-console.log('Soft Workbench v3 contrast passed: '+pairs+' text/background and UI pairs across both themes.');
+assert.equal(dark['--ink-3'], '#8b919d');
+assert.equal(dark['--bg'],'#0b0d12');assert.equal(dark['--primary'],'#818cf8');
+assert.equal(light['--primary'],'#4f46e5');assert.equal(light['--running'],'#4f46e5');
+assert.equal(light['--success'],'#15803d');assert.equal(light['--danger'],'#dc2626');
+assert.equal(light['--bg'], '#ffffff'); assert.equal(light['--panel'], '#f9fafb');
+assert.equal(light['--ink'], '#111827'); assert.equal(light['--mark'], '#4f46e5');
+assert.equal(light['--ink-2'], '#4b5563'); assert.equal(light['--ink-3'], '#5f6673');
+console.log('Console palette contrast passed: '+pairs+' text/background and UI pairs across both themes.');
 
 // Local lake keeps its source-qualified storage key but presents a friendly name.
 const lakeDataset = {

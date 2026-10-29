@@ -3,7 +3,15 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import type { SortingState } from '@tanstack/react-table';
 import { save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
-import { Database, Table2, Download, ChevronLeft, ChevronRight, PanelRight } from 'lucide-react';
+import {
+  Database,
+  Table2,
+  Download,
+  ChevronLeft,
+  ChevronRight,
+  PanelRight,
+  PanelLeft,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import type { Api, Dataset, ExplorerFilter, FilterOp } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -358,118 +366,139 @@ export default function Explorer({
   });
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState('');
+  const [catalogOpen, setCatalogOpen] = useState(true);
   const treeRef = useRef<HTMLDivElement>(null);
   const sources = tree.data?.sources ?? [];
   const tables = sources.flatMap((s) => s.schemas.flatMap((s) => s.tables));
   const table = tables.find((t) => t.id === selected);
   return (
     <div className="explorer-layout">
-      <aside className="explorer-tree">
-        <label>
-          Find a table
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Source, schema, table…"
-          />
-        </label>
-        <div
-          ref={treeRef}
-          aria-label="Sources and tables"
-          onKeyDown={(e) => {
-            const items = Array.from(
-              treeRef.current?.querySelectorAll<HTMLElement>('summary,button') ?? [],
-            ).filter((el) => el.offsetParent !== null);
-            const at = items.indexOf(document.activeElement as HTMLElement);
-            if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
-              e.preventDefault();
-              items[
-                e.key === 'Home'
-                  ? 0
-                  : e.key === 'End'
-                    ? items.length - 1
-                    : Math.min(items.length - 1, Math.max(0, at + (e.key === 'ArrowDown' ? 1 : -1)))
-              ]?.focus();
-            }
-            if (
-              (e.key === 'ArrowRight' || e.key === 'ArrowLeft') &&
-              e.target instanceof HTMLElement &&
-              e.target.tagName === 'SUMMARY'
-            ) {
-              e.preventDefault();
-              (e.target.parentElement as HTMLDetailsElement).open = e.key === 'ArrowRight';
-            }
-          }}
+      <div className="catalog-toolbar">
+        <Button
+          variant="outline"
+          size="sm"
+          aria-expanded={catalogOpen}
+          aria-controls="explorer-catalog"
+          onClick={() => setCatalogOpen((open) => !open)}
         >
-          {tree.isPending && <Skeleton label="Loading sources…" />}
-          {tree.isError && (
-            <div role="alert">
-              {String(tree.error)}
-              <Button variant="outline" onClick={() => void tree.refetch()}>
-                Retry
-              </Button>
-            </div>
-          )}
-          {sources.map((source) => {
-            const groups = source.schemas
-              .map((schema) => ({
-                ...schema,
-                tables: schema.tables.filter((t) =>
-                  (source.name + ' ' + schema.name + ' ' + t.name)
-                    .toLowerCase()
-                    .includes(search.toLowerCase()),
-                ),
-              }))
-              .filter((s) => s.tables.length);
-            return (
-              groups.length > 0 && (
-                <details key={source.source_id} open={search ? true : undefined}>
-                  <summary>
-                    <Database size={16} />
-                    {source.name}
-                  </summary>
-                  {groups.map((schema) => (
-                    <details key={schema.name} open={search ? true : undefined}>
-                      <summary>{schema.name}</summary>
-                      {schema.tables.map((t) => (
-                        <button
-                          type="button"
-                          key={t.id}
-                          className={selected === t.id ? 'selected' : ''}
-                          aria-pressed={selected === t.id}
-                          onClick={() => setSelected(t.id)}
-                        >
-                          <Table2 size={14} />
-                          <span>{t.display_name ?? t.name}</span>
-                        </button>
-                      ))}
-                    </details>
-                  ))}
-                </details>
-              )
-            );
-          })}
-          {!tree.isPending && !tables.length && (
-            <p className="hint">Discover a source, then sync a dataset to browse its rows.</p>
-          )}
-        </div>
-      </aside>
-      {table ? (
-        <TableView
-          key={table.id}
-          client={client}
-          table={table}
-          scope={scope}
-          readOnly={readOnly}
-          onQuery={onQuery}
-        />
-      ) : (
-        <div className="explorer-empty">
-          <Table2 size={32} />
-          <h2>Explore your data</h2>
-          <p>Select a table to inspect records, apply filters, or export a snapshot.</p>
-        </div>
-      )}
+          <PanelLeft size={16} />
+          {catalogOpen ? 'Hide catalog' : 'Show catalog'}
+        </Button>
+        <span className="hint">
+          {table ? (table.display_name ?? table.name) : 'Select a table to explore'}
+        </span>
+      </div>
+      <div className="explorer-workarea">
+        <aside id="explorer-catalog" className="explorer-tree" hidden={!catalogOpen}>
+          <label>
+            Find a table
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Source, schema, table…"
+            />
+          </label>
+          <div
+            ref={treeRef}
+            aria-label="Sources and tables"
+            onKeyDown={(e) => {
+              const items = Array.from(
+                treeRef.current?.querySelectorAll<HTMLElement>('summary,button') ?? [],
+              ).filter((el) => el.offsetParent !== null);
+              const at = items.indexOf(document.activeElement as HTMLElement);
+              if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
+                e.preventDefault();
+                items[
+                  e.key === 'Home'
+                    ? 0
+                    : e.key === 'End'
+                      ? items.length - 1
+                      : Math.min(
+                          items.length - 1,
+                          Math.max(0, at + (e.key === 'ArrowDown' ? 1 : -1)),
+                        )
+                ]?.focus();
+              }
+              if (
+                (e.key === 'ArrowRight' || e.key === 'ArrowLeft') &&
+                e.target instanceof HTMLElement &&
+                e.target.tagName === 'SUMMARY'
+              ) {
+                e.preventDefault();
+                (e.target.parentElement as HTMLDetailsElement).open = e.key === 'ArrowRight';
+              }
+            }}
+          >
+            {tree.isPending && <Skeleton label="Loading sources…" />}
+            {tree.isError && (
+              <div role="alert">
+                {String(tree.error)}
+                <Button variant="outline" onClick={() => void tree.refetch()}>
+                  Retry
+                </Button>
+              </div>
+            )}
+            {sources.map((source) => {
+              const groups = source.schemas
+                .map((schema) => ({
+                  ...schema,
+                  tables: schema.tables.filter((t) =>
+                    (source.name + ' ' + schema.name + ' ' + t.name)
+                      .toLowerCase()
+                      .includes(search.toLowerCase()),
+                  ),
+                }))
+                .filter((s) => s.tables.length);
+              return (
+                groups.length > 0 && (
+                  <details key={source.source_id} open={search ? true : undefined}>
+                    <summary>
+                      <Database size={16} />
+                      {source.name}
+                    </summary>
+                    {groups.map((schema) => (
+                      <details key={schema.name} open={search ? true : undefined}>
+                        <summary>{schema.name}</summary>
+                        {schema.tables.map((t) => (
+                          <button
+                            type="button"
+                            key={t.id}
+                            className={selected === t.id ? 'selected' : ''}
+                            aria-pressed={selected === t.id}
+                            onClick={() => setSelected(t.id)}
+                          >
+                            <Table2 size={14} />
+                            <span>{t.display_name ?? t.name}</span>
+                          </button>
+                        ))}
+                      </details>
+                    ))}
+                  </details>
+                )
+              );
+            })}
+            {!tree.isPending && !tables.length && (
+              <p className="hint">Discover a source, then sync a dataset to browse its rows.</p>
+            )}
+          </div>
+        </aside>
+        {table ? (
+          <TableView
+            key={table.id}
+            client={client}
+            table={table}
+            scope={scope}
+            readOnly={readOnly}
+            onQuery={onQuery}
+          />
+        ) : (
+          <div className="explorer-empty">
+            <Table2 size={32} />
+            <h2>Explore your data</h2>
+            <p>Select a table to inspect records, apply filters, or export a snapshot.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

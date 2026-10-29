@@ -1,3 +1,4 @@
+import { StatePill } from '@/components/workbench/primitives';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
@@ -18,7 +19,6 @@ import {
   Button,
   Tray,
   EmptyState,
-  Pill,
   Sheet,
   Table,
   Tabs,
@@ -202,9 +202,7 @@ export default function Access({
                   <TableRow key={u.id}>
                     <TableCell>{u.name}</TableCell>
                     <TableCell>
-                      <Pill tone={u.disabled ? 'neutral' : 'success'}>
-                        {u.disabled ? 'Disabled' : 'Active'}
-                      </Pill>
+                      <StatePill state={u.disabled ? 'Disabled' : 'Active'} />
                     </TableCell>
                     <TableCell>
                       <fieldset className="access-roles">

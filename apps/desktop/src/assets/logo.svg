@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Straton">
+  <defs>
+    <clipPath id="straton-disc"><circle cx="32" cy="32" r="31"/></clipPath>
+  </defs>
+  <g clip-path="url(#straton-disc)">
+    <rect width="64" height="64" fill="#e0e7ff"/>
+    <path d="M0 19 C8 14 16 14 24 18 S40 23 48 18 S60 13 64 15 V64 H0 Z" fill="#a5b4fc"/>
+    <path d="M0 31 C9 26 18 27 26 31 S42 36 50 31 S60 27 64 28 V64 H0 Z" fill="#6366f1"/>
+    <path d="M0 43 C8 39 16 39 24 43 S40 48 48 43 S59 39 64 40 V64 H0 Z" fill="#4338ca"/>
+    <path d="M0 54 C9 50 18 51 26 54 S42 58 50 54 S60 51 64 52 V64 H0 Z" fill="#1e1b4b"/>
+  </g>
+</svg>

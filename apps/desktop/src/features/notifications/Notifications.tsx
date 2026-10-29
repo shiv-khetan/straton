@@ -5,7 +5,7 @@ import type { Api, EngineNotification } from '@/lib/api';
 import { queryKeys } from '@/lib/queryKeys';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Pill } from '@/components/workbench/primitives';
+import { StatePill } from '@/components/workbench/primitives';
 import {
   FeatureEmpty,
   FeatureError,
@@ -108,13 +108,7 @@ export function Notifications({
             {list.data?.map((n) => (
               <li key={n.id} className={'space-y-2 py-3 ' + (!n.read ? 'bg-primary-soft' : '')}>
                 <div className="flex items-start gap-2">
-                  <Pill
-                    tone={
-                      n.severity === 'error' ? 'danger' : n.severity === 'warn' ? 'warning' : 'info'
-                    }
-                  >
-                    {n.severity}
-                  </Pill>
+                  <StatePill state={n.severity === 'warn' ? 'warning' : n.severity} />
                   <p className="min-w-0 flex-1 break-words font-medium">{n.title}</p>
                   {!n.read && <span className="text-caption text-primary">Unread</span>}
                 </div>

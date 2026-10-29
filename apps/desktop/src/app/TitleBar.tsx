@@ -1,16 +1,7 @@
 import { useEffect, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import {
-  ArrowLeft,
-  ArrowRight,
-  Minus,
-  Square,
-  Copy,
-  X,
-  Search,
-  SquareTerminal,
-} from 'lucide-react';
+import { Minus, Square, Copy, X, Search, SquareTerminal } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -24,15 +15,16 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu';
-import { Breadcrumb } from '@/components/workbench/primitives';
-import appIcon from '../../src-tauri/icons/32x32.png';
+import logo from '@/assets/logo.svg';
 import { Notifications } from '@/features/notifications/Notifications';
 import type { Api, Me } from '@/lib/api';
 import { useThemeStore } from '@/stores/theme';
-import { useRouteStore } from '@/stores/route';
+import type { Route } from '@/stores/route-history';
+import { navigation, routeAvailable, sectionLabels, sectionOf } from './navigation';
 export function TitleBar({
   workspace,
-  breadcrumbs,
+  page,
+  onNavigate,
   me,
   online,
   live,
@@ -48,7 +40,8 @@ export function TitleBar({
   consoleCollapsed,
 }: {
   workspace: string;
-  breadcrumbs: string[];
+  page: Route;
+  onNavigate: (route: Route) => void;
   me: Me | null;
   online: boolean;
   live: string;
@@ -63,10 +56,16 @@ export function TitleBar({
   onConsole: () => void;
   consoleCollapsed: boolean;
 }) {
+  const [accountPointerFocus, setAccountPointerFocus] = useState(false);
+  useEffect(() => {
+    const keyboard = () => setAccountPointerFocus(false);
+    window.addEventListener('keydown', keyboard, true);
+    return () => window.removeEventListener('keydown', keyboard, true);
+  }, []);
   const native = isTauri();
   const [maximized, setMaximized] = useState(false);
   const { preference, setTheme } = useThemeStore();
-  const { index, entries, back, forward } = useRouteStore();
+  const active = sectionOf(page);
   const initials =
     me?.user.name
       .split(/\s+/)
@@ -139,86 +138,93 @@ export function TitleBar({
       }}
     >
       <span
-        className="pointer-events-none flex shrink-0 items-center gap-1.5 text-body font-semibold"
+        className="pointer-events-none flex shrink-0 items-center gap-2 pr-3 text-body font-semibold"
         data-tauri-drag-region
       >
-        <img src={appIcon} width={20} height={20} alt="" draggable={false} />
+        <img src={logo} width={22} height={22} alt="" draggable={false} />
         <span className="max-[680px]:hidden">Straton</span>
       </span>
-      <div className="flex items-center gap-0.5">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Back"
-          disabled={index === 0}
-          onClick={back}
-        >
-          <ArrowLeft size={16} />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Forward"
-          disabled={index >= entries.length - 1}
-          onClick={forward}
-        >
-          <ArrowRight size={16} />
-        </Button>
-      </div>
-      <span
-        className="max-w-32 truncate border-l border-line pl-2 font-mono text-caption text-ink-2 max-[1000px]:hidden"
-        title={workspace}
+      <nav
+        aria-label="Sections"
+        className="scrollbar-hidden flex h-full min-w-0 items-stretch gap-1 overflow-x-auto"
       >
-        {workspace}
-      </span>
-      <div
-        className="min-w-0 max-w-56 flex-1 overflow-hidden max-[1100px]:hidden"
-        data-tauri-drag-region
-      >
-        <Breadcrumb items={breadcrumbs} />
-      </div>
+        {navigation.map((group) => {
+          const target = group.items.find((item) => routeAvailable(me, item.route));
+          const current = group === active;
+          return (
+            <button
+              key={group.label}
+              type="button"
+              className={
+                'section-tab relative flex items-center whitespace-nowrap px-2.5 text-body transition-colors duration-fast ' +
+                (current ? 'font-medium text-ink' : 'text-ink-2 hover:text-ink')
+              }
+              aria-current={current ? 'page' : undefined}
+              disabled={!target}
+              onClick={() => target && onNavigate(target.route)}
+            >
+              {sectionLabels[group.label]}
+            </button>
+          );
+        })}
+      </nav>
       <Button
         variant="ghost"
-        className="ml-auto h-8 w-56 justify-start rounded-sm border border-line bg-panel px-3 text-ink-3 hover:bg-panel-2 max-[850px]:w-44 max-[680px]:w-8 max-[680px]:px-2"
+        className="ml-auto h-8 w-60 justify-start rounded-sm border border-line bg-surface px-2.5 font-normal text-ink-3 hover:bg-surface-2 hover:text-ink-2 max-[1100px]:w-44 max-[760px]:w-8 max-[760px]:px-2"
         onClick={onSearch}
         aria-label="Search workspace (Ctrl or Command K)"
       >
         <Search size={16} />
-        <span className="flex-1 text-left max-[680px]:hidden">Search…</span>
-        <kbd className="text-caption max-[680px]:hidden">
+        <span className="flex-1 text-left max-[760px]:hidden">Search</span>
+        <kbd className="rounded-xs border border-line px-1 text-xs text-ink-3 max-[760px]:hidden">
           {navigator.platform.includes('Mac') ? '⌘ K' : 'Ctrl K'}
         </kbd>
       </Button>
       <span
         role="status"
-        className="flex shrink-0 items-center gap-1.5 px-1 font-mono text-caption text-ink-2"
+        className="flex shrink-0 items-center gap-1.5 px-1.5 text-caption text-ink-2"
         title={workspace + ' · ' + live}
       >
         <span className={'size-1.5 rounded-full ' + (online ? 'bg-success' : 'bg-danger')} />
-        <span className="max-[850px]:hidden">{live}</span>
+        <span className="max-[960px]:hidden">{live}</span>
+        <span className="max-w-36 truncate font-mono text-ink-3 max-[1180px]:hidden">
+          {workspace}
+        </span>
       </span>
       <Notifications client={client} readOnly={!online} onEntity={onEntity} />
       <Button
         variant="ghost"
         size="icon-sm"
         disabled={consoleDisabled}
-        aria-label="Toggle console drawer"
-        aria-expanded={!consoleCollapsed}
+        aria-label={consoleCollapsed ? 'Show live events and run history' : 'Hide console'}
+        aria-pressed={!consoleCollapsed}
+        className={consoleCollapsed ? '' : 'bg-primary-soft text-primary'}
         onClick={onConsole}
       >
         <SquareTerminal size={18} />
       </Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-sm" aria-label="Account menu">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Account menu"
+            data-pointer-focus={accountPointerFocus}
+            className="data-[pointer-focus=true]:ring-0 data-[pointer-focus=true]:outline-none"
+            onPointerDown={() => setAccountPointerFocus(true)}
+          >
             <Avatar className="size-7">
-              <AvatarFallback className="bg-panel font-mono text-caption text-ink">
+              <AvatarFallback className="bg-primary-soft text-xs font-semibold text-primary">
                 {initials}
               </AvatarFallback>
             </Avatar>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuContent
+          align="end"
+          className="w-60"
+          onPointerDown={() => setAccountPointerFocus(true)}
+        >
           <DropdownMenuLabel>
             <span className="block text-caption font-normal text-ink-3">Signed in as</span>
             <span className="block truncate">{me?.user.name ?? 'Not connected'}</span>

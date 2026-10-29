@@ -58,3 +58,14 @@ export function routeAvailable(me: Me | null, route: Route) {
     canPage(me, route)
   );
 }
+// Top-bar section names; the sidebar lists the active section's pages.
+export const sectionLabels: Record<NavGroup, string> = {
+  Workspace: 'Overview',
+  Data: 'Data',
+  Engineering: 'Engineering',
+  Intelligence: 'Intelligence',
+  Administration: 'Admin',
+};
+export function sectionOf(route: Route): (typeof navigation)[number] {
+  return navigation.find((g) => g.items.some((i) => i.route === route)) ?? navigation[0];
+}

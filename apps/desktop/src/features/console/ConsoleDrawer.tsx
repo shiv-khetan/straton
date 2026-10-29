@@ -4,7 +4,7 @@ import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/compon
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { EngineEvent, Job, Run, ModelExplain } from '@/lib/api';
-import { Button, Icon, Pill, Table, Tabs, stateTone } from '@/components/workbench/primitives';
+import { Button, Icon, Table, Tabs, StatePill } from '@/components/workbench/primitives';
 import {
   clampDrawerHeight,
   drawerBounds,
@@ -13,15 +13,10 @@ import {
 } from '@/features/console/workbench-model';
 import type { LogLevel } from '@/features/console/workbench-model';
 import { ruleDiffRows } from '@/features/transformations/model-model';
-import { runStats } from '@/features/jobs/job-model';
+import { RunTable } from '@/features/jobs/RunTable';
 export function StatusChip({ state }: { state?: string | null }) {
   const chip = statusChip(state);
-  return (
-    <Pill tone={chip.tone} className={'status-chip state-' + chip.state.replace(' ', '-')}>
-      <span className="status-dot" />
-      {chip.label}
-    </Pill>
-  );
+  return <StatePill state={chip.state} label={chip.label} />;
 }
 export function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
   const [message, setMessage] = useState('');
@@ -316,56 +311,18 @@ export function RunHistory({
   busy?: boolean;
 }) {
   return runs.length ? (
-    <Table label="Selected entity run history">
-      <TableHeader>
-        <TableRow>
-          <TableHead>Job / run</TableHead>
-          <TableHead>State</TableHead>
-          <TableHead>Attempt</TableHead>
-          <TableHead>Batches</TableHead>
-          <TableHead>Changes / read</TableHead>
-          <TableHead>Details</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {runs.map((run) => (
-          <TableRow key={run.id}>
-            <TableCell>
-              {jobs.find((job) => job.id === run.job_id)?.name ?? run.job_id}
-              <small>
-                <code>{run.id}</code>
-              </small>
-            </TableCell>
-            <TableCell>
-              <Pill tone={stateTone(run.state)}>{run.state}</Pill>
-            </TableCell>
-            <TableCell>{run.attempt}</TableCell>
-            <TableCell>{run.committed_batches}</TableCell>
-            <TableCell>
-              <code>{runStats(run)}</code>
-              {run.fallback_reason && <small>{run.fallback_reason}</small>}
-            </TableCell>
-            <TableCell>
-              {run.error ?? new Date(run.available_at * 1000).toLocaleString()}
-              {cancel && ['queued', 'running'].includes(run.state) && (
-                <Button
-                  type="button"
-                  variant="destructive"
-                  disabled={busy}
-                  onClick={() => cancel(run.id)}
-                >
-                  Cancel run
-                </Button>
-              )}
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <RunTable
+      runs={runs}
+      jobs={jobs}
+      cancel={cancel}
+      busy={busy}
+      label="Selected entity run history"
+    />
   ) : (
     <p className="empty">No run history for this selection.</p>
   );
 }
+
 export function ExplainPlan({ plans }: { plans: ModelExplain | null }) {
   if (!plans)
     return (

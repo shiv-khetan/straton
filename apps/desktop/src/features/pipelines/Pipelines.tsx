@@ -43,7 +43,7 @@ import {
   Choice,
   useFeatureAction,
 } from '@/components/workbench/FeatureState';
-import { Pill, Tabs, stateTone } from '@/components/workbench/primitives';
+import { Tabs, StatePill } from '@/components/workbench/primitives';
 import { relativeTime } from '@/lib/view-model';
 import { graphValidation, placeNodes, validationDisplay } from './pipeline-model';
 import './styles.css';
@@ -65,7 +65,7 @@ function Task({ data }: NodeProps<TaskNode>) {
       <Handle type="target" position={Position.Left} />
       <span className="text-caption text-ink-2">{data.kind}</span>
       <strong>{data.label}</strong>
-      <Pill tone={stateTone(data.state)}>{data.state}</Pill>
+      <StatePill state={data.state} />
       {data.errors.map((e, i) => (
         <span className="text-caption text-danger" key={i}>
           {e}
@@ -334,13 +334,13 @@ function PipelineRow({
             Retry status
           </Button>
         ) : (
-          <Pill tone={stateTone(last?.state ?? '')}>{last?.state ?? 'Never run'}</Pill>
+          <StatePill state={last?.state ?? ''} label={last?.state ?? 'Never run'} />
         )}
       </TableCell>
       <TableCell>{last?.started_at ? relativeTime(last.started_at * 1000) : '—'}</TableCell>
       <TableCell>
         <code>{p.cron ?? 'Manual'}</code>
-        {!p.enabled && <Pill>Disabled</Pill>}
+        {!p.enabled && <StatePill state="disabled" />}
       </TableCell>
     </TableRow>
   );
@@ -766,7 +766,7 @@ function RunHistory({
       {run.data && (
         <>
           <div className="section-toolbar">
-            <Pill tone={stateTone(run.data.state)}>{run.data.state}</Pill>
+            <StatePill state={run.data.state} />
             <span>{run.data.trigger}</span>
             {['queued', 'running'].includes(run.data.state) && (
               <Button
@@ -811,13 +811,7 @@ function RunNodes({ run, graph }: { run: PipelineRunDetail; graph: PipelineInput
               </span>
             </TableCell>
             <TableCell>
-              <Pill
-                tone={
-                  n.state === 'failed' ? 'danger' : n.state === 'succeeded' ? 'success' : 'neutral'
-                }
-              >
-                {n.state}
-              </Pill>
+              <StatePill state={n.state} />
             </TableCell>
             <TableCell>
               <code>{n.child_run_id ?? '—'}</code>

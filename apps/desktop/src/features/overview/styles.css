@@ -1,10 +1,4 @@
 @layer components {
-  .delta-success {
-    @apply text-success;
-  }
-  .delta-danger {
-    @apply text-danger;
-  }
   .dashboard-grid {
     @apply grid;
     grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
@@ -13,13 +7,8 @@
   .activity-chart {
     @apply w-full block;
     max-height: 256px;
-    @apply font-mono;
-  }
-  .chart-legend {
-    @apply flex gap-4 justify-center text-caption text-ink-2;
-  }
-  .chart-legend span {
-    @apply flex items-center gap-1.5;
+    font-family: var(--font-ui);
+    font-variant-numeric: tabular-nums;
   }
   .activity-item {
     @apply flex items-center gap-2;
@@ -44,51 +33,45 @@
     @apply gap-3 mb-5;
   }
   .kpi-tile {
-    @apply flex flex-col items-stretch justify-between gap-0 min-w-0 p-0 overflow-hidden rounded-tray bg-panel text-left;
+    @apply flex flex-col items-stretch justify-between gap-0 min-w-0 p-0 overflow-hidden rounded-card border border-line bg-surface text-left;
   }
   .kpi-tile:hover:not(:disabled) {
-    @apply bg-panel-2;
-    border-color: var(--ink-3);
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
   }
   .kpi-top {
-    padding: 16px 16px 14px;
-    @apply bg-surface border-b border-line rounded-card;
+    padding: 10px 14px;
+    width: 100%;
   }
   .kpi-reading {
-    @apply flex items-baseline gap-1.5 mt-3;
-    min-height: 44px;
-    @apply flex-wrap;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-height: 34px;
+    margin-top: 2px;
   }
   .kpi-value {
-    @apply text-ink;
-    font: 600 1.875rem/1.3 var(--font-mono);
-    @apply tabular-nums;
+    color: var(--ink);
+    font: 600 1.75rem/1.2 var(--font-ui);
+    font-variant-numeric: tabular-nums;
     letter-spacing: -0.02em;
-    overflow-wrap: anywhere;
   }
   .kpi-unit {
-    font-size: 0.8125rem;
-    @apply text-ink-2;
+    font-size: 0.75rem;
+    color: var(--ink-2);
   }
   .sparkline {
-    width: 62px;
-    height: 40px;
-    @apply ml-auto self-center;
+    display: block;
+    flex-shrink: 0;
+    margin-left: auto;
+    align-self: center;
+    font-family: var(--font-ui);
+    font-variant-numeric: tabular-nums;
   }
-  .kpi-footer {
-    @apply flex gap-2 items-center justify-between;
-    padding: 10px 12px;
-    min-height: 42px;
+  .kpi-sublabel {
+    display: block;
     font-size: 0.75rem;
-    @apply text-ink-2;
-  }
-  .kpi-glyph {
-    @apply inline-grid;
-    place-items: center;
-    @apply rounded-sm;
-    width: 20px;
-    height: 20px;
-    @apply shrink-0;
+    font-weight: 400;
+    line-height: 18px;
   }
   .dashboard-grid {
     grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
@@ -105,32 +88,17 @@
     font-size: 1.5rem;
     @apply font-semibold text-ink;
   }
-  .matrix-container {
+  .activity-chart-container {
     @apply relative;
   }
   .activity-chart {
     max-height: none;
     @apply rounded-control;
   }
-  .matrix-axis {
+  .activity-axis {
     fill: var(--ink-3);
-    font: 0.75rem var(--font-mono);
-  }
-  .matrix-axis.current {
-    fill: var(--ink);
-  }
-  .chart-legend {
-    gap: 8px 12px;
-    @apply flex-wrap justify-start;
-    font: 0.75rem var(--font-mono);
-    @apply uppercase;
-  }
-  .matrix-key {
-    @apply inline-block;
-    width: 10px;
-    height: 10px;
-    border: 1px solid var(--ink-2);
-    @apply bg-panel-2 shrink-0;
+    font: 0.75rem var(--font-ui);
+    font-variant-numeric: tabular-nums;
   }
   .chart-tooltip {
     @apply absolute;
@@ -159,9 +127,6 @@
   }
   .tooltip-row:first-of-type {
     @apply pt-3;
-  }
-  .tooltip-row code {
-    @apply ml-auto;
   }
   .chart-help {
     font-size: 0.75rem;
@@ -205,9 +170,6 @@
   }
   .kpi-top {
     @apply flex-1;
-  }
-  .chart-legend {
-    @apply text-caption;
   }
 }
 
@@ -298,6 +260,52 @@
     .overview-core {
       grid-template-columns: minmax(0, 1fr);
       gap: 24px;
+    }
+  }
+}
+
+@layer components {
+  .overview-primary {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr);
+    gap: 16px;
+    align-items: start;
+    margin-bottom: 24px;
+  }
+  .overview-health {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+  .recent-runs .tray-surface {
+    padding: 0;
+  }
+  .recent-runs th,
+  .recent-runs td {
+    padding: 9px 12px;
+  }
+  .overview-health .overview-rows {
+    max-height: 200px;
+    overflow: auto;
+  }
+  .overview-health .overview-row {
+    padding: 8px 0;
+  }
+  .overview-health .overview-row:first-child {
+    padding-top: 0;
+  }
+  .overview-health .overview-row:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+  .quality-failure {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 16px;
+  }
+  @media (max-width: 1050px) {
+    .overview-primary {
+      grid-template-columns: minmax(0, 1fr);
     }
   }
 }

@@ -7,8 +7,16 @@ import {
   TableBody,
   TableCell,
 } from '@/components/ui/table';
-import { SourceHealth, ActiveWork, RecentQueries, Storage, DataQualityScore } from './CoreOverview';
+import {
+  SourceHealth,
+  ActiveWork,
+  RecentQueries,
+  Storage,
+  FailingCheck,
+  useOverviewQuality,
+} from './CoreOverview';
 import { useId, useState } from 'react';
+import { Button } from '@/components/ui/button';
 import type { Dataset, Job, Run, Status } from '@/lib/api';
 import {
   EmptyState,
@@ -17,16 +25,13 @@ import {
   Pill,
   SegmentedControl,
   Tray,
-  stateTone,
+  StatePill,
 } from '@/components/workbench/primitives';
 import {
   backupTime,
   bucketRuns,
   bucketTooltip,
-  axisLabelShown,
   chartStates,
-  matrixCells,
-  matrixLayout,
   navigateBucket,
   relativeTime,
   runKpi,
@@ -39,20 +44,22 @@ function SyncActivity({ runs }: { runs: Run[] }) {
   const [active, setActive] = useState<number | null>(null);
   const [focused, setFocused] = useState(false);
   const id = useId();
-  const days = bucketRuns(runs, Date.now(), range, range === 7 ? 4 : 1);
-  const { unit, rows } = matrixLayout(days);
+  const days = bucketRuns(runs, Date.now(), range);
+  const totals = days.map((day) => bucketTooltip(day).total);
+  const max = Math.max(1, ...totals);
   const tooltip = active === null ? null : bucketTooltip(days[active]);
-  const width = Math.max(560, days.length * 16 + 64);
-  const height = rows * 12 + 64;
-  const x = (i: number) => 48 + i * ((width - 80) / (days.length - 1));
+  const width = 640,
+    height = 190,
+    plotHeight = 140,
+    baseline = 152;
+  const step = (width - 60) / days.length;
+  const x = (i: number) => 44 + (i + 0.5) * step;
   return (
     <>
       <div className="chart-toolbar">
         <p>
-          <code>
-            {days.reduce((sum, day) => sum + bucketTooltip(day).total, 0).toLocaleString()}
-          </code>{' '}
-          runs <span className="hint">by scheduled time</span>
+          <code>{totals.reduce((a, b) => a + b, 0).toLocaleString()}</code> runs{' '}
+          <span className="hint">· 1-day buckets by scheduled time</span>
         </p>
         <SegmentedControl
           label="Sync activity range"
@@ -64,7 +71,7 @@ function SyncActivity({ runs }: { runs: Run[] }) {
           }}
         />
       </div>
-      <div className="matrix-container">
+      <div className="activity-chart-container">
         <svg
           className="activity-chart"
           viewBox={'0 0 ' + width + ' ' + height}
@@ -98,82 +105,43 @@ function SyncActivity({ runs }: { runs: Run[] }) {
             setActive(navigateBucket(active ?? days.length - 1, event.key, days.length));
           }}
         >
-          <title>Sync activity by scheduled run time</title>
+          <title>Daily sync runs by scheduled time</title>
           <desc>
-            Square cells show run counts. Patterns distinguish states. Exact values are available in
-            the data table below.
+            Each bar shows one day's total runs. Exact state counts are in the data table below.
           </desc>
-          <defs>
-            {chartStates
-              .filter((state) => state !== 'succeeded')
-              .map((state) => (
-                <pattern
-                  key={state}
-                  id={id + '-' + state}
-                  width="8"
-                  height="8"
-                  patternUnits="userSpaceOnUse"
-                >
-                  <rect width="8" height="8" fill="var(--panel-2)" />
-                  <path
-                    d={
-                      {
-                        running: 'M0 4H8',
-                        queued: 'M3 4h2',
-                        failed: 'M1 1l6 6M1 7l6-6',
-                        interrupted: 'M4 0v3M4 5v3',
-                        cancelled: 'M0 8L8 0',
-                      }[state]
-                    }
-                    stroke="var(--ink-2)"
-                    strokeWidth={state === 'queued' ? 2 : 1}
-                  />
-                </pattern>
-              ))}
-          </defs>
-          {[0, Math.floor(rows / 2), rows].map((row) => (
-            <g key={row}>
-              <text x="4" y={height - 38 - row * 12} className="matrix-axis">
-                {row * unit}
+          {[...new Set([0, Math.ceil(max / 2), max])].map((value) => (
+            <g key={value}>
+              <line
+                x1="38"
+                x2={width - 8}
+                y1={baseline - (value / max) * plotHeight}
+                y2={baseline - (value / max) * plotHeight}
+                stroke="var(--line)"
+              />
+              <text
+                x="30"
+                y={baseline - (value / max) * plotHeight + 4}
+                textAnchor="end"
+                className="activity-axis"
+              >
+                {value}
               </text>
             </g>
           ))}
           {days.map((day, i) => (
             <g key={day.start} onPointerEnter={() => setActive(i)} onClick={() => setActive(i)}>
+              <rect x={x(i) - step / 2} y="8" width={step} height={baseline} fill="transparent" />
               <rect
-                x={x(i) - (width - 80) / days.length / 2}
-                y="8"
-                width={(width - 80) / days.length}
-                height={rows * 12 + 28}
-                fill="transparent"
+                x={x(i) - step * 0.3}
+                y={baseline - (totals[i] / max) * plotHeight}
+                width={step * 0.6}
+                height={(totals[i] / max) * plotHeight}
+                fill="var(--mark)"
+                opacity={active === null || active === i ? 1 : 0.55}
               />
-              {matrixCells(day, unit, rows).map((state, j) => (
-                <rect
-                  key={j}
-                  x={x(i) - 5}
-                  y={height - 50 - j * 12}
-                  width="10"
-                  height="10"
-                  fill={
-                    state === 'succeeded'
-                      ? 'var(--mark)'
-                      : state
-                        ? 'url(#' + id + '-' + state + ')'
-                        : 'var(--cell-empty)'
-                  }
-                />
-              ))}
-              {axisLabelShown(i, active ?? days.length - 1, range) && (
-                <text
-                  x={x(i)}
-                  y={height - 15}
-                  textAnchor="middle"
-                  className={
-                    'matrix-axis' +
-                    (day.axisLabel === days[active ?? days.length - 1].axisLabel ? ' current' : '')
-                  }
-                >
-                  {day.axisLabel.toUpperCase()}
+              {(range === 7 || i % 5 === 0) && (
+                <text x={x(i)} y={height - 14} textAnchor="middle" className="activity-axis">
+                  {day.axisLabel}
                 </text>
               )}
             </g>
@@ -183,8 +151,8 @@ function SyncActivity({ runs }: { runs: Run[] }) {
               x1={x(active)}
               x2={x(active)}
               y1="8"
-              y2={height - 38}
-              stroke="var(--mark)"
+              y2={baseline}
+              stroke="var(--ink-3)"
               strokeDasharray="2 4"
               pointerEvents="none"
             />
@@ -198,42 +166,23 @@ function SyncActivity({ runs }: { runs: Run[] }) {
           >
             <div className="tooltip-heading">
               {tooltip.label}
-              <code>{tooltip.total} runs</code>
+              <span className="tabular-nums">{tooltip.total} runs</span>
             </div>
             {tooltip.rows.map(({ state, value }) => (
               <div className="tooltip-row" key={state}>
-                <svg className="matrix-key" width="10" height="10" aria-hidden="true">
-                  <rect
-                    width="10"
-                    height="10"
-                    fill={state === 'succeeded' ? 'var(--mark)' : 'url(#' + id + '-' + state + ')'}
-                  />
-                </svg>
-                <span>{state}</span>
-                <code>{value}</code>
+                <StatePill state={state} />
+                <span className="ml-auto tabular-nums">{value}</span>
               </div>
             ))}
           </div>
         )}
       </div>
-      <div className="chart-legend">
-        {chartStates.map((state) => (
-          <span key={state}>
-            <svg className="matrix-key" width="10" height="10" aria-hidden="true">
-              <rect
-                width="10"
-                height="10"
-                fill={state === 'succeeded' ? 'var(--mark)' : 'url(#' + id + '-' + state + ')'}
-              />
-            </svg>
-            {state}
-          </span>
-        ))}
-      </div>
+      {!totals.some(Boolean) && (
+        <p className="hint">No runs in the loaded history for these days.</p>
+      )}
       <p id={id + '-help'} className="hint chart-help">
-        {range === 7 ? 'Four buckets per day. ' : 'Daily buckets. '}Each cell represents{' '}
-        {unit === 1 ? '1 run' : 'up to ' + unit + ' runs'}. Focus the chart and use arrow keys;
-        Home/End jump to the first/last bucket. Escape dismisses the tooltip.
+        Daily buckets. Focus the chart and use arrow keys; Home/End jump to the first/last day.
+        Escape dismisses the tooltip.
       </p>
       <span className="visually-hidden" role="status">
         {focused && tooltip
@@ -244,13 +193,13 @@ function SyncActivity({ runs }: { runs: Run[] }) {
         <summary>View activity data</summary>
         <div className="table-wrap">
           <DataTable>
-            <TableCaption>Sync activity by bucket, last {range} days</TableCaption>
+            <TableCaption>Sync activity by day, last {range} days</TableCaption>
             <TableHeader>
               <TableRow>
                 <TableHead scope="col">Date</TableHead>
                 {chartStates.map((state) => (
-                  <TableHead key={state} scope="col">
-                    {state}
+                  <TableHead className="text-right tabular-nums" key={state} scope="col">
+                    {state[0].toUpperCase() + state.slice(1)}
                   </TableHead>
                 ))}
               </TableRow>
@@ -260,7 +209,9 @@ function SyncActivity({ runs }: { runs: Run[] }) {
                 <TableRow key={day.start}>
                   <TableHead scope="row">{day.label}</TableHead>
                   {chartStates.map((state) => (
-                    <TableCell key={state}>{day[state]}</TableCell>
+                    <TableCell className="text-right tabular-nums" key={state}>
+                      {day[state]}
+                    </TableCell>
                   ))}
                 </TableRow>
               ))}
@@ -313,16 +264,25 @@ export default function Dashboard({
     (dataset) => dataset.source_id !== 'straton-local-lake' && dataset.last_synced_at,
   );
   const backup = backupTime(status?.last_backup);
-  const backupAge = backup
-    ? relativeTime(backup, now)
-        .replace('Just now', '<1m')
-        .replace(' min ago', 'm')
-        .replace(' h ago', 'h')
-        .replace(' d ago', 'd')
-    : status?.last_backup
-      ? 'Unknown'
-      : 'Never';
-  const deltaLabel = (delta: number) => (delta > 0 ? '+' : '') + delta + ' vs prior 24h';
+  const backupAge = backup ? relativeTime(backup, now) : status?.last_backup ? 'Unknown' : 'Never';
+  const quality = useOverviewQuality(client);
+  const qualityTotal = quality.data
+    ? Object.values(quality.data.summary.counts).reduce((a, b) => a + b, 0)
+    : 0;
+  const qualityRuns = quality.data?.runs ?? [];
+  const qualityCounts = timestampSeries(
+    qualityRuns.map((r) => r.started_at * 1000),
+    now,
+  );
+  const qualityPassed = timestampSeries(
+    qualityRuns.filter((r) => r.status === 'passed').map((r) => r.started_at * 1000),
+    now,
+  );
+  const qualitySeries = qualityCounts.map((count, i) =>
+    count ? (qualityPassed[i] / count) * 100 : null,
+  );
+  const succeeded = runKpi(runs, now, 'succeeded').current;
+  const recentRuns = [...runs].sort((a, b) => b.available_at - a.available_at).slice(0, 5);
   return (
     <>
       <div className="kpi-grid" aria-label="Engine overview">
@@ -330,12 +290,11 @@ export default function Dashboard({
           caption="Datasets synced"
           value={canNavigate('Data Map') ? synced.length.toLocaleString() : '—'}
           unit="datasets"
-          series={timestampSeries(
-            synced.map((dataset) => Date.parse(dataset.last_synced_at!)),
-            now,
-          )}
-          seriesLabel="Latest dataset sync timestamps, twelve 2-hour buckets"
-          footer="Latest syncs · last 24h"
+          series={runs.length ? runSparkline(runs, now, 'succeeded') : []}
+          seriesLabel="Succeeded sync runs, twelve 2-hour buckets"
+          footer={
+            synced.length ? synced.length + ' datasets have synced' : 'No datasets synced yet'
+          }
           disabled={!canNavigate('Data Map')}
           onClick={() => navigate('Data Map')}
         />
@@ -343,10 +302,17 @@ export default function Dashboard({
           caption="Runs · 24h"
           value={canNavigate('Jobs') ? total.current.toLocaleString() : '—'}
           unit="runs"
-          series={runSparkline(runs, now)}
+          series={runs.length ? runSparkline(runs, now) : []}
           seriesLabel="Runs, twelve 2-hour buckets"
-          footer={canNavigate('Jobs') ? deltaLabel(total.delta) : 'Requires sync admin'}
-          tone={total.delta > 0 ? 'success' : total.delta < 0 ? 'danger' : 'neutral'}
+          footer={
+            canNavigate('Jobs')
+              ? total.current
+                ? succeeded === total.current
+                  ? 'All succeeded'
+                  : succeeded + ' succeeded, ' + failed.current + ' failed'
+                : 'No runs in 24h'
+              : 'Requires sync admin'
+          }
           disabled={!canNavigate('Jobs')}
           onClick={() => navigate('Jobs')}
         />
@@ -354,38 +320,129 @@ export default function Dashboard({
           caption="Failed · 24h"
           value={canNavigate('Jobs') ? failed.current.toLocaleString() : '—'}
           unit="runs"
-          series={runSparkline(runs, now, 'failed')}
+          series={runs.length ? runSparkline(runs, now, 'failed') : []}
           seriesLabel="Failed runs, twelve 2-hour buckets"
-          footer={canNavigate('Jobs') ? deltaLabel(failed.delta) : 'Requires sync admin'}
-          tone={failed.delta > 0 ? 'danger' : failed.delta < 0 ? 'success' : 'neutral'}
+          footer={
+            canNavigate('Jobs')
+              ? failed.current
+                ? failed.current + ' failed in 24h'
+                : 'None in 24h'
+              : 'Requires sync admin'
+          }
+          tone={failed.current ? 'danger' : 'neutral'}
           disabled={!canNavigate('Jobs')}
           onClick={() => navigate('Jobs', 'failed')}
         />
-        <KpiTile
-          caption="Last backup"
-          value={canNavigate('Backups') ? backupAge : '—'}
-          unit={backup ? 'ago' : undefined}
-          series={timestampSeries(
-            backups.map((path) => Date.parse(backupTime(path) ?? '')),
-            now,
-            86400000,
-          )}
-          seriesLabel="Backups, twelve 24-hour buckets"
-          footer={canNavigate('Backups') ? 'Backup activity · last 12 days' : 'Requires admin'}
-          disabled={!canNavigate('Backups')}
-          onClick={() => navigate('Backups')}
-        />
+        {qualityTotal > 0 ? (
+          <KpiTile
+            caption="Data quality"
+            value={quality.data!.summary.score.toFixed(1) + '%'}
+            series={qualitySeries}
+            seriesLabel="Quality pass rate, twelve 2-hour buckets; gaps mean no runs"
+            footer={
+              quality.data!.summary.counts.passed +
+              ' passed, ' +
+              quality.data!.summary.counts.failed +
+              ' failed' +
+              (quality.data!.summary.counts.error
+                ? ', ' + quality.data!.summary.counts.error + ' errors'
+                : '')
+            }
+            onClick={() => navigate('Data Quality')}
+          />
+        ) : (
+          <KpiTile
+            caption="Last backup"
+            value={canNavigate('Backups') ? backupAge : '—'}
+            series={
+              backups.length
+                ? timestampSeries(
+                    backups.map((path) => Date.parse(backupTime(path) ?? '')),
+                    now,
+                    86400000,
+                  )
+                : []
+            }
+            seriesLabel="Backups, twelve 24-hour buckets"
+            footer={
+              canNavigate('Backups') ? 'Backup activity in the last 12 days' : 'Requires admin'
+            }
+            disabled={!canNavigate('Backups')}
+            onClick={() => navigate('Backups')}
+          />
+        )}
       </div>
-      <div className="overview-core">
-        <SourceHealth
-          sources={sources}
-          jobs={jobs}
-          runs={runs}
-          client={client}
-          me={me}
-          readOnly={readOnly}
-        />
-        <ActiveWork runs={runs} jobs={jobs} models={models} />
+      <div className="overview-primary">
+        <Tray
+          title="Recent runs"
+          className="recent-runs"
+          actions={
+            <Button
+              variant="link"
+              size="sm"
+              disabled={!canNavigate('Jobs')}
+              onClick={() => navigate('Jobs')}
+            >
+              View all
+            </Button>
+          }
+        >
+          {canNavigate('Jobs') ? (
+            recentRuns.length ? (
+              <DataTable>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right tabular-nums">Rows</TableHead>
+                    <TableHead className="text-right tabular-nums">Started</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {recentRuns.map((run) => (
+                    <TableRow key={run.id}>
+                      <TableCell title={run.id}>
+                        {jobs.find((j) => j.id === run.job_id)?.name ?? run.job_id.slice(0, 8)}
+                      </TableCell>
+                      <TableCell>
+                        <StatePill state={run.state} />
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {run.rows_read.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        <time
+                          title={
+                            new Date(run.available_at * 1000).toLocaleString() +
+                            ' · scheduled availability; actual start time is not reported'
+                          }
+                        >
+                          {relativeTime(run.available_at * 1000, now)}
+                        </time>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </DataTable>
+            ) : (
+              <p className="hint p-4">No runs yet. Create a sync job to get started.</p>
+            )
+          ) : (
+            <p className="hint p-4">Run history requires sync admin access.</p>
+          )}
+        </Tray>
+        <div className="overview-health">
+          <SourceHealth
+            sources={sources}
+            datasets={datasets}
+            jobs={jobs}
+            runs={runs}
+            client={client}
+            me={me}
+            readOnly={readOnly}
+          />
+          <FailingCheck query={quality} onOpen={() => navigate('Data Quality')} />
+        </div>
       </div>
       <div className="dashboard-grid">
         <Tray title="Sync activity">
@@ -405,7 +462,7 @@ export default function Dashboard({
                   <code>{event.type}</code>
                   <small>{event.message ?? event.id ?? 'engine'}</small>
                 </div>
-                {event.state && <Pill tone={stateTone(event.state)}>{event.state}</Pill>}
+                {event.state && <StatePill state={event.state} />}
               </div>
             ))}
             {!events.length && (
@@ -429,7 +486,7 @@ export default function Dashboard({
           </section>
         )}
       </div>
-      <DataQualityScore client={client} onOpen={() => navigate('Data Quality')} />
+      <ActiveWork runs={runs} jobs={jobs} models={models} />
       <section className="failed-jobs">
         <h2>Failed jobs</h2>
         {runs
@@ -441,7 +498,7 @@ export default function Dashboard({
                 {jobs.find((j) => j.id === r.job_id)?.name ?? r.job_id}
                 <small>{r.error ?? 'Run failed'}</small>
               </span>
-              <Pill tone="danger">Failed</Pill>
+              <StatePill state="failed" />
             </div>
           ))}
         {!runs.some((r) => r.state === 'failed') && (

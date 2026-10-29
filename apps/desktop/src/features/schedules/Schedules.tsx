@@ -4,7 +4,7 @@ import type { Api, Job, Model } from '@/lib/api';
 import type { Route } from '@/stores/route-history';
 import { queryKeys } from '@/lib/queryKeys';
 import { Button } from '@/components/ui/button';
-import { Pill } from '@/components/workbench/primitives';
+import { StatePill } from '@/components/workbench/primitives';
 import {
   Choice,
   FeatureEmpty,
@@ -164,9 +164,10 @@ export default function Schedules({
                   <code>{r.cron}</code>
                 </TableCell>
                 <TableCell>
-                  <Pill tone={r.error ? 'danger' : r.enabled ? 'success' : 'neutral'}>
-                    {r.error ? 'Invalid cron' : r.enabled ? 'Enabled' : 'Disabled'}
-                  </Pill>
+                  <StatePill
+                    state={r.error ? 'error' : r.enabled ? 'enabled' : 'disabled'}
+                    label={r.error ? 'Invalid cron' : r.enabled ? 'Enabled' : 'Disabled'}
+                  />
                 </TableCell>
                 <TableCell>
                   {r.error ? (

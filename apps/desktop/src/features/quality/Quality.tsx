@@ -38,7 +38,7 @@ import {
   FeatureLoading,
   useFeatureAction,
 } from '@/components/workbench/FeatureState';
-import { Pill } from '@/components/workbench/primitives';
+import { Pill, StatePill, Sparkline } from '@/components/workbench/primitives';
 import { relativeTime } from '@/lib/view-model';
 const kinds: QualityKind[] = [
   'not_null',
@@ -67,6 +67,7 @@ export default function Quality({
   models,
   readOnly,
   request,
+  createRequest,
 }: {
   client: Api;
   me: Me;
@@ -74,6 +75,7 @@ export default function Quality({
   models: Model[];
   readOnly: boolean;
   request?: { id: string; nonce: number } | null;
+  createRequest?: number;
 }) {
   const checks = useQuery({
     queryKey: [...queryKeys.quality, 'view', 'checks'],
@@ -88,6 +90,9 @@ export default function Quality({
     queryFn: () => client.qualityRuns(100),
   });
   const [editing, setEditing] = useState<QualityCheck | 'new' | null>(null);
+  useEffect(() => {
+    if (createRequest) setEditing('new');
+  }, [createRequest]);
   const [history, setHistory] = useState<QualityCheck | null>(null);
   const handledRequest = useRef<number | null>(null);
   useEffect(() => {
@@ -100,12 +105,6 @@ export default function Quality({
   const writable = (q: QualityCheck) => me.privileges.admin || q.owner_id === me.user.id;
   return (
     <section className="space-y-5">
-      <div className="section-toolbar">
-        <p className="text-ink-2">Verify the data your workspace depends on.</p>
-        <Button disabled={readOnly} onClick={() => setEditing('new')}>
-          New check
-        </Button>
-      </div>
       <FeatureError error={action.error} />
       {summary.isPending && <FeatureLoading label="Loading quality score" />}
       <FeatureError error={summary.error} retry={() => void summary.refetch()} />
@@ -113,7 +112,7 @@ export default function Quality({
         <div className="flex flex-wrap items-center gap-6 rounded-card border border-line bg-panel p-4">
           <div>
             <h2 className="font-medium">Quality score</h2>
-            <span className="font-mono text-2xl">
+            <span className="text-2xl font-semibold tabular-nums">
               {total ? summary.data.score.toFixed(1) + '%' : '—'}
             </span>
             <span className="ml-2 text-ink-2">
@@ -121,40 +120,29 @@ export default function Quality({
             </span>
           </div>
           <div className="flex flex-wrap gap-3">
-            <Pill tone="success">{summary.data.counts.passed} passed</Pill>
-            <Pill tone="danger">{summary.data.counts.failed} failed</Pill>
-            <Pill tone="warning">{summary.data.counts.error} errors</Pill>
+            <StatePill state="passed" label={summary.data.counts.passed + ' passed'} />
+            {/* Zero failures carry no alarm colour. */}
+            <StatePill
+              state={summary.data.counts.failed ? 'failed' : 'idle'}
+              label={summary.data.counts.failed + ' failed'}
+            />
+            <StatePill
+              state={summary.data.counts.error ? 'error' : 'idle'}
+              label={
+                summary.data.counts.error + (summary.data.counts.error === 1 ? ' error' : ' errors')
+              }
+            />
           </div>
           <div className="ml-auto">
             <p className="text-caption text-ink-2">Daily pass rate · 30 days</p>
-            <svg
-              width="180"
-              height="40"
-              viewBox="0 0 180 40"
-              role="img"
-              aria-label="Daily quality pass rate"
-            >
-              <title>
-                {summary.data.daily
-                  .map(
-                    (d) =>
-                      new Date(d.day * 1000).toISOString().slice(0, 10) +
-                      ': ' +
-                      (d.total ? d.score.toFixed(1) + '%' : 'no runs'),
-                  )
-                  .join('; ')}
-              </title>
-              {summary.data.daily.map((d, i) => (
-                <rect
-                  key={d.day}
-                  x={i * 6}
-                  y={40 - (d.total ? Math.max(2, d.score * 0.38) : 1)}
-                  width="3"
-                  height={d.total ? Math.max(2, d.score * 0.38) : 1}
-                  fill={d.total ? 'var(--mark)' : 'var(--line)'}
-                />
-              ))}
-            </svg>
+            <Sparkline
+              series={summary.data.daily.map((d) => (d.total ? d.score : null))}
+              label="Daily quality pass rate · 30 days; gaps mean no runs"
+              width={180}
+              height={40}
+              ceiling={100}
+              minPoints={7}
+            />
           </div>
         </div>
       )}
@@ -186,7 +174,11 @@ export default function Quality({
             {checks.data.map((q) => (
               <TableRow key={q.id}>
                 <TableCell>
-                  <Button variant="link" onClick={() => setHistory(q)}>
+                  <Button
+                    variant="link"
+                    className="h-auto justify-start p-0"
+                    onClick={() => setHistory(q)}
+                  >
                     {q.name}
                   </Button>
                   <p className="text-caption text-ink-2">
@@ -200,7 +192,7 @@ export default function Quality({
                   {q.column_name && <code className="block text-caption">{q.column_name}</code>}
                 </TableCell>
                 <TableCell>
-                  <Pill tone={q.severity === 'error' ? 'danger' : 'warning'}>{q.severity}</Pill>
+                  <Pill>{q.severity === 'error' ? 'Error' : 'Warning'}</Pill>
                 </TableCell>
                 <TableCell>
                   <CheckSparkline client={client} id={q.id} />
@@ -244,13 +236,15 @@ export default function Quality({
           ?.filter((r) => r.status !== 'passed')
           .slice(0, 10)
           .map((r) => (
-            <div className="overview-row" key={r.id}>
+            <div className="overview-row quality-failure" key={r.id}>
               <span>
                 {checks.data?.find((q) => q.id === r.check_id)?.name ?? r.check_id}
                 <small>{r.message}</small>
               </span>
-              <Pill tone="danger">{r.status}</Pill>
-              <time>{relativeTime(r.started_at * 1000)}</time>
+              <StatePill state={r.status} />
+              <time className="tabular-nums" title={new Date(r.started_at * 1000).toLocaleString()}>
+                {relativeTime(r.started_at * 1000)}
+              </time>
             </div>
           ))}
         {recent.data && !recent.data.some((r) => r.status !== 'passed') && (
@@ -317,9 +311,7 @@ function CheckSparkline({ client, id }: { client: Api; id: string }) {
   if (!query.data.length) return <span className="text-ink-2">Not run</span>;
   return (
     <div className="flex items-center gap-2">
-      <Pill tone={query.data[0].status === 'passed' ? 'success' : 'danger'}>
-        {query.data[0].status}
-      </Pill>
+      <StatePill state={query.data[0].status} />
       <svg
         width="72"
         height="24"
@@ -360,7 +352,7 @@ function CheckHistory({ client, id }: { client: Api; id: string }) {
       {query.data?.map((r: QualityRun) => (
         <div key={r.id} className="border-b border-line py-3">
           <div className="flex flex-wrap gap-3">
-            <Pill>{r.status}</Pill>
+            <StatePill state={r.status} />
             <time>{new Date(r.started_at * 1000).toLocaleString()}</time>
             <code>
               Observed: {r.observed ?? '—'} · Failing rows: {r.failing_rows ?? '—'}

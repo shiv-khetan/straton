@@ -7,7 +7,8 @@ import { can } from '@/features/access/access-model';
 import { StatusChip, Skeleton } from '@/features/console/ConsoleDrawer';
 import { queryKeys } from '@/lib/queryKeys';
 import { FeatureEmpty, FeatureError, FeatureLoading } from '@/components/workbench/FeatureState';
-import { Pill } from '@/components/workbench/primitives';
+import { StatePill, Tray } from '@/components/workbench/primitives';
+import { relativeTime } from '@/lib/view-model';
 import { formatBytes } from './storage-model';
 export function SourceHealth({
   sources,
@@ -16,15 +17,17 @@ export function SourceHealth({
   client,
   me,
   readOnly,
+  datasets,
 }: {
   sources: MapSource[];
+  datasets: import('@/lib/api').Dataset[];
   jobs: Job[];
   runs: Run[];
   client: Api;
   me: Me;
   readOnly: boolean;
 }) {
-  const [checks, setChecks] = useState<Record<string, string>>({});
+  const [checks, setChecks] = useState<Record<string, { ok: boolean; message: string }>>({});
   const [busy, setBusy] = useState(false);
   const checkable = sources.filter(
     (s) =>
@@ -38,19 +41,22 @@ export function SourceHealth({
           const result = await client.checkSource(source.id);
           setChecks((s) => ({
             ...s,
-            [source.id]: result.ok ? 'Connection healthy' : 'Check failed',
+            [source.id]: {
+              ok: result.ok,
+              message: result.ok ? 'Connection healthy' : 'Check failed',
+            },
           }));
         } catch (e) {
-          setChecks((s) => ({ ...s, [source.id]: String(e) }));
+          setChecks((s) => ({ ...s, [source.id]: { ok: false, message: String(e) } }));
         }
       }),
     );
     setBusy(false);
   }
   return (
-    <section>
-      <div className="section-toolbar">
-        <h2>Source health</h2>
+    <Tray
+      title="Source health"
+      actions={
         <Button
           variant="outline"
           size="sm"
@@ -59,37 +65,44 @@ export function SourceHealth({
         >
           {busy ? 'Checking…' : 'Check all'}
         </Button>
-      </div>
+      }
+    >
       <div className="overview-rows">
         {sources
           .filter((s) => !['models', 'parquet'].includes(s.kind))
           .map((source) => {
             const ids = new Set(jobs.filter((j) => j.source_id === source.id).map((j) => j.id));
             const last = runs
-              .filter((r) => ids.has(r.job_id))
+              .filter(
+                (r) =>
+                  ids.has(r.job_id) && ['succeeded', 'failed', 'interrupted'].includes(r.state),
+              )
               .sort((a, b) => b.available_at - a.available_at)[0];
+            const synced = datasets.some((d) => d.source_id === source.id && d.last_synced_at);
+            const health =
+              checks[source.id]?.ok === false || (last && last.state !== 'succeeded')
+                ? 'Failing'
+                : last || synced || checks[source.id]?.ok
+                  ? 'Healthy'
+                  : 'Never synced';
             return (
               <div className="overview-row" key={source.id}>
                 <span>
                   {source.name}
-                  <small>{source.kind}</small>
+                  <small>
+                    {source.kind}
+                    {last ? ' · ' + relativeTime(last.available_at * 1000) : ''}
+                  </small>
                 </span>
-                <span>
-                  {checks[source.id] ??
-                    (last ? (
-                      <StatusChip state={last.state} />
-                    ) : source.connected ? (
-                      'No runs yet'
-                    ) : (
-                      'External catalog'
-                    ))}
+                <span title={checks[source.id]?.message}>
+                  <StatePill state={health} />
                 </span>
               </div>
             );
           })}
         {!sources.length && <p className="hint">Connect a source to monitor its sync health.</p>}
       </div>
-    </section>
+    </Tray>
   );
 }
 export function ActiveWork({ runs, jobs, models }: { runs: Run[]; jobs: Job[]; models: Model[] }) {
@@ -144,7 +157,7 @@ export function RecentQueries({
             <code>{e.sql}</code>
           </Button>
           <code>{e.elapsed_ms.toLocaleString()} ms</code>
-          <span>{e.status}</span>
+          <StatePill state={e.status} />
         </div>
       ))}
       {!history.length && (
@@ -220,13 +233,14 @@ export function Storage({ client, readOnly }: { client: Api; readOnly: boolean }
   );
 }
 
-export function DataQualityScore({ client, onOpen }: { client: Api; onOpen: () => void }) {
-  const query = useQuery({
+export function useOverviewQuality(client: Api) {
+  return useQuery({
     queryKey: [...queryKeys.quality, 'view', 'overview-score'],
     queryFn: async () => {
-      const [summary, checks] = await Promise.all([
+      const [summary, checks, runs] = await Promise.all([
         client.qualitySummary(),
         client.qualityChecks(),
+        client.qualityRuns(100),
       ]);
       const latest = await Promise.all(
         checks.map(async (check) => ({
@@ -234,64 +248,59 @@ export function DataQualityScore({ client, onOpen }: { client: Api; onOpen: () =
           run: (await client.qualityCheckRuns(check.id, 1))[0],
         })),
       );
-      return { summary, latest };
+      return { summary, latest, runs };
     },
   });
-  const total = query.data
-    ? Object.values(query.data.summary.counts).reduce((a, b) => a + b, 0)
-    : 0;
+}
+export function FailingCheck({
+  query,
+  onOpen,
+}: {
+  query: ReturnType<typeof useOverviewQuality>;
+  onOpen: () => void;
+}) {
   const failing =
     query.data?.latest.filter((item) => item.run && item.run.status !== 'passed') ?? [];
+  const item = failing[0];
   return (
-    <section>
-      <div className="section-toolbar">
-        <h2>Data quality</h2>
-        <Button variant="outline" size="sm" onClick={onOpen}>
-          Manage checks
+    <Tray
+      title="Failing check"
+      actions={
+        <Button variant="link" size="sm" onClick={onOpen}>
+          Data Quality
         </Button>
-      </div>
-      {query.isPending && <FeatureLoading label="Loading quality score" />}
+      }
+    >
+      {query.isPending && <FeatureLoading label="Loading quality results" />}
       <FeatureError error={query.error} retry={() => void query.refetch()} />
-      {query.data && (
+      {item && (
         <>
-          <div className="flex flex-wrap items-center gap-3 py-2">
-            <span className="font-mono text-2xl">
-              {total ? query.data.summary.score.toFixed(1) + '%' : '—'}
-            </span>
-            <span className="text-ink-2">
-              {total
-                ? query.data.summary.counts.passed + ' of ' + total + ' latest checks passed'
-                : 'No check results yet'}
+          <div className="flex items-center gap-2">
+            <StatePill state={item.run.status} />
+            <strong>{item.check.name}</strong>
+          </div>
+          <p className="my-3 text-ink-2">{item.run.message}</p>
+          <div className="flex justify-between gap-3 text-caption text-ink-3 tabular-nums">
+            <span>{query.data!.summary.counts.passed} passed</span>
+            <span>
+              {failing.length} failing {failing.length === 1 ? 'check' : 'checks'}
             </span>
           </div>
-          {failing.slice(0, 5).map(({ check, run }) => (
-            <div className="overview-row" key={check.id}>
-              <span>
-                {check.name}
-                <small>{run.message}</small>
-              </span>
-              <Pill tone="danger">{run.status}</Pill>
-            </div>
-          ))}
-          {!query.data.latest.length ? (
-            <FeatureEmpty
-              title="Start measuring data quality"
-              action="Create a check"
-              onAction={onOpen}
-            >
-              Add a check for a dataset or model to monitor its quality here.
-            </FeatureEmpty>
-          ) : (
-            !failing.length && (
-              <p className="text-ink-2">
-                {total
-                  ? 'No failing checks in the latest results.'
-                  : 'Run your first check to calculate a score.'}
-              </p>
-            )
-          )}
         </>
       )}
-    </section>
+      {query.data &&
+        !item &&
+        (query.data.latest.length ? (
+          <p className="hint">
+            {query.data.latest.some((item) => item.run)
+              ? 'No failing checks in the latest results.'
+              : 'Run a check to see quality results.'}
+          </p>
+        ) : (
+          <FeatureEmpty title="No checks yet" action="Create a check" onAction={onOpen}>
+            Add a check to monitor data quality.
+          </FeatureEmpty>
+        ))}
+    </Tray>
   );
 }

@@ -56,14 +56,43 @@ export function Pill({
   );
 }
 
+// Engine states render as one lozenge everywhere: dot, sentence case, tone by meaning.
+export function StatePill({ state, label }: { state: string; label?: string }) {
+  const text = (label ?? state).replaceAll('_', ' ');
+  const tone = stateTone(state);
+  return (
+    <Pill
+      tone={tone}
+      className={
+        'status-chip state-' +
+        state.toLowerCase().replaceAll(' ', '-') +
+        (tone === 'success' || tone === 'neutral' ? ' bg-transparent' : '')
+      }
+    >
+      <span className="status-dot" aria-hidden="true" />
+      {text ? text[0].toUpperCase() + text.slice(1) : text}
+    </Pill>
+  );
+}
 export function stateTone(state: string): Tone {
-  return ['succeeded', 'Live', 'Connected', 'Enabled'].includes(state)
+  const value = state.toLowerCase();
+  return [
+    'succeeded',
+    'passed',
+    'live',
+    'connected',
+    'enabled',
+    'healthy',
+    'active',
+    'configured',
+    'ready',
+  ].includes(value)
     ? 'success'
-    : ['failed', 'interrupted'].includes(state)
+    : ['failed', 'failing', 'interrupted', 'error', 'broken'].includes(value)
       ? 'danger'
-      : ['queued', 'Stale data'].includes(state)
+      : ['queued', 'stale data', 'stale', 'warning'].includes(value)
         ? 'warning'
-        : state === 'running'
+        : value === 'running'
           ? 'info'
           : 'neutral';
 }
@@ -438,6 +467,71 @@ export function SegmentedControl({
   );
 }
 
+export function Sparkline({
+  series,
+  label,
+  width = 72,
+  height = 28,
+  ceiling,
+  minPoints = 3,
+}: {
+  series: (number | null)[];
+  label: string;
+  width?: number;
+  height?: number;
+  ceiling?: number;
+  minPoints?: number;
+}) {
+  const max = ceiling ?? Math.max(1, ...series.map((n) => n ?? 0));
+  const points = series.map((n, i) =>
+    n === null
+      ? null
+      : [
+          2 + (i * (width - 4)) / Math.max(1, series.length - 1),
+          height - 3 - (n / max) * (height - 6),
+        ],
+  );
+  const hasData = series.some((n) => n !== null);
+  // A trend needs three readings; fewer is said in words rather than drawn as a stray mark.
+  if (series.filter((n) => n !== null).length < minPoints)
+    return (
+      <span className="ml-auto self-center text-xs text-ink-3" role="img" aria-label={label}>
+        {hasData ? 'Not enough history' : 'No activity'}
+      </span>
+    );
+  return (
+    <svg
+      className="sparkline"
+      style={{ width, height }}
+      viewBox={'0 0 ' + width + ' ' + height}
+      role="img"
+      aria-label={label}
+    >
+      <title>
+        {label + ': ' + (hasData ? series.map((n) => n ?? 'no runs').join(', ') : 'No activity')}
+      </title>
+      <line x1="0" x2={width} y1={height - 2} y2={height - 2} stroke="var(--line)" />
+      {points.map(
+        (point, i) =>
+          point && (
+            <g key={i}>
+              {points[i - 1] && (
+                <line
+                  x1={points[i - 1]![0]}
+                  y1={points[i - 1]![1]}
+                  x2={point[0]}
+                  y2={point[1]}
+                  stroke="var(--mark)"
+                  strokeWidth="1.5"
+                />
+              )}
+              <circle cx={point[0]} cy={point[1]} r="1.5" fill="var(--mark)" />
+            </g>
+          ),
+      )}
+    </svg>
+  );
+}
 export function KpiTile({
   caption,
   value,
@@ -451,17 +545,16 @@ export function KpiTile({
   caption: string;
   value: ReactNode;
   unit?: string;
-  series: number[];
+  series: (number | null)[];
   seriesLabel: string;
   footer: string;
   tone?: Tone;
 }) {
-  const max = Math.max(1, ...series);
   return (
     <Button
       variant="outline"
       type="button"
-      className="kpi-tile h-auto flex-col items-stretch justify-between gap-0 overflow-hidden rounded-tray border border-line bg-panel p-0 text-left whitespace-normal"
+      className="kpi-tile h-auto flex-col items-stretch gap-0 rounded-card border border-line bg-surface p-0 text-left whitespace-normal"
       {...props}
     >
       <span className="kpi-top">
@@ -469,29 +562,11 @@ export function KpiTile({
         <span className="kpi-reading">
           <span className="kpi-value">{value}</span>
           {unit && <span className="kpi-unit">{unit}</span>}
-          <svg className="sparkline" viewBox="0 0 62 40" role="img" aria-label={seriesLabel}>
-            <title>{seriesLabel + ': ' + series.join(', ')}</title>
-            {series.map((n, i) => (
-              <rect
-                key={i}
-                x={i * 5 + 1}
-                y={38 - (n / max) * 34}
-                width="2"
-                height={(n / max) * 34}
-                fill={i === series.length - 1 ? 'var(--mark)' : 'var(--line)'}
-              />
-            ))}
-          </svg>
+          <Sparkline series={series} label={seriesLabel} />
         </span>
-      </span>
-      <span className="kpi-footer">
-        <span className={'kpi-glyph tone-' + tone}>
-          <Icon
-            name={tone === 'danger' ? 'warning' : tone === 'success' ? 'check' : 'clock'}
-            size={12}
-          />
+        <span className={'kpi-sublabel ' + (tone === 'danger' ? 'text-danger' : 'text-ink-3')}>
+          {footer}
         </span>
-        <span className={tone === 'neutral' ? '' : 'delta-' + tone}>{footer}</span>
       </span>
     </Button>
   );

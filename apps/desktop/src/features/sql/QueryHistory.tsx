@@ -1,3 +1,4 @@
+import { StatePill } from '@/components/workbench/primitives';
 import { useState } from 'react';
 import { useSqlWorkspace } from '@/stores/sql-workspace';
 import { Button } from '@/components/ui/button';
@@ -42,7 +43,7 @@ export default function QueryHistory({
           <article key={e.id}>
             <div>
               <time dateTime={new Date(e.at).toISOString()}>{new Date(e.at).toLocaleString()}</time>
-              <span className={'query-status ' + e.status}>{e.status}</span>
+              <StatePill state={e.status} />
               <code>
                 {e.elapsed_ms.toLocaleString()} ms · {e.row_count.toLocaleString()} rows
               </code>

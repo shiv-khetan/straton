@@ -1,3 +1,4 @@
+import { StatePill } from '@/components/workbench/primitives';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useQueryClient } from '@tanstack/react-query';
@@ -33,7 +34,7 @@ import { useEngineData } from './useEngineData';
 import { useRouteStore } from '@/stores/route';
 import { isRoute, laterRoutes, routeLabels } from '@/stores/route-history';
 import type { Route } from '@/stores/route-history';
-import { routeAvailable, navigation } from './navigation';
+import { routeAvailable, navigation, sectionLabels, sectionOf } from './navigation';
 import { queryApi } from '@/lib/queryApi';
 import { queryKeys } from '@/lib/queryKeys';
 import { eventQueryKeys } from '@/lib/events';
@@ -241,19 +242,25 @@ function AppContent() {
       'Connection forgotten',
       true,
     );
+  const [qualityCreateRequest, setQualityCreateRequest] = useState(0);
+  useEffect(() => {
+    setQualityCreateRequest(0);
+  }, [page]);
   const primary =
-    page === 'Models' && !!me
-      ? { label: 'New model', run: () => setModelRequest({ id: null, nonce: Date.now() }) }
-      : page === 'Sources' && can(me, 'admin')
-        ? { label: 'Add source', run: () => setSheet('source') }
-        : page === 'Backups' && can(me, 'admin') && client
-          ? {
-              label: 'Back up now',
-              run: () => void action(() => client.backup(), 'Backup created'),
-            }
-          : (page === 'Dashboard' || page === 'Jobs') && can(me, 'sync_admin')
-            ? { label: 'New sync job', run: newJob }
-            : null;
+    page === 'Data Quality' && !!me
+      ? { label: 'New check', run: () => setQualityCreateRequest((n) => n + 1) }
+      : page === 'Models' && !!me
+        ? { label: 'New model', run: () => setModelRequest({ id: null, nonce: Date.now() }) }
+        : page === 'Sources' && can(me, 'admin')
+          ? { label: 'Add source', run: () => setSheet('source') }
+          : page === 'Backups' && can(me, 'admin') && client
+            ? {
+                label: 'Back up now',
+                run: () => void action(() => client.backup(), 'Backup created'),
+              }
+            : (page === 'Dashboard' || page === 'Jobs') && can(me, 'sync_admin')
+              ? { label: 'New sync job', run: newJob }
+              : null;
   const commands: Command[] = [
     ...[...navigation.flatMap((group) => group.items.map((item) => item.route)), 'Connect' as Route]
       .filter((route) => routeAvailable(me, route))
@@ -419,7 +426,8 @@ function AppContent() {
       </a>
       <TitleBar
         workspace={workspace}
-        breadcrumbs={[pageLabel, ...(selection && graphPage ? [selection] : [])]}
+        page={page}
+        onNavigate={setPage}
         me={me}
         online={online}
         live={live}
@@ -435,15 +443,7 @@ function AppContent() {
         onConsole={() => setConsoleCollapsed(!consoleCollapsed)}
       />
       <div className="flex min-h-0 flex-1">
-        <Sidebar
-          me={me}
-          workspace={workspace}
-          status={status}
-          live={live}
-          onNavigate={setPage}
-          newJob={can(me, 'sync_admin') ? newJob : undefined}
-          busy={!online || busy}
-        />
+        <Sidebar me={me} onNavigate={setPage} />
         <main id="main-content" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col">
           {connection && !online && (
             <div className="reconnect-banner" role="status">
@@ -456,9 +456,15 @@ function AppContent() {
           )}
           <header className="page-header">
             <div>
-              <Breadcrumb
-                items={['Engine', pageLabel, ...(selection && graphPage ? [selection] : [])]}
-              />
+              {page !== 'Dashboard' && page !== 'Connect' && (
+                <Breadcrumb
+                  items={[
+                    sectionLabels[sectionOf(page).label],
+                    pageLabel,
+                    ...(selection && graphPage ? [selection] : []),
+                  ]}
+                />
+              )}
               <div className="page-title">
                 <h1>{graphPage && selection ? selection : pageLabel}</h1>
                 {selectedDataset && (
@@ -478,14 +484,15 @@ function AppContent() {
                   </>
                 )}
                 {page === 'Jobs' && (
-                  <Pill tone={runs.some((r) => r.state === 'running') ? 'info' : 'neutral'}>
-                    {runs.filter((r) => r.state === 'running').length} running
-                  </Pill>
+                  <StatePill
+                    state={runs.some((r) => r.state === 'running') ? 'running' : 'idle'}
+                    label={runs.filter((r) => r.state === 'running').length + ' running'}
+                  />
                 )}
               </div>
-              {status && (
+              {status && page === 'Dashboard' && (
                 <div
-                  className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-caption text-ink-3"
+                  className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-3 tabular-nums"
                   aria-label="Engine telemetry"
                 >
                   <span>Queue {status.queue_depth}</span>
@@ -496,8 +503,8 @@ function AppContent() {
                       : '—'}
                   </span>
                   <span>
-                    Up {Math.floor(status.uptime_seconds / 3600)}h{' '}
-                    {Math.floor((status.uptime_seconds % 3600) / 60)}m
+                    Up {Math.floor(status.uptime_seconds / 3600)} h{' '}
+                    {Math.floor((status.uptime_seconds % 3600) / 60)} m
                   </span>
                   <span>Backup {relativeTime(backupTime(status.last_backup))}</span>
                 </div>
@@ -619,6 +626,7 @@ function AppContent() {
                         models={models}
                         readOnly={!online}
                         request={entityRequest?.kind === 'check' ? entityRequest : null}
+                        createRequest={qualityCreateRequest}
                       />
                     )}
                     {page === 'Analytics' && (
@@ -855,7 +863,7 @@ function AppContent() {
               )}
             </ReadOnlyScope>
           </div>
-          {!graphPage && page !== 'SQL' && page !== 'Connect' && (
+          {!consoleCollapsed && page !== 'Connect' && (
             <ConsoleDrawer
               tab={consoleTab}
               onTab={setConsoleTab}

@@ -1,7 +1,8 @@
+import { StatePill } from '@/components/workbench/primitives';
 import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
 import { useEffect, useState } from 'react';
 import type { Api, AuditVerification, Dataset, DatasetKey, Status } from '@/lib/api';
-import { Button, Pill, Sheet, Table, Tray } from '@/components/workbench/primitives';
+import { Button, Sheet, Table, Tray } from '@/components/workbench/primitives';
 import { Skeleton } from '@/features/console/ConsoleDrawer';
 
 type Rotation = { kind: 'kek' } | { kind: 'dataset'; target: string; name: string };
@@ -78,13 +79,16 @@ export default function Security({
     <Tray
       title="Security"
       actions={
-        <Pill tone={status?.encryption_enabled ? 'success' : 'warning'}>
-          {status
-            ? status.encryption_enabled
-              ? 'Encryption enabled'
-              : 'New snapshots are plaintext'
-            : 'Loading status…'}
-        </Pill>
+        <StatePill
+          state={status ? (status.encryption_enabled ? 'enabled' : 'warning') : 'pending'}
+          label={
+            status
+              ? status.encryption_enabled
+                ? 'Encryption enabled'
+                : 'New snapshots are plaintext'
+              : 'Loading status…'
+          }
+        />
       }
     >
       <p className="hint">
@@ -107,9 +111,10 @@ export default function Security({
       {error && <p role="alert">{error}</p>}
       {verification && (
         <p role="status">
-          <Pill tone={verification.ok ? 'success' : 'danger'}>
-            {verification.ok ? 'Audit chain verified' : 'Audit chain is broken'}
-          </Pill>{' '}
+          <StatePill
+            state={verification.ok ? 'healthy' : 'error'}
+            label={verification.ok ? 'Audit chain verified' : 'Audit chain is broken'}
+          />{' '}
           {verification.rows} audit rows.
           {verification.first_bad_id !== null && (
             <>

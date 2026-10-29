@@ -1,3 +1,4 @@
+import { StatePill } from '@/components/workbench/primitives';
 import { Impact } from './Impact';
 import { Tabs } from '@/components/workbench/primitives';
 import { Input } from '@/components/ui/input';
@@ -157,9 +158,7 @@ function SourceGroup({ data }: NodeProps<GroupNode>) {
     <div className={'source-label mono-caption' + (data.external ? ' external-label' : '')}>
       <Icon name="source" />
       <span>{data.label}</span>
-      <Pill tone={data.stale ? 'warning' : data.external ? 'neutral' : 'success'}>
-        {data.stale ? 'Stale data' : data.external ? 'External' : 'Connected'}
-      </Pill>
+      <StatePill state={data.stale ? 'Stale data' : data.external ? 'External' : 'Connected'} />
     </div>
   );
 }

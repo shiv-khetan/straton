@@ -1,3 +1,4 @@
+import { StatePill } from '@/components/workbench/primitives';
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -366,7 +367,7 @@ export default function Models({
                           </TableCell>
                           <TableCell>{m.trigger}</TableCell>
                           <TableCell>
-                            <Pill tone={status.tone}>{status.label}</Pill>
+                            <StatePill state={status.label} label={status.label} />
                           </TableCell>
                           <TableCell>
                             {m.last_run ? relativeTime(m.last_run * 1000) : 'Never'}

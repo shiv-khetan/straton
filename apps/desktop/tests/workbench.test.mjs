@@ -5,8 +5,8 @@ assert.deepEqual(rankCommands(commands,'  ORDERS ').map(c=>c.id),['2','1','3','4
 assert.deepEqual(rankCommands(commands,'orders lake').map(c=>c.id),['1']);
 assert.deepEqual(rankCommands(commands,'missing'),[]);assert.deepEqual(rankCommands(commands,''),commands);
 assert.equal(rankCommands(commands,'source')[0].id,'5');
-for(const [input,state,tone] of [['RUNNING','running','info'],['succeeded','succeeded','success'],['ready','succeeded','success'],['queued','queued','warning'],['stale','stale','warning'],['broken','failed','danger'],['interrupted','failed','danger'],['cancelled','stale','warning'],[null,'never synced','neutral']]) assert.deepEqual(statusChip(input),{state,label:state.toUpperCase(),tone});
-assert.deepEqual(statusChip('inlined'),{state:'inlined',label:'VIEW · INLINED',tone:'neutral'}); // views never run
+for(const [input,state,tone] of [['RUNNING','running','info'],['succeeded','succeeded','success'],['ready','succeeded','success'],['queued','queued','warning'],['stale','stale','warning'],['broken','failed','danger'],['interrupted','failed','danger'],['cancelled','stale','warning'],[null,'never synced','neutral']]) assert.deepEqual(statusChip(input),{state,label:state[0].toUpperCase()+state.slice(1),tone});
+assert.deepEqual(statusChip('inlined'),{state:'inlined',label:'View · inlined',tone:'neutral'}); // views never run
 const dataset={id:'d',name:'orders',source_id:'s',stale:false,last_synced_at:null};
 const jobs=[{id:'j',source_id:'s',dataset:'orders'},{id:'other',source_id:'x',dataset:'orders'}];
 const runs=[{id:'old',job_id:'j',state:'failed',available_at:1},{id:'new',job_id:'j',state:'running',available_at:2},{id:'unrelated',job_id:'other',state:'failed',available_at:3}];

@@ -79,7 +79,7 @@ export function ChartPreview({
     return (
       <div className="py-4">
         <p className="text-ink-2">{config.y?.[0] ?? 'Choose a value column'}</p>
-        <output className="font-mono text-3xl tabular-nums">
+        <output className="text-3xl font-semibold tabular-nums">
           {y < 0
             ? '—'
             : typeof data.rows[0][y] === 'number'

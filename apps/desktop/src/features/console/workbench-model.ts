@@ -53,7 +53,10 @@ export function statusChip(state: string | null | undefined): {
                 : 'never synced';
   return {
     state: normalized,
-    label: normalized === 'inlined' ? 'VIEW · INLINED' : normalized.toUpperCase(),
+    label:
+      normalized === 'inlined'
+        ? 'View · inlined'
+        : normalized[0].toUpperCase() + normalized.slice(1),
     tone:
       normalized === 'running'
         ? 'info'

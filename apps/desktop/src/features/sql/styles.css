@@ -1,6 +1,9 @@
 @layer components {
   .sql-layout {
     display: flex;
+    flex-direction: column;
+    padding: 4px 24px 16px;
+    gap: 12px;
     height: 100%;
     min-width: 0;
     min-height: 0;
@@ -13,11 +16,11 @@
     min-height: 0;
   }
   .sql-tables {
-    width: 232px;
+    width: 200px;
     flex-shrink: 0;
     min-width: 0;
     overflow: auto;
-    background: var(--panel);
+    background: var(--surface);
     border-right: 1px solid var(--line);
     padding: 12px;
   }
@@ -30,9 +33,23 @@
     flex-wrap: wrap;
   }
   .sql-tables summary {
-    padding: 8px 0;
+    @apply flex items-start gap-1.5 rounded-sm px-1.5 py-1.5 text-caption hover:bg-panel-2;
     cursor: pointer;
-    overflow-wrap: anywhere;
+    list-style: none;
+  }
+  .sql-tables summary::-webkit-details-marker {
+    display: none;
+  }
+  .sql-tables summary::before {
+    content: '';
+    @apply mt-1.5 h-2 w-1.5 shrink-0 bg-ink-3 transition-transform duration-fast;
+    clip-path: polygon(0 0, 100% 50%, 0 100%);
+  }
+  .sql-tables details[open] > summary::before {
+    transform: rotate(90deg);
+  }
+  .sql-tables summary code {
+    @apply block min-w-0 truncate;
   }
   .catalog-column {
     display: flex;

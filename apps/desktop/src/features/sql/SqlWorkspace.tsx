@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { format } from 'sql-formatter';
-import { Play, Square, Plus, X, Save, Braces } from 'lucide-react';
+import { Play, Square, Plus, X, Save, Braces, PanelLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { monaco, autocomplete, editorTheme } from './monaco';
 import { useResolvedTheme } from '@/stores/theme';
@@ -64,6 +64,7 @@ export default function SqlView({
   const [saving, setSaving] = useState(false);
   const [sideTab, setSideTab] = useState<'Catalog' | 'Saved'>('Catalog');
   const [search, setSearch] = useState('');
+  const [catalogOpen, setCatalogOpen] = useState(true);
   const [error, setError] = useState('');
   const catalog = useQuery({
     // Distinct from the client proxy's own cache key, or fetchQuery would await itself.
@@ -180,6 +181,7 @@ export default function SqlView({
   }
   function beginSave() {
     if (!active) return;
+    setCatalogOpen(true);
     setSideTab('Saved');
     setName(active.name === 'Untitled query' ? '' : active.name);
     setShared(saved.data?.find((q) => q.id === active.savedId)?.shared ?? false);
@@ -276,333 +278,351 @@ export default function SqlView({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <aside className="sql-tables">
-        <div className="tabs sql-side-tabs" role="tablist" aria-label="Side panel">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={sideTab === 'Catalog'}
-            onClick={() => setSideTab('Catalog')}
-          >
-            Catalog
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={sideTab === 'Saved'}
-            onClick={() => setSideTab('Saved')}
-          >
-            Saved queries
-          </button>
-        </div>
-        <label>
-          Find {sideTab === 'Catalog' ? 'a table' : 'a query'}
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} />
-        </label>
-        {saveOpen && (
-          <form
-            className="save-query"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void saveQuery();
-            }}
-          >
-            <label>
-              Query name
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                maxLength={200}
-                required
-              />
-            </label>
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={shared}
-                onChange={(e) => setShared(e.target.checked)}
-              />
-              Share with readers
-            </label>
-            <div className="actions">
-              <Button type="submit" disabled={saving || readOnly || !name.trim()}>
-                {saving ? 'Saving…' : 'Save query'}
-              </Button>
-              <Button type="button" variant="ghost" onClick={() => setSaveOpen(false)}>
-                Dismiss
-              </Button>
-            </div>
-            {error && (
-              <p role="alert" className="error">
-                {error}
-              </p>
-            )}
-          </form>
-        )}
-        {sideTab === 'Catalog' ? (
-          <>
-            {catalog.isPending && <Skeleton label="Loading catalog…" />}
-            {catalog.isError && <p role="alert">{String(catalog.error)}</p>}
-            {catalog.data?.tables
-              .filter((t) => (t.schema + '.' + t.name).toLowerCase().includes(search.toLowerCase()))
-              .map((t) => (
-                <details key={t.schema + '.' + t.name}>
-                  <summary>
-                    <code>
-                      {t.schema}.{t.name}
-                    </code>
-                  </summary>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      editor.current?.executeEdits('insert-table', [
-                        {
-                          range: editor.current.getSelection() ?? new monaco.Range(1, 1, 1, 1),
-                          text: tableReference(t.schema, t.name),
-                        },
-                      ]);
-                      editor.current?.focus();
-                    }}
-                  >
-                    Insert table name
-                  </Button>
-                  {t.columns.map((c) => (
-                    <div className="catalog-column" key={c.name}>
-                      <code>{c.name}</code>
-                      <code className="hint">{c.type}</code>
-                    </div>
-                  ))}
-                </details>
-              ))}
-          </>
-        ) : (
-          <>
-            {saved.isPending && <Skeleton label="Loading saved queries…" />}
-            {saved.isError && <p role="alert">{String(saved.error)}</p>}
-            {saved.data
-              ?.filter((q) => q.name.toLowerCase().includes(search.toLowerCase()))
-              .map((q) => (
-                <div className="saved-query" key={q.id}>
-                  <Button variant="ghost" onClick={() => openSaved(q)}>
-                    <span>{q.name}</span>
-                    <small>{q.shared ? 'Shared' : 'Private'}</small>
-                  </Button>
-                  {(q.owner_id === me.user.id || me.privileges.admin) && (
+      <div className="catalog-toolbar">
+        <Button
+          variant="outline"
+          size="sm"
+          aria-expanded={catalogOpen}
+          aria-controls="sql-catalog"
+          onClick={() => setCatalogOpen((open) => !open)}
+        >
+          <PanelLeft size={16} />
+          {catalogOpen ? 'Hide catalog' : 'Show catalog'}
+        </Button>
+        <span className="hint">Catalog and saved queries</span>
+      </div>
+      <div className="sql-workarea">
+        <aside id="sql-catalog" className="sql-tables" hidden={!catalogOpen}>
+          <div className="tabs sql-side-tabs" role="tablist" aria-label="Side panel">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sideTab === 'Catalog'}
+              onClick={() => setSideTab('Catalog')}
+            >
+              Catalog
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sideTab === 'Saved'}
+              onClick={() => setSideTab('Saved')}
+            >
+              Saved queries
+            </button>
+          </div>
+          <label>
+            Find {sideTab === 'Catalog' ? 'a table' : 'a query'}
+            <Input value={search} onChange={(e) => setSearch(e.target.value)} />
+          </label>
+          {saveOpen && (
+            <form
+              className="save-query"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void saveQuery();
+              }}
+            >
+              <label>
+                Query name
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  maxLength={200}
+                  required
+                />
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={shared}
+                  onChange={(e) => setShared(e.target.checked)}
+                />
+                Share with readers
+              </label>
+              <div className="actions">
+                <Button type="submit" disabled={saving || readOnly || !name.trim()}>
+                  {saving ? 'Saving…' : 'Save query'}
+                </Button>
+                <Button type="button" variant="ghost" onClick={() => setSaveOpen(false)}>
+                  Dismiss
+                </Button>
+              </div>
+              {error && (
+                <p role="alert" className="error">
+                  {error}
+                </p>
+              )}
+            </form>
+          )}
+          {sideTab === 'Catalog' ? (
+            <>
+              {catalog.isPending && <Skeleton label="Loading catalog…" />}
+              {catalog.isError && <p role="alert">{String(catalog.error)}</p>}
+              {catalog.data?.tables
+                .filter((t) =>
+                  (t.schema + '.' + t.name).toLowerCase().includes(search.toLowerCase()),
+                )
+                .map((t) => (
+                  <details key={t.schema + '.' + t.name}>
+                    <summary title={t.schema + '.' + t.name}>
+                      <code>
+                        {t.schema}.{t.name}
+                      </code>
+                    </summary>
                     <Button
                       variant="ghost"
-                      size="icon-sm"
-                      aria-label={'Delete ' + q.name}
-                      disabled={readOnly}
-                      onClick={() => void remove(q)}
+                      size="sm"
+                      onClick={() => {
+                        editor.current?.executeEdits('insert-table', [
+                          {
+                            range: editor.current.getSelection() ?? new monaco.Range(1, 1, 1, 1),
+                            text: tableReference(t.schema, t.name),
+                          },
+                        ]);
+                        editor.current?.focus();
+                      }}
                     >
-                      <X size={14} />
+                      Insert table name
                     </Button>
-                  )}
-                </div>
-              ))}
-            {saved.data?.length === 0 && (
-              <p className="hint">Save a query to reuse it here or share it with your team.</p>
-            )}
-          </>
-        )}
-      </aside>
-      <section className="sql-workspace">
-        <div className="query-tabs" aria-label="SQL tabs">
-          {store.tabs.map((t) => (
-            <div key={t.id} className={t.id === store.active ? 'active' : ''}>
-              <Button
-                variant="ghost"
-                aria-pressed={t.id === store.active}
-                onClick={() => store.select(t.id)}
-              >
-                {t.dirty ? '● ' : ''}
-                {t.name}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={'Close ' + t.name}
-                onClick={() => close(t.id)}
-              >
-                <X size={14} />
-              </Button>
-            </div>
-          ))}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="New query tab"
-            onClick={() => store.add()}
-          >
-            <Plus size={16} />
-          </Button>
-        </div>
-        {active ? (
-          <>
-            <div className="sql-toolbar">
-              <Button
-                disabled={readOnly || !!running || !active.sql.trim()}
-                onClick={() => void run()}
-              >
-                <Play size={16} />
-                Run
-              </Button>
-              <Button
-                variant="outline"
-                disabled={readOnly || !!running}
-                onClick={() => void run(true)}
-              >
-                Run selection
-              </Button>
-              <Button
-                variant="outline"
-                disabled={!running || running.explain}
-                onClick={() => void cancel()}
-              >
-                <Square size={14} />
-                Cancel
-              </Button>
-              <Button
-                variant="ghost"
-                disabled={readOnly || !!running}
-                onClick={() => void run(false, true)}
-              >
-                Explain
-              </Button>
-              <Button variant="ghost" onClick={formatSql}>
-                <Braces size={16} />
-                Format
-              </Button>
-              <Button variant="ghost" onClick={beginSave} disabled={readOnly}>
-                <Save size={16} />
-                Save
-              </Button>
-            </div>
-            <ResizablePanelGroup orientation="vertical">
-              <ResizablePanel defaultSize="48%" minSize="120px">
-                <Editor
-                  key={active.id}
-                  path={'straton://query/' + active.id + '.sql'}
-                  language="sql"
-                  value={active.sql}
-                  theme={theme}
-                  onChange={(sql) => store.update(active.id, { sql: sql ?? '', dirty: true })}
-                  onMount={(value) => {
-                    editor.current = value;
-                  }}
-                  loading={<Skeleton label="Loading SQL editor…" />}
-                  options={{
-                    automaticLayout: true,
-                    minimap: { enabled: false },
-                    fontFamily: 'JetBrains Mono Variable',
-                    fontSize: 13,
-                    scrollBeyondLastLine: false,
-                    wordWrap: 'on',
-                    padding: { top: 16 },
-                    tabSize: 2,
-                    readOnly: false,
-                  }}
-                />
-              </ResizablePanel>
-              <ResizableHandle withHandle />
-              <ResizablePanel minSize="100px">
-                <div className="sql-output">
-                  <div className="results-toolbar">
-                    <div className="tabs result-tabs" role="tablist" aria-label="Output">
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={resultTab === 'Results'}
-                        onClick={() => setResultTab('Results')}
+                    {t.columns.map((c) => (
+                      <div className="catalog-column" key={c.name}>
+                        <code>{c.name}</code>
+                        <code className="hint">{c.type}</code>
+                      </div>
+                    ))}
+                  </details>
+                ))}
+            </>
+          ) : (
+            <>
+              {saved.isPending && <Skeleton label="Loading saved queries…" />}
+              {saved.isError && <p role="alert">{String(saved.error)}</p>}
+              {saved.data
+                ?.filter((q) => q.name.toLowerCase().includes(search.toLowerCase()))
+                .map((q) => (
+                  <div className="saved-query" key={q.id}>
+                    <Button variant="ghost" onClick={() => openSaved(q)}>
+                      <span>{q.name}</span>
+                      <small>{q.shared ? 'Shared' : 'Private'}</small>
+                    </Button>
+                    {(q.owner_id === me.user.id || me.privileges.admin) && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={'Delete ' + q.name}
+                        disabled={readOnly}
+                        onClick={() => void remove(q)}
                       >
-                        Results
-                      </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={resultTab === 'Explain'}
-                        onClick={() => setResultTab('Explain')}
-                      >
-                        Explain
-                      </button>
-                    </div>
-                    <span role="status">
-                      <code>
-                        {running?.tab === active.id
-                          ? 'Running…'
-                          : output?.result
-                            ? output.result.elapsed_ms.toLocaleString() +
-                              ' ms · ' +
-                              output.result.row_count.toLocaleString() +
-                              ' rows'
-                            : ''}
-                      </code>
-                    </span>
+                        <X size={14} />
+                      </Button>
+                    )}
                   </div>
-                  {output?.error && (
-                    <div className="sql-error" role="alert">
-                      <h3>Query could not finish</h3>
-                      <pre>{output.error}</pre>
-                      {/line|position/i.test(output.error) && (
-                        <p className="hint">
-                          Use the line or position above to locate the statement in the editor.
-                        </p>
-                      )}
-                    </div>
-                  )}
-                  {running?.tab === active.id && <Skeleton label="Executing query…" />}
-                  {resultTab === 'Results' && output?.result && (
-                    <>
-                      {output.result.truncated_preview && (
-                        <p className="truncated-notice" role="status">
-                          Showing the first 1,000 rows of {output.result.row_count.toLocaleString()}
-                          . Use Explorer to export a larger result.
-                        </p>
-                      )}
-                      <ResultGrid
-                        key={active.id}
-                        columns={output.result.columns}
-                        rows={output.result.rows}
-                        scope={scope}
-                        tableKey={'sql:' + active.id}
-                      />
-                    </>
-                  )}
-                  {resultTab === 'Explain' && output?.plans && (
-                    <div className="sql-plans">
-                      <h3>Logical plan</h3>
-                      <pre>{output.plans.logical}</pre>
-                      <h3>Physical plan</h3>
-                      <pre>{output.plans.physical}</pre>
-                    </div>
-                  )}
-                  {!output && !running && (
-                    <p className="empty-copy">
-                      Run your SQL to inspect its results, or choose Explain to review the plan.
-                    </p>
-                  )}
-                </div>
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          </>
-        ) : (
-          <div className="empty-copy">
-            <p>Open a saved query or create a tab to start.</p>
-            <Button onClick={() => store.add()}>New query</Button>
-          </div>
-        )}
-        <details className="shortcut-hint">
-          <summary>Keyboard shortcuts</summary>
-          <div>
-            {shortcuts.map(([key, action]) => (
-              <span key={key}>
-                <kbd>{key}</kbd> {action}
-              </span>
+                ))}
+              {saved.data?.length === 0 && (
+                <p className="hint">Save a query to reuse it here or share it with your team.</p>
+              )}
+            </>
+          )}
+        </aside>
+        <section className="sql-workspace">
+          <div className="query-tabs" aria-label="SQL tabs">
+            {store.tabs.map((t) => (
+              <div key={t.id} className={t.id === store.active ? 'active' : ''}>
+                <Button
+                  variant="ghost"
+                  aria-pressed={t.id === store.active}
+                  onClick={() => store.select(t.id)}
+                >
+                  {t.dirty ? '● ' : ''}
+                  {t.name}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={'Close ' + t.name}
+                  onClick={() => close(t.id)}
+                >
+                  <X size={14} />
+                </Button>
+              </div>
             ))}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="New query tab"
+              onClick={() => store.add()}
+            >
+              <Plus size={16} />
+            </Button>
           </div>
-        </details>
-      </section>
+          {active ? (
+            <>
+              <div className="sql-toolbar">
+                <Button
+                  disabled={readOnly || !!running || !active.sql.trim()}
+                  onClick={() => void run()}
+                >
+                  <Play size={16} />
+                  Run
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={readOnly || !!running}
+                  onClick={() => void run(true)}
+                >
+                  Run selection
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={!running || running.explain}
+                  onClick={() => void cancel()}
+                >
+                  <Square size={14} />
+                  Cancel
+                </Button>
+                <Button
+                  variant="ghost"
+                  disabled={readOnly || !!running}
+                  onClick={() => void run(false, true)}
+                >
+                  Explain
+                </Button>
+                <Button variant="ghost" onClick={formatSql}>
+                  <Braces size={16} />
+                  Format
+                </Button>
+                <Button variant="ghost" onClick={beginSave} disabled={readOnly}>
+                  <Save size={16} />
+                  Save
+                </Button>
+              </div>
+              <ResizablePanelGroup orientation="vertical">
+                <ResizablePanel defaultSize="48%" minSize="120px">
+                  <Editor
+                    key={active.id}
+                    path={'straton://query/' + active.id + '.sql'}
+                    language="sql"
+                    value={active.sql}
+                    theme={theme}
+                    onChange={(sql) => store.update(active.id, { sql: sql ?? '', dirty: true })}
+                    onMount={(value) => {
+                      editor.current = value;
+                    }}
+                    loading={<Skeleton label="Loading SQL editor…" />}
+                    options={{
+                      automaticLayout: true,
+                      minimap: { enabled: false },
+                      fontFamily: 'JetBrains Mono Variable',
+                      fontSize: 13,
+                      scrollBeyondLastLine: false,
+                      wordWrap: 'on',
+                      padding: { top: 16 },
+                      tabSize: 2,
+                      readOnly: false,
+                    }}
+                  />
+                </ResizablePanel>
+                <ResizableHandle withHandle />
+                <ResizablePanel minSize="100px">
+                  <div className="sql-output">
+                    <div className="results-toolbar">
+                      <div className="tabs result-tabs" role="tablist" aria-label="Output">
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={resultTab === 'Results'}
+                          onClick={() => setResultTab('Results')}
+                        >
+                          Results
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={resultTab === 'Explain'}
+                          onClick={() => setResultTab('Explain')}
+                        >
+                          Explain
+                        </button>
+                      </div>
+                      <span role="status">
+                        <code>
+                          {running?.tab === active.id
+                            ? 'Running…'
+                            : output?.result
+                              ? output.result.elapsed_ms.toLocaleString() +
+                                ' ms · ' +
+                                output.result.row_count.toLocaleString() +
+                                ' rows'
+                              : ''}
+                        </code>
+                      </span>
+                    </div>
+                    {output?.error && (
+                      <div className="sql-error" role="alert">
+                        <h3>Query could not finish</h3>
+                        <pre>{output.error}</pre>
+                        {/line|position/i.test(output.error) && (
+                          <p className="hint">
+                            Use the line or position above to locate the statement in the editor.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {running?.tab === active.id && <Skeleton label="Executing query…" />}
+                    {resultTab === 'Results' && output?.result && (
+                      <>
+                        {output.result.truncated_preview && (
+                          <p className="truncated-notice" role="status">
+                            Showing the first 1,000 rows of{' '}
+                            {output.result.row_count.toLocaleString()}. Use Explorer to export a
+                            larger result.
+                          </p>
+                        )}
+                        <ResultGrid
+                          key={active.id}
+                          columns={output.result.columns}
+                          rows={output.result.rows}
+                          scope={scope}
+                          tableKey={'sql:' + active.id}
+                        />
+                      </>
+                    )}
+                    {resultTab === 'Explain' && output?.plans && (
+                      <div className="sql-plans">
+                        <h3>Logical plan</h3>
+                        <pre>{output.plans.logical}</pre>
+                        <h3>Physical plan</h3>
+                        <pre>{output.plans.physical}</pre>
+                      </div>
+                    )}
+                    {!output && !running && (
+                      <p className="empty-copy">
+                        Run your SQL to inspect its results, or choose Explain to review the plan.
+                      </p>
+                    )}
+                  </div>
+                </ResizablePanel>
+              </ResizablePanelGroup>
+            </>
+          ) : (
+            <div className="empty-copy">
+              <p>Open a saved query or create a tab to start.</p>
+              <Button onClick={() => store.add()}>New query</Button>
+            </div>
+          )}
+          <details className="shortcut-hint">
+            <summary>Keyboard shortcuts</summary>
+            <div>
+              {shortcuts.map(([key, action]) => (
+                <span key={key}>
+                  <kbd>{key}</kbd> {action}
+                </span>
+              ))}
+            </div>
+          </details>
+        </section>
+      </div>
     </div>
   );
 }

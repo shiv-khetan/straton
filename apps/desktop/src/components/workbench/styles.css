@@ -4,7 +4,7 @@
   .column-type,
   .dataset-footer,
   .pill {
-    @apply font-mono tabular-nums;
+    @apply font-sans font-medium tabular-nums text-xs;
   }
   .hint,
   .empty {
@@ -58,12 +58,11 @@
   .tone-info {
     @apply bg-info-soft text-info;
   }
-  /* v3.1: Atlassian-style lozenge — compact, uppercase sans, tinted, 2px corners. */
+  /* Status lozenge: dot-led sentence case; exception states carry a tint. */
   .status-chip {
-    @apply whitespace-nowrap font-sans font-semibold uppercase;
-    font-size: 0.6875rem;
-    letter-spacing: 0.03em;
-    line-height: 1rem;
+    @apply whitespace-nowrap font-sans font-medium;
+    font-size: 0.75rem;
+    line-height: 1.125rem;
     padding: 1px 6px;
   }
   .status-chip.state-running .status-dot {
@@ -88,6 +87,7 @@
   }
   tr:hover .row-actions,
   tr:focus-within .row-actions,
+  tr[data-state='selected'] .row-actions,
   .row-actions:has([data-state='open']) {
     opacity: 1;
   }
@@ -285,9 +285,7 @@
   }
   .inspector-content h3 {
     margin: 24px 0 8px;
-    font: 600 var(--code-sm) var(--font-mono);
-    @apply uppercase;
-    letter-spacing: 0.04em;
+    font: 600 var(--code-sm) var(--font-ui);
     @apply text-ink-3;
   }
   .inspector-content td,
@@ -525,24 +523,28 @@
     overflow-wrap: anywhere;
   }
   .mono-caption {
-    font: 400 0.8125rem var(--font-mono);
-    @apply uppercase;
-    letter-spacing: 0.04em;
+    font: 500 0.8125rem var(--font-ui);
     @apply text-ink-2;
   }
+  /* A flat card: hairline frame, heading row on the card edge, white body. */
   .tray {
-    @apply min-w-0 p-1 mb-4 bg-panel border border-line rounded-tray;
+    @apply min-w-0 p-0 mb-4 bg-surface border border-line rounded-card overflow-hidden;
   }
   .tray-heading {
-    @apply flex items-center justify-between gap-3;
-    padding: 10px 12px 14px;
+    @apply flex items-center justify-between gap-3 border-b border-line;
+    padding: 8px 16px;
     min-height: 44px;
+  }
+  .tray-heading .mono-caption,
+  .tray-heading h2,
+  .tray-heading h3 {
+    @apply text-body font-semibold text-ink;
   }
   .tray-heading [data-slot='button'] {
     @apply rounded-sm;
   }
   .tray-surface {
-    @apply min-w-0 p-4 bg-surface border border-line rounded-card;
+    @apply min-w-0 p-4 bg-transparent border-0 rounded-none;
   }
   .tray-surface > .table-wrap:only-child {
     margin: -16px;
@@ -621,8 +623,8 @@
     padding: 8px 0;
   }
   .runtime-grid dt {
-    font: 0.75rem var(--font-mono);
-    @apply text-ink-2 uppercase;
+    font: 500 0.75rem var(--font-ui);
+    @apply text-ink-3;
   }
   @media (max-width: 1100px) {
     .map-legend {
@@ -651,5 +653,58 @@
   }
   .mono {
     @apply text-caption;
+  }
+}
+
+@layer components {
+  .run-history-card .tray-surface {
+    padding: 0;
+  }
+  .run-history-card .toolbar {
+    padding: 12px 16px;
+    margin: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .tray-surface:has(> .run-history-table:only-child) {
+    padding: 0;
+  }
+  .run-history-table th,
+  .run-history-table td,
+  .jobs-table th,
+  .jobs-table td {
+    height: 40px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+  .run-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .run-name > span {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .run-name code {
+    color: var(--ink-3);
+    white-space: nowrap;
+  }
+  .run-history-table .numeric {
+    white-space: nowrap;
+  }
+  .run-error {
+    display: inline-block;
+    margin-left: 8px;
+    color: var(--danger-ink);
+  }
+  .run-error summary {
+    cursor: pointer;
+  }
+  .run-error p {
+    white-space: normal;
+    min-width: 180px;
   }
 }

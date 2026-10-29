@@ -1,3 +1,4 @@
+import { StatePill } from '@/components/workbench/primitives';
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -8,7 +9,7 @@ import { Field } from '@/components/workbench/Field';
 import type { Action } from '@/components/workbench/Field';
 import { invoke } from '@tauri-apps/api/core';
 import type { Api, Source, SourceKind } from '@/lib/api';
-import { Tray, Pill, RowMenu, Sheet, Table as UiTable } from '@/components/workbench/primitives';
+import { Tray, RowMenu, Sheet, Table as UiTable } from '@/components/workbench/primitives';
 const fields: Record<string, string[]> = {
   postgres: ['host', 'port', 'database', 'username', 'batch_size'],
   sqlite: ['path', 'batch_size'],
@@ -109,9 +110,7 @@ export default function Sources({
                   <code>{source.kind}</code>
                 </TableCell>
                 <TableCell>
-                  <Pill tone={source.kind === 'external' ? 'neutral' : 'success'}>
-                    {source.kind === 'external' ? 'External' : 'Configured'}
-                  </Pill>
+                  <StatePill state={source.kind === 'external' ? 'External' : 'Configured'} />
                 </TableCell>
                 <TableCell>
                   <div className="actions row-actions">
