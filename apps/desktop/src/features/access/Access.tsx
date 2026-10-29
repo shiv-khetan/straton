@@ -1,3 +1,4 @@
+import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { StatePill } from '@/components/workbench/primitives';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -315,12 +316,21 @@ export default function Access({
                             type="button"
                             variant="destructive"
                             disabled={busy}
-                            onClick={() =>
+                            onClick={async () => {
+                              if (
+                                !(await confirmDialog(
+                                  'Delete role “' +
+                                    r.name +
+                                    '”? Members lose every grant it gives them.',
+                                  { title: 'Delete role', kind: 'warning' },
+                                ))
+                              )
+                                return;
                               void work(async () => {
                                 await client.deleteRole(r.id);
                                 if (selectedRole === r.id) setSelectedRole('');
-                              }, 'Role deleted')
-                            }
+                              }, 'Role deleted');
+                            }}
                           >
                             Delete role
                           </Button>
@@ -425,9 +435,18 @@ export default function Access({
                               type="button"
                               variant="destructive"
                               disabled={busy}
-                              onClick={() =>
-                                void work(() => client.deleteGrant(g.id), 'Grant removed')
-                              }
+                              onClick={async () => {
+                                if (
+                                  !(await confirmDialog(
+                                    'Remove the ' +
+                                      g.privilege +
+                                      ' grant? This role loses that access immediately.',
+                                    { title: 'Remove grant', kind: 'warning' },
+                                  ))
+                                )
+                                  return;
+                                void work(() => client.deleteGrant(g.id), 'Grant removed');
+                              }}
                             >
                               Remove grant
                             </Button>

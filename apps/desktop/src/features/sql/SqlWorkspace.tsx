@@ -1,3 +1,4 @@
+import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -243,6 +244,13 @@ export default function SqlView({
     store.add(q.sql, q.name, q.id);
   }
   async function remove(q: SavedQuery) {
+    if (
+      !(await confirmDialog('Delete saved query “' + q.name + '”?', {
+        title: 'Delete saved query',
+        kind: 'warning',
+      }))
+    )
+      return;
     try {
       await client.deleteSavedQuery(q.id);
       await cache.invalidateQueries({ queryKey: ['engine', 'saved-queries'] });
