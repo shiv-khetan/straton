@@ -161,7 +161,7 @@ function AppContent() {
                 label: 'Back up now',
                 run: () => void action(() => client.backup(), 'Backup created'),
               }
-            : page === 'Dashboard' && can(me, 'sync_admin')
+            : navItemOf(page).route === 'Dashboard' && can(me, 'sync_admin')
               ? { label: 'New sync job', run: () => openJobSheet(null) }
               : null;
   const commands = buildCommands(me, datasets, models, jobs, data.sources);

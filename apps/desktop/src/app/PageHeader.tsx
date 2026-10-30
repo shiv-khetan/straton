@@ -49,7 +49,7 @@ export function PageHeader({
   return (
     <header className="page-header">
       <div>
-        {page !== 'Dashboard' && page !== 'Connect' && (
+        {navItemOf(page).route !== 'Dashboard' && page !== 'Connect' && (
           <Breadcrumb
             items={[
               sectionLabels[sectionOf(page).label],
@@ -78,7 +78,7 @@ export function PageHeader({
             <StatePill state={running ? 'running' : 'idle'} label={running + ' running'} />
           )}
         </div>
-        {status && page === 'Dashboard' && (
+        {status && navItemOf(page).route === 'Dashboard' && (
           <div
             className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-3 tabular-nums"
             aria-label="Engine telemetry"

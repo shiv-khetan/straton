@@ -49,7 +49,9 @@
   }
   /* Page anatomy (components/workbench/page-layout.tsx): tab bar under the title, then body. */
   .page-tabs {
-    @apply sticky top-0 z-sticky -mx-6 mb-5 flex items-center gap-4 border-b border-line bg-background px-6;
+    @apply sticky top-0 -mx-6 mb-5 flex items-center gap-4 border-b border-line bg-background px-6;
+    /* Above sticky table header cells, which share the page scroller. */
+    z-index: calc(var(--z-sticky) + 1);
   }
   .page-tabs .tabs {
     @apply mb-0 min-w-0 flex-1 border-b-0;

@@ -11,7 +11,6 @@ import Dashboard from '@/features/overview/Overview';
 import Connect from '@/features/connections/Connect';
 import Sources from '@/features/connections/Connections';
 import Jobs from '@/features/jobs/Jobs';
-import { RunTable } from '@/features/jobs/RunTable';
 import { can, canPage } from '@/features/access/access-model';
 import { Button, Feedback, Icon } from '@/components/workbench/primitives';
 import { ReadOnlyScope } from '@/components/workbench/ReadOnlyScope';
@@ -89,13 +88,13 @@ export type PageRoutesProps = {
   openEntry: (entry: LibraryEntry) => void;
 };
 
-const lazyPages: Route[] = ['Data Quality', 'Activity'];
+const lazyPages: Route[] = ['Data Quality'];
 const orchestration: Route[] = ['Pipelines', 'Jobs', 'Schedules'];
 const analytics: Route[] = ['Analytics', 'Dashboards'];
 
 export function PageRoutes(p: PageRoutesProps) {
   const { page, data, client, online } = p;
-  const { me, loading, sources, jobs, runs, map, backups, status, models } = data;
+  const { me, loading, sources, backups, status } = data;
   const ready = !!client && !loading;
   return (
     <ReadOnlyScope
@@ -142,30 +141,8 @@ export function PageRoutes(p: PageRoutesProps) {
       {ready && me && lazyPages.includes(page) && <LazyPage {...p} client={client} />}
       {ready && me && orchestration.includes(page) && <OrchestrationPage {...p} client={client} />}
       {ready && me && analytics.includes(page) && <AnalyticsPage {...p} client={client} />}
-      {ready && me && page === 'Dashboard' && (
-        <Dashboard
-          client={client}
-          me={me}
-          sources={map.nodes.filter((n) => n.type === 'source')}
-          models={models}
-          scope={p.scope}
-          readOnly={!online}
-          onQuery={(sql) => openSql(p, sql)}
-          backups={backups}
-          datasets={p.datasets}
-          runs={runs}
-          jobs={jobs}
-          status={status}
-          events={p.events}
-          canNavigate={(target) => canPage(me, target)}
-          navigate={(target, filter) => {
-            p.navigate(target);
-            p.onJobStateFilter(filter ?? '');
-            if (target === 'Data Map') p.onMapStatusFilter('succeeded');
-          }}
-        >
-          <RunTable runs={runs.slice(0, 12)} jobs={jobs} />
-        </Dashboard>
+      {ready && me && (page === 'Dashboard' || page === 'Activity') && (
+        <OverviewPage {...p} client={client} />
       )}
       {ready && me && page === 'Models' && <ModelsPage {...p} client={client} />}
       {ready && me && canPage(me, 'Optimizer') && page === 'Optimizer' && (
@@ -253,7 +230,54 @@ function LazyPage(p: PageRoutesProps & { client: Api }) {
           createRequest={p.qualityCreateRequest}
         />
       )}
-      {page === 'Activity' && <Activity client={client} me={me} />}
+    </Suspense>
+  );
+}
+
+// Engine health first, then the workspace activity feed, on one page.
+function OverviewPage(p: PageRoutesProps & { client: Api }) {
+  const { client, online } = p;
+  const { runs, jobs, models, map, backups, status } = p.data;
+  const me = p.data.me!;
+  return (
+    <Suspense fallback={<Skeleton label={'Loading ' + p.pageLabel + '…'} />}>
+      <CombinedPage
+        page={p.page}
+        onNavigate={p.navigate}
+        sections={[
+          {
+            route: 'Dashboard',
+            label: 'Summary',
+            content: (
+              <Dashboard
+                client={client}
+                me={me}
+                sources={map.nodes.filter((n) => n.type === 'source')}
+                models={models}
+                scope={p.scope}
+                readOnly={!online}
+                onQuery={(sql) => openSql(p, sql)}
+                backups={backups}
+                datasets={p.datasets}
+                runs={runs}
+                jobs={jobs}
+                status={status}
+                canNavigate={(target) => canPage(me, target)}
+                navigate={(target, filter) => {
+                  p.navigate(target);
+                  p.onJobStateFilter(filter ?? '');
+                  if (target === 'Data Map') p.onMapStatusFilter('succeeded');
+                }}
+              />
+            ),
+          },
+          {
+            route: 'Activity',
+            label: routeLabels.Activity,
+            content: <Activity client={client} me={me} />,
+          },
+        ]}
+      />
     </Suspense>
   );
 }
