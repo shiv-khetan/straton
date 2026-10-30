@@ -21,8 +21,8 @@ import { useEngineConnection } from './useEngineConnection';
 import { useEngineData } from './useEngineData';
 import { useGlobalShortcuts } from './useGlobalShortcuts';
 import { lastPage, useRouteStore } from '@/stores/route';
-import { isRoute, routeLabels } from '@/stores/route-history';
-import { routeAvailable } from './navigation';
+import { isRoute } from '@/stores/route-history';
+import { navItemOf, pageLabelOf, routeAvailable } from './navigation';
 import { queryApi } from '@/lib/queryApi';
 import { useLibrary } from '@/stores/library';
 import type { LibraryEntry } from '@/stores/library';
@@ -104,9 +104,10 @@ function AppContent() {
   useEffect(() => {
     if (['Favorites', 'Recent', 'Connect'].includes(page) || !me || !routeAvailable(me, page))
       return;
+    // One recent entry per sidebar page; it reopens the section last visited.
     visit({
-      id: 'page:' + page,
-      label: routeLabels[page],
+      id: 'page:' + navItemOf(page).route,
+      label: pageLabelOf(page),
       kind: 'page',
       route: page,
       scope,
@@ -133,7 +134,7 @@ function AppContent() {
     }
   }
   const datasets = map.nodes.filter((node): node is Dataset => node.type === 'dataset');
-  const pageLabel = routeLabels[page];
+  const pageLabel = pageLabelOf(page);
   const openJobSheet = (seed: Dataset | null) => {
     setJobSeed(seed);
     setPage('Jobs');
@@ -160,7 +161,7 @@ function AppContent() {
                 label: 'Back up now',
                 run: () => void action(() => client.backup(), 'Backup created'),
               }
-            : (page === 'Dashboard' || page === 'Jobs') && can(me, 'sync_admin')
+            : page === 'Dashboard' && can(me, 'sync_admin')
               ? { label: 'New sync job', run: () => openJobSheet(null) }
               : null;
   const commands = buildCommands(me, datasets, models, jobs, data.sources);
@@ -249,7 +250,13 @@ function AppContent() {
           label: selectedModel.name,
           route: 'Models' as const,
         }
-      : { id: 'page:' + page, kind: 'page' as const, label: pageLabel, route: page };
+      : {
+          // Favorites hold the sidebar page, so the header star and the sidebar pin agree.
+          id: 'page:' + navItemOf(page).route,
+          kind: 'page' as const,
+          label: pageLabel,
+          route: navItemOf(page).route,
+        };
   const currentEntry: LibraryEntry = { ...entity, scope, visitedAt: Date.now() };
   const favorite = favorites.some((entry) => entry.id === currentEntry.id && entry.scope === scope);
   function openEntry(entry: LibraryEntry) {
@@ -288,7 +295,7 @@ function AppContent() {
         onShortcuts={() => setShortcutsOpen(true)}
       />
       <div className="flex min-h-0 flex-1">
-        <Sidebar me={me} onNavigate={setPage} />
+        <Sidebar me={me} scope={scope} onNavigate={setPage} />
         <main id="main-content" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col">
           {connection && !online && (
             <div className="reconnect-banner" role="status">
@@ -318,7 +325,9 @@ function AppContent() {
           <div
             className={
               'page-content' +
-              (graphPage || page === 'SQL' || page === 'Explorer' ? ' workbench-page' : '') +
+              (graphPage || ['SQL', 'Query History', 'Explorer'].includes(page)
+                ? ' workbench-page'
+                : '') +
               (page === 'Connect' ? ' connect-page' : '')
             }
           >

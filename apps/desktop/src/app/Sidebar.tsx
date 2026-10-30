@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
-import { PanelLeftClose, PanelLeftOpen, Pin, PinOff } from 'lucide-react';
+import { ChevronRight, PanelLeftClose, PanelLeftOpen, Pin, PinOff } from 'lucide-react';
 import type { Me } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -10,12 +10,29 @@ import { navKeyboardIndex, sidebarBounds } from '@/stores/sidebar-state';
 import { useRouteStore } from '@/stores/route';
 import { routeLabels } from '@/stores/route-history';
 import type { Route } from '@/stores/route-history';
-import { navigation, routeAvailable, sectionLabels, sectionOf } from './navigation';
-import { orderSections, visibleItems } from './sidebar-model';
+import {
+  itemEntry,
+  membersOf,
+  navigation,
+  navItemOf,
+  sectionLabels,
+  sectionOf,
+} from './navigation';
+import type { NavItem } from './navigation';
+import { sidebarLayout } from './sidebar-model';
+import { useLibrary } from '@/stores/library';
 import type { NavGroup } from '@/stores/sidebar-state';
-export function Sidebar({ me, onNavigate }: { me: Me | null; onNavigate: (route: Route) => void }) {
-  const { width, collapsed, setWidth, toggleCollapsed, importantItems, togglePin } =
-    usePreferences();
+export function Sidebar({
+  me,
+  scope,
+  onNavigate,
+}: {
+  me: Me | null;
+  /** Engine and account the favorites belong to. */
+  scope: string;
+  onNavigate: (route: Route) => void;
+}) {
+  const { width, collapsed, setWidth, toggleCollapsed } = usePreferences();
   const page = useRouteStore((state) => state.page);
   const [narrow, setNarrow] = useState(() => matchMedia('(max-width: 900px)').matches);
   const [dragging, setDragging] = useState(false);
@@ -31,6 +48,78 @@ export function Sidebar({ me, onNavigate }: { me: Me | null; onNavigate: (route:
   }, []);
   const rail = collapsed || narrow;
   const section = sectionOf(page);
+  const { favorites, toggle } = useLibrary();
+  const pinned = favorites
+    .filter((entry) => entry.scope === scope && entry.kind === 'page')
+    .map((entry) => navItemOf(entry.route).route);
+  const layout = sidebarLayout(section.label, navigation, pinned, expanded);
+  const renderItem = (item: NavItem, favorite: boolean) => {
+    const label = item.label ?? routeLabels[item.route];
+    const entry = itemEntry(me, item);
+    const current = membersOf(item).includes(page);
+    return (
+      <div key={item.route} className="group relative flex items-center">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="min-w-0 flex-1">
+              <button
+                type="button"
+                data-nav-focus
+                className={
+                  'flex min-h-8 w-full items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-left text-nav transition-colors duration-fast ease-workbench disabled:opacity-50 ' +
+                  (rail ? 'justify-center px-1 ' : 'pe-9 ') +
+                  (current
+                    ? 'bg-primary-soft font-medium text-primary'
+                    : 'text-ink-2 hover:bg-panel-2 hover:text-ink')
+                }
+                aria-current={current ? 'page' : undefined}
+                aria-label={label}
+                disabled={!entry}
+                onClick={() => {
+                  setExpanded([]);
+                  // Inside a combined page, reopening it keeps the section already in view.
+                  if (!current && entry) onNavigate(entry);
+                }}
+              >
+                <Icon name={item.icon} />
+                {!rail && <span className="truncate">{label}</span>}
+              </button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            {label}
+            {!entry ? ' · Connect with the required access' : ''}
+          </TooltipContent>
+        </Tooltip>
+        {!rail && (
+          <button
+            type="button"
+            aria-label={
+              favorite ? 'Remove ' + label + ' from favorites' : 'Add ' + label + ' to favorites'
+            }
+            aria-pressed={favorite}
+            className="absolute right-0.5 flex size-7 items-center justify-center rounded-sm text-ink-3 opacity-0 hover:bg-panel-2 hover:text-ink group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+            onClick={() =>
+              toggle({
+                id: 'page:' + item.route,
+                label,
+                kind: 'page',
+                route: item.route,
+                scope,
+                visitedAt: Date.now(),
+              })
+            }
+          >
+            {favorite ? (
+              <PinOff size={13} aria-hidden="true" />
+            ) : (
+              <Pin size={13} aria-hidden="true" />
+            )}
+          </button>
+        )}
+      </div>
+    );
+  };
   return (
     <motion.aside
       className="relative flex min-h-0 shrink-0 flex-col gap-2 border-r border-line bg-panel p-2 pt-4"
@@ -58,15 +147,17 @@ export function Sidebar({ me, onNavigate }: { me: Me | null; onNavigate: (route:
           items[navKeyboardIndex(index, event.key, items.length)]?.focus();
         }}
       >
-        {orderSections(section.label, navigation).map((group) => {
-          const items = visibleItems(
-            group,
-            importantItems,
-            !rail && expanded.includes(group.label),
-            section.label,
-          );
-          const hidden = group.items.length - items.length;
-          if (rail && items.length === 0) return null;
+        {layout.favorites.length > 0 && (
+          <section aria-label="Favorites" className={rail ? 'border-b border-line pb-3' : ''}>
+            {!rail && <h2 className="px-2.5 pb-1 text-xs font-medium text-ink-3">Favorites</h2>}
+            <div className="space-y-0.5">
+              {layout.favorites.map((item) => renderItem(item, true))}
+            </div>
+          </section>
+        )}
+        {layout.sections.map((group) => {
+          const open = rail || group.open;
+          if (!group.items.length) return null;
           return (
             <motion.section
               key={group.label}
@@ -76,88 +167,42 @@ export function Sidebar({ me, onNavigate }: { me: Me | null; onNavigate: (route:
               aria-label={sectionLabels[group.label]}
               className={rail && group.label !== section.label ? 'border-t border-line pt-3' : ''}
             >
-              {!rail && (
-                <h2 className="px-2.5 pb-1 text-xs font-medium text-ink-3">
-                  {sectionLabels[group.label]}
-                </h2>
-              )}
-              <div id={'sidebar-' + group.label} className="space-y-0.5">
-                {items.map(({ route, icon }) => {
-                  const pinned = importantItems[group.label]?.includes(route) ?? false;
-                  const available = routeAvailable(me, route);
-                  return (
-                    <div key={route} className="group relative flex items-center">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="min-w-0 flex-1">
-                            <button
-                              type="button"
-                              data-nav-focus
-                              className={
-                                'flex min-h-8 w-full items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-left text-nav transition-colors duration-fast ease-workbench disabled:opacity-50 ' +
-                                (rail ? 'justify-center px-1 ' : 'pe-9 ') +
-                                (page === route
-                                  ? 'bg-primary-soft font-medium text-primary'
-                                  : 'text-ink-2 hover:bg-panel-2 hover:text-ink')
-                              }
-                              aria-current={page === route ? 'page' : undefined}
-                              aria-label={routeLabels[route]}
-                              disabled={!available}
-                              onClick={() => {
-                                setExpanded([]);
-                                onNavigate(route);
-                              }}
-                            >
-                              <Icon name={icon} />
-                              {!rail && <span className="truncate">{routeLabels[route]}</span>}
-                            </button>
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent side="right">
-                          {routeLabels[route]}
-                          {!available ? ' · Connect with the required access' : ''}
-                        </TooltipContent>
-                      </Tooltip>
-                      {!rail && (
-                        <button
-                          type="button"
-                          aria-label={
-                            (pinned ? 'Unpin ' : 'Pin ') +
-                            routeLabels[route] +
-                            (pinned ? ' from sidebar' : ' to sidebar')
-                          }
-                          aria-pressed={pinned}
-                          className={
-                            'absolute right-0.5 flex size-7 items-center justify-center rounded-sm hover:bg-panel-2 hover:text-ink group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 ' +
-                            (pinned ? 'text-ink-2 opacity-100' : 'text-ink-3 opacity-0')
-                          }
-                          onClick={() => togglePin(group.label, route)}
-                        >
-                          {pinned ? (
-                            <Pin size={13} aria-hidden="true" />
-                          ) : (
-                            <PinOff size={13} aria-hidden="true" />
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              {!rail && hidden > 0 && (
-                <button
-                  type="button"
-                  data-nav-focus
-                  aria-expanded={false}
-                  aria-controls={'sidebar-' + group.label}
-                  aria-label={
-                    'Show all ' + sectionLabels[group.label] + ' pages (' + hidden + ' more)'
-                  }
-                  className="mt-0.5 flex min-h-8 w-full items-center rounded-sm px-2.5 py-1.5 text-left text-xs text-ink-3 hover:bg-panel-2 hover:text-ink"
-                  onClick={() => setExpanded((current) => [...current, group.label])}
-                >
-                  Show all ({hidden} more)
-                </button>
+              {!rail &&
+                (group.label === section.label ? (
+                  <h2 className="px-2.5 pb-1 text-xs font-medium text-ink-3">
+                    {sectionLabels[group.label]}
+                  </h2>
+                ) : (
+                  <h2>
+                    <button
+                      type="button"
+                      data-nav-focus
+                      aria-expanded={open}
+                      aria-controls={'sidebar-' + group.label}
+                      className="flex min-h-7 w-full items-center gap-1 rounded-sm px-2.5 text-left text-xs font-medium text-ink-3 hover:bg-panel-2 hover:text-ink"
+                      onClick={() =>
+                        setExpanded((current) =>
+                          current.includes(group.label)
+                            ? current.filter((label) => label !== group.label)
+                            : [...current, group.label],
+                        )
+                      }
+                    >
+                      <ChevronRight
+                        size={13}
+                        aria-hidden="true"
+                        className={
+                          'transition-transform duration-fast ' + (open ? 'rotate-90' : '')
+                        }
+                      />
+                      {sectionLabels[group.label]}
+                    </button>
+                  </h2>
+                ))}
+              {open && (
+                <div id={'sidebar-' + group.label} className="space-y-0.5">
+                  {group.items.map((item) => renderItem(item, false))}
+                </div>
               )}
             </motion.section>
           );

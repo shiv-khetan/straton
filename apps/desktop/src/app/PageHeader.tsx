@@ -7,7 +7,7 @@ import { backupTime, relativeTime } from '@/lib/view-model';
 import { StatusChip } from '@/features/console/ConsoleDrawer';
 import { datasetState } from '@/features/console/workbench-model';
 import type { Route } from '@/stores/route-history';
-import { sectionLabels, sectionOf } from './navigation';
+import { navItemOf, sectionLabels, sectionOf } from './navigation';
 import type { useEngineData } from './useEngineData';
 
 type EngineData = ReturnType<typeof useEngineData>;
@@ -74,7 +74,7 @@ export function PageHeader({
               <Pill>{selectedModel.cron ?? selectedModel.trigger}</Pill>
             </>
           )}
-          {page === 'Jobs' && (
+          {navItemOf(page).route === 'Pipelines' && (
             <StatePill state={running ? 'running' : 'idle'} label={running + ' running'} />
           )}
         </div>

@@ -26,7 +26,17 @@ import type { IconName } from './Icon';
 import { useReadOnly } from './ReadOnlyScope';
 export { Icon } from './Icon';
 export type { IconName } from './Icon';
-import { Children, Fragment, isValidElement, useEffect, useId, useRef, useState } from 'react';
+import {
+  Children,
+  createContext,
+  Fragment,
+  isValidElement,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react';
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
 export type Tone = 'neutral' | 'primary' | 'success' | 'warning' | 'danger' | 'info';
 export { Button } from '@/components/ui/button';
@@ -575,9 +585,12 @@ export function KpiTile({
   );
 }
 
+// Where PageActions render. A combined page gives each section its own slot instead.
+export const PageActionsSlot = createContext('page-actions');
 // Renders a page's primary action into the title row, so it sits in one place on every page.
 export function PageActions({ children }: { children: import('react').ReactNode }) {
+  const id = useContext(PageActionsSlot);
   const [slot, setSlot] = useState<HTMLElement | null>(null);
-  useEffect(() => setSlot(document.getElementById('page-actions')), []);
+  useEffect(() => setSlot(document.getElementById(id)), [id]);
   return slot ? createPortal(children, slot) : null;
 }
