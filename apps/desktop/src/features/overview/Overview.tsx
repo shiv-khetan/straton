@@ -8,25 +8,17 @@ import {
   TableCell,
 } from '@/components/ui/table';
 import {
-  SourceHealth,
-  ActiveWork,
+  NeedsAttention,
   RecentQueries,
+  RunningNow,
+  SourceHealth,
   Storage,
-  FailingCheck,
   useOverviewQuality,
 } from './CoreOverview';
 import { useId, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import type { Dataset, Job, Run, Status } from '@/lib/api';
-import {
-  EmptyState,
-  Icon,
-  KpiTile,
-  Pill,
-  SegmentedControl,
-  Tray,
-  StatePill,
-} from '@/components/workbench/primitives';
+import { KpiTile, SegmentedControl, Tray, StatePill } from '@/components/workbench/primitives';
 import {
   backupTime,
   bucketRuns,
@@ -228,9 +220,7 @@ export default function Dashboard({
   jobs,
   status,
   backups,
-  children,
   navigate,
-  events,
   canNavigate,
   client,
   me,
@@ -252,9 +242,7 @@ export default function Dashboard({
   jobs: Job[];
   status: Status | null;
   backups: string[];
-  children: React.ReactNode;
   navigate: (page: 'Jobs' | 'Data Map' | 'Backups' | 'Data Quality', filter?: string) => void;
-  events: import('@/lib/api').EngineEvent[];
   canNavigate: (page: 'Jobs' | 'Data Map' | 'Backups' | 'Data Quality') => boolean;
 }) {
   const now = Date.now();
@@ -282,7 +270,7 @@ export default function Dashboard({
     count ? (qualityPassed[i] / count) * 100 : null,
   );
   const succeeded = runKpi(runs, now, 'succeeded').current;
-  const recentRuns = [...runs].sort((a, b) => b.available_at - a.available_at).slice(0, 5);
+  const recentRuns = [...runs].sort((a, b) => b.available_at - a.available_at).slice(0, 8);
   return (
     <>
       <div className="kpi-grid" aria-label="Engine overview">
@@ -372,67 +360,88 @@ export default function Dashboard({
           />
         )}
       </div>
-      <div className="overview-primary">
-        <Tray
-          title="Recent runs"
-          className="recent-runs"
-          actions={
-            <Button
-              variant="link"
-              size="sm"
-              disabled={!canNavigate('Jobs')}
-              onClick={() => navigate('Jobs')}
-            >
-              View all
-            </Button>
-          }
-        >
-          {canNavigate('Jobs') ? (
-            recentRuns.length ? (
-              <DataTable>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right tabular-nums">Rows</TableHead>
-                    <TableHead className="text-right tabular-nums">Scheduled</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {recentRuns.map((run) => (
-                    <TableRow key={run.id}>
-                      <TableCell title={run.id}>
-                        {jobs.find((j) => j.id === run.job_id)?.name ?? run.job_id.slice(0, 8)}
-                      </TableCell>
-                      <TableCell>
-                        <StatePill state={run.state} />
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {run.rows_read.toLocaleString()}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        <time
-                          dateTime={new Date(run.available_at * 1000).toISOString()}
-                          title={
-                            new Date(run.available_at * 1000).toLocaleString() +
-                            ' · scheduled availability; actual start time is not reported'
-                          }
-                        >
-                          {relativeTime(run.available_at * 1000, now)}
-                        </time>
-                      </TableCell>
+      {/* Two columns that stack independently, so a short card never leaves a gap beside a
+          tall one. Left: what ran and how much. Right: what needs action, then health. */}
+      <div className="overview-columns">
+        <div className="overview-column">
+          <Tray
+            title="Recent runs"
+            className="recent-runs"
+            actions={
+              <Button
+                variant="link"
+                size="sm"
+                disabled={!canNavigate('Jobs')}
+                onClick={() => navigate('Jobs')}
+              >
+                View all
+              </Button>
+            }
+          >
+            {canNavigate('Jobs') ? (
+              recentRuns.length ? (
+                <DataTable>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right tabular-nums">Rows</TableHead>
+                      <TableHead
+                        className="text-right tabular-nums"
+                        title="Scheduled availability; the engine does not report actual start times"
+                      >
+                        Scheduled
+                      </TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
+                  </TableHeader>
+                  <TableBody>
+                    {recentRuns.map((run) => (
+                      <TableRow key={run.id}>
+                        <TableCell title={run.id}>
+                          {jobs.find((j) => j.id === run.job_id)?.name ?? run.job_id.slice(0, 8)}
+                        </TableCell>
+                        <TableCell>
+                          <StatePill state={run.state} />
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {run.rows_read.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          <time
+                            dateTime={new Date(run.available_at * 1000).toISOString()}
+                            title={new Date(run.available_at * 1000).toLocaleString()}
+                          >
+                            {relativeTime(run.available_at * 1000, now)}
+                          </time>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </DataTable>
+              ) : (
+                <p className="tray-note">No runs yet. Create a sync job to get started.</p>
+              )
             ) : (
-              <p className="hint p-4">No runs yet. Create a sync job to get started.</p>
-            )
-          ) : (
-            <p className="hint p-4">Run history requires sync admin access.</p>
-          )}
-        </Tray>
-        <div className="overview-health">
+              <p className="tray-note">Run history requires sync admin access.</p>
+            )}
+          </Tray>
+          <Tray title="Sync activity">
+            {canNavigate('Jobs') ? (
+              <SyncActivity runs={runs} />
+            ) : (
+              <p className="hint">Run history requires sync admin access.</p>
+            )}
+          </Tray>
+        </div>
+        <div className="overview-column">
+          <NeedsAttention
+            quality={quality}
+            runs={canNavigate('Jobs') ? runs : []}
+            jobs={jobs}
+            onOpenQuality={() => navigate('Data Quality')}
+            onOpenRuns={() => navigate('Jobs', 'failed')}
+          />
+          <RunningNow runs={runs} jobs={jobs} models={models} />
           <SourceHealth
             sources={sources}
             datasets={datasets}
@@ -442,81 +451,16 @@ export default function Dashboard({
             me={me}
             readOnly={readOnly}
           />
-          <FailingCheck query={quality} onOpen={() => navigate('Data Quality')} />
+          {me.privileges.read || me.privileges.admin ? (
+            <Storage client={client} readOnly={readOnly} />
+          ) : (
+            <Tray title="Storage">
+              <p className="hint">Storage usage requires read access.</p>
+            </Tray>
+          )}
+          <RecentQueries scope={scope} onQuery={onQuery} />
         </div>
       </div>
-      <div className="dashboard-grid">
-        <Tray title="Sync activity">
-          {canNavigate('Jobs') ? (
-            <SyncActivity runs={runs} />
-          ) : (
-            <p className="hint">Run history requires sync admin access.</p>
-          )}
-        </Tray>
-        <Tray title="Recent activity">
-          <p className="hint">The latest from your workspace</p>
-          <div className="activity-list">
-            {events.slice(0, 4).map((event, i) => (
-              <div className="activity-item" key={'event-' + i}>
-                <Icon name="console" />
-                <div>
-                  <code>{event.type}</code>
-                  <small>{event.message ?? event.id ?? 'engine'}</small>
-                </div>
-                {event.state && <StatePill state={event.state} />}
-              </div>
-            ))}
-            {!events.length && (
-              <EmptyState icon="clock">
-                {canNavigate('Jobs')
-                  ? 'Live engine events will appear here as work progresses.'
-                  : 'Live engine events will appear here.'}
-              </EmptyState>
-            )}
-          </div>
-        </Tray>
-      </div>
-      <div className="overview-core">
-        <RecentQueries scope={scope} onQuery={onQuery} />
-        {me.privileges.read || me.privileges.admin ? (
-          <Storage client={client} readOnly={readOnly} />
-        ) : (
-          <section>
-            <h2>Storage usage</h2>
-            <p className="hint">Storage usage requires read access.</p>
-          </section>
-        )}
-      </div>
-      <ActiveWork runs={runs} jobs={jobs} models={models} />
-      <section className="failed-jobs">
-        <h2>Failed jobs</h2>
-        {runs
-          .filter((r) => r.state === 'failed')
-          .slice(0, 5)
-          .map((r) => (
-            <div className="overview-row" key={r.id}>
-              <span>
-                {jobs.find((j) => j.id === r.job_id)?.name ?? r.job_id}
-                <small>{r.error ?? 'Run failed'}</small>
-              </span>
-              <StatePill state="failed" />
-            </div>
-          ))}
-        {!runs.some((r) => r.state === 'failed') && (
-          <p className="hint">
-            {canNavigate('Jobs')
-              ? 'No failed runs in the loaded history.'
-              : 'Job history requires sync admin access.'}
-          </p>
-        )}
-      </section>
-      <Tray title="Latest runs" actions={<Pill>{runs.length} total</Pill>}>
-        {canNavigate('Jobs') ? (
-          children
-        ) : (
-          <p className="hint">Run history requires sync admin access.</p>
-        )}
-      </Tray>
     </>
   );
 }

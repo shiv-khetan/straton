@@ -11,8 +11,7 @@ export const navigation: { label: NavGroup; items: NavItem[] }[] = [
   {
     label: 'Workspace',
     items: [
-      { route: 'Dashboard', icon: 'dashboard' },
-      { route: 'Activity', icon: 'activity' },
+      { route: 'Dashboard', icon: 'dashboard', members: ['Dashboard', 'Activity'] },
       { route: 'Favorites', icon: 'star', label: 'Library', members: ['Favorites', 'Recent'] },
     ],
   },

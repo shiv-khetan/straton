@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { can } from '@/features/access/access-model';
 import { StatusChip, Skeleton } from '@/features/console/ConsoleDrawer';
 import { queryKeys } from '@/lib/queryKeys';
-import { FeatureEmpty, FeatureError, FeatureLoading } from '@/components/workbench/FeatureState';
+import { FeatureError, FeatureLoading } from '@/components/workbench/FeatureState';
 import { StatePill, Tray } from '@/components/workbench/primitives';
 import { relativeTime } from '@/lib/view-model';
 import { formatBytes } from './storage-model';
@@ -106,37 +106,40 @@ export function SourceHealth({
     </Tray>
   );
 }
-export function ActiveWork({ runs, jobs, models }: { runs: Run[]; jobs: Job[]; models: Model[] }) {
+export function RunningNow({ runs, jobs, models }: { runs: Run[]; jobs: Job[]; models: Model[] }) {
   const active = runs.filter((r) => ['running', 'queued'].includes(r.state));
   const activeModelIds = new Set(active.map((r) => jobs.find((j) => j.id === r.job_id)?.name));
   const modelWork = models.filter(
     (m) => ['running', 'queued'].includes(m.last_run_status ?? '') && !activeModelIds.has(m.name),
   );
   return (
-    <section className="active-work">
-      <h2>Active work</h2>
-      {active.map((r) => (
-        <div className="overview-row" key={r.id}>
-          <span>
-            {jobs.find((j) => j.id === r.job_id)?.name ?? r.job_id}
-            <small>
-              <code>{r.committed_batches}</code> committed batches
-            </small>
-          </span>
-          <StatusChip state={r.state} />
-        </div>
-      ))}
-      {modelWork.map((m) => (
-        <div className="overview-row" key={m.id}>
-          <span>
-            {m.name}
-            <small>Transformation</small>
-          </span>
-          <StatusChip state={m.last_run_status ?? 'queued'} />
-        </div>
-      ))}
-      {!active.length && !modelWork.length && <p className="hint">No running or queued work.</p>}
-    </section>
+    <Tray title="Running now">
+      <div className="overview-rows">
+        {active.map((r) => (
+          <div className="overview-row" key={r.id}>
+            <span>
+              {jobs.find((j) => j.id === r.job_id)?.name ?? r.job_id}
+              <small>
+                <code>{r.committed_batches}</code> committed batches
+              </small>
+            </span>
+            <StatusChip state={r.state} />
+          </div>
+        ))}
+        {modelWork.map((m) => (
+          <div className="overview-row" key={m.id}>
+            <span>
+              {m.name}
+              <small>Transformation</small>
+            </span>
+            <StatusChip state={m.last_run_status ?? 'queued'} />
+          </div>
+        ))}
+        {!active.length && !modelWork.length && (
+          <p className="hint">Nothing is running or queued.</p>
+        )}
+      </div>
+    </Tray>
   );
 }
 export function RecentQueries({
@@ -150,21 +153,27 @@ export function RecentQueries({
     .filter((e) => e.scope === scope)
     .slice(0, 5);
   return (
-    <section>
-      <h2>Recent queries</h2>
-      {history.map((e) => (
-        <div className="overview-row" key={e.id}>
-          <Button variant="ghost" onClick={() => onQuery(e.sql)} className="recent-query">
-            <code>{e.sql}</code>
-          </Button>
-          <code>{e.elapsed_ms.toLocaleString()} ms</code>
-          <StatePill state={e.status} />
-        </div>
-      ))}
-      {!history.length && (
-        <p className="hint">Your recent SQL executions will appear here on this device.</p>
-      )}
-    </section>
+    <Tray title="Recent queries">
+      <div className="overview-rows">
+        {history.map((e) => (
+          <div className="overview-row" key={e.id}>
+            <Button
+              variant="ghost"
+              onClick={() => onQuery(e.sql)}
+              className="recent-query"
+              title={e.sql}
+            >
+              <code>{e.sql}</code>
+            </Button>
+            <code>{e.elapsed_ms.toLocaleString()} ms</code>
+            <StatePill state={e.status} />
+          </div>
+        ))}
+        {!history.length && (
+          <p className="hint">Your recent SQL executions will appear here on this device.</p>
+        )}
+      </div>
+    </Tray>
   );
 }
 export function Storage({ client, readOnly }: { client: Api; readOnly: boolean }) {
@@ -183,12 +192,8 @@ export function Storage({ client, readOnly }: { client: Api; readOnly: boolean }
       ] as const)
     : [];
   return (
-    <section>
-      <div className="section-toolbar">
-        <h2>Storage usage</h2>
-        {data && <code>{formatBytes(data.total_bytes)}</code>}
-      </div>
-      <p className="hint">
+    <Tray title="Storage" actions={data && <code>{formatBytes(data.total_bytes)}</code>}>
+      <p className="hint mb-2">
         Current snapshots and engine files. Source details follow your access grants.
       </p>
       {query.isLoading && <Skeleton label="Measuring storage…" />}
@@ -235,7 +240,7 @@ export function Storage({ client, readOnly }: { client: Api; readOnly: boolean }
           ))}
         </details>
       )}
-    </section>
+    </Tray>
   );
 }
 
@@ -258,55 +263,55 @@ export function useOverviewQuality(client: Api) {
     },
   });
 }
-export function FailingCheck({
-  query,
-  onOpen,
+// Failing checks and failed runs in one place: the first thing to act on after the KPIs.
+export function NeedsAttention({
+  quality,
+  runs,
+  jobs,
+  onOpenQuality,
+  onOpenRuns,
 }: {
-  query: ReturnType<typeof useOverviewQuality>;
-  onOpen: () => void;
+  quality: ReturnType<typeof useOverviewQuality>;
+  runs: Run[];
+  jobs: Job[];
+  onOpenQuality: () => void;
+  onOpenRuns: () => void;
 }) {
-  const failing =
-    query.data?.latest.filter((item) => item.run && item.run.status !== 'passed') ?? [];
-  const item = failing[0];
+  const failingChecks = (
+    quality.data?.latest.filter((item) => item.run && item.run.status !== 'passed') ?? []
+  ).slice(0, 3);
+  const failedRuns = runs
+    .filter((r) => r.state === 'failed')
+    .sort((a, b) => b.available_at - a.available_at)
+    .slice(0, 3);
+  const clear = quality.data && !failingChecks.length && !failedRuns.length;
   return (
-    <Tray
-      title="Failing check"
-      actions={
-        <Button variant="link" size="sm" onClick={onOpen}>
-          Data Quality
-        </Button>
-      }
-    >
-      {query.isPending && <FeatureLoading label="Loading quality results" />}
-      <FeatureError error={query.error} retry={() => void query.refetch()} />
-      {item && (
-        <>
-          <div className="flex items-center gap-2">
-            <StatePill state={item.run.status} />
-            <strong>{item.check.name}</strong>
-          </div>
-          <p className="my-3 text-ink-2">{item.run.message}</p>
-          <div className="flex justify-between gap-3 text-caption text-ink-3 tabular-nums">
-            <span>{query.data!.summary.counts.passed} passed</span>
+    <Tray title="Needs attention">
+      {quality.isPending && <FeatureLoading label="Loading quality results" />}
+      <FeatureError error={quality.error} retry={() => void quality.refetch()} />
+      <div className="overview-rows">
+        {failingChecks.map(({ check, run }) => (
+          <button type="button" className="overview-row" key={check.id} onClick={onOpenQuality}>
             <span>
-              {failing.length} failing {failing.length === 1 ? 'check' : 'checks'}
+              {check.name}
+              <small>{run.message || 'Check ' + run.status}</small>
             </span>
-          </div>
-        </>
-      )}
-      {query.data &&
-        !item &&
-        (query.data.latest.length ? (
-          <p className="hint">
-            {query.data.latest.some((item) => item.run)
-              ? 'No failing checks in the latest results.'
-              : 'Run a check to see quality results.'}
-          </p>
-        ) : (
-          <FeatureEmpty title="No checks yet" action="Create a check" onAction={onOpen}>
-            Add a check to monitor data quality.
-          </FeatureEmpty>
+            <StatePill state={run.status} />
+          </button>
         ))}
+        {failedRuns.map((r) => (
+          <button type="button" className="overview-row" key={r.id} onClick={onOpenRuns}>
+            <span>
+              {jobs.find((j) => j.id === r.job_id)?.name ?? r.job_id}
+              <small>
+                {(r.error ?? 'Run failed') + ' · ' + relativeTime(r.available_at * 1000)}
+              </small>
+            </span>
+            <StatePill state="failed" />
+          </button>
+        ))}
+        {clear && <p className="hint">Nothing needs attention. Checks and runs are passing.</p>}
+      </div>
     </Tray>
   );
 }

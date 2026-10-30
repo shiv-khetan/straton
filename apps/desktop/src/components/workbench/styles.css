@@ -663,6 +663,15 @@
   .tray-surface:has(> .run-history-table:only-child) {
     padding: 0;
   }
+  /* Text never touches a card edge. Where a table bleeds to the frame, its note keeps the
+     card's 16px inset and sits on its own row above the table. */
+  .run-history-table > .hint,
+  .tray-note {
+    @apply m-0 border-b border-line px-4 py-2.5;
+  }
+  .tray-note:only-child {
+    @apply border-b-0;
+  }
   .run-history-table th,
   .run-history-table td,
   .jobs-table th,
