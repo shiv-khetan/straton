@@ -2,21 +2,6 @@
   .models-workbench {
     @apply h-full flex flex-col min-h-0;
   }
-  .models-toolbar {
-    @apply flex items-center gap-3;
-    min-height: 40px;
-    padding: 0 12px;
-    @apply border-b border-line;
-  }
-  .models-toolbar .tabs {
-    @apply m-0 border-0;
-  }
-  .models-toolbar .hint {
-    @apply m-0;
-  }
-  .models-toolbar > [data-slot='button'] {
-    @apply ml-auto;
-  }
   .models-body {
     @apply flex flex-1 min-h-0 relative;
   }
@@ -65,16 +50,6 @@
     @apply bg-success-soft;
   }
   @media (max-width: 640px) {
-    .models-toolbar .hint {
-      @apply hidden;
-    }
-  }
-  .models-toolbar {
-    min-height: 48px;
-    @apply bg-surface;
-  }
-  .models-toolbar .tabs {
-    padding: 3px;
   }
   .model-list {
     @apply border-0 rounded-none p-0;

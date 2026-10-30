@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import type { LibraryEntry } from '@/stores/library';
 import { useLibrary } from '@/stores/library';
 import { relativeTime } from '@/lib/view-model';
+import { PageIntro } from '@/components/workbench/page-layout';
 export function LibraryPage({
   kind,
   scope,
@@ -19,8 +20,8 @@ export function LibraryPage({
     (entry) => entry.scope === scope && available(entry),
   );
   return (
-    <section className="mx-auto max-w-4xl">
-      <p className="mb-6 text-body text-ink-2">Saved on this device for this engine and account.</p>
+    <section>
+      <PageIntro>Saved on this device for this engine and account.</PageIntro>
       {entries.length ? (
         <ul className="divide-y divide-line border-y border-line">
           {entries.map((entry) => (

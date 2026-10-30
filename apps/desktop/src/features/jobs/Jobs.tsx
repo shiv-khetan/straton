@@ -60,12 +60,6 @@ export default function Jobs({
   }, [focusedRun]);
   return (
     <>
-      <div className="page-heading">
-        <div>
-          <h1>Jobs</h1>
-          <p className="hint">Keep your local lake in sync.</p>
-        </div>
-      </div>
       <JobTable
         jobs={jobs}
         datasets={datasets}

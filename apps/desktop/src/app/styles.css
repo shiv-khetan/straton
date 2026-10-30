@@ -47,8 +47,45 @@
   .page-content.workbench-page {
     @apply overflow-hidden p-0;
   }
-  .page-content .page-heading {
-    @apply hidden;
+  /* Page anatomy (components/workbench/page-layout.tsx): tab bar under the title, then body. */
+  .page-tabs {
+    @apply sticky top-0 z-sticky -mx-6 mb-5 flex items-center gap-4 border-b border-line bg-background px-6;
+  }
+  .page-tabs .tabs {
+    @apply mb-0 min-w-0 flex-1 border-b-0;
+  }
+  .page-tabs-aside {
+    @apply flex shrink-0 items-center gap-3 text-caption text-ink-3;
+  }
+  .workbench-page .page-tabs {
+    @apply static mx-0 mb-0;
+  }
+  .section-header {
+    @apply mb-3 flex min-h-8 items-center justify-between gap-4;
+  }
+  .section-header h2 {
+    @apply m-0;
+  }
+  .section-header .hint {
+    @apply mt-0.5;
+  }
+  /* A table placed straight on a page gets the same frame as a Tray, so every table reads
+     the same. Tables inside trays, cards and workbench tools keep their host's frame. */
+  .page-content:not(.workbench-page) [data-slot='table-container']:not(.tray *, .card *) {
+    @apply rounded-card border border-line bg-surface;
+  }
+  .page-intro {
+    @apply mb-4 max-w-prose text-body text-ink-2;
+  }
+  /* Detail views: back link, title and actions on one row. */
+  .section-toolbar {
+    @apply mb-3 flex items-center justify-between gap-4;
+  }
+  .section-toolbar h2 {
+    @apply m-0;
+  }
+  .section-header-actions {
+    @apply flex shrink-0 flex-wrap items-center gap-2;
   }
   .read-only-scope {
     @apply contents min-w-0 border-0 p-0;
@@ -127,6 +164,9 @@
     }
     .page-content.workbench-page {
       @apply p-0;
+    }
+    .page-tabs {
+      @apply -mx-3 px-3;
     }
   }
 }

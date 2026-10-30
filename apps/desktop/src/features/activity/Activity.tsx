@@ -12,6 +12,7 @@ import {
   FeatureLoading,
 } from '@/components/workbench/FeatureState';
 import { groupActivity } from './activity-model';
+import { PageToolbar } from '@/components/workbench/page-layout';
 export default function Activity({ client, me }: { client: Api; me: Me }) {
   const [group, setGroup] = useState('');
   const [actor, setActor] = useState('');
@@ -38,7 +39,7 @@ export default function Activity({ client, me }: { client: Api; me: Me }) {
   const grouped = groupActivity(query.data?.pages.flat() ?? []);
   return (
     <section className="space-y-5">
-      <div className="flex flex-wrap items-end gap-3">
+      <PageToolbar>
         <Choice
           label="Action group"
           value={group}
@@ -108,7 +109,7 @@ export default function Activity({ client, me }: { client: Api; me: Me }) {
         >
           Clear filters
         </Button>
-      </div>
+      </PageToolbar>
       <FeatureError error={actors.error} retry={() => void actors.refetch()} />
       {query.isPending && <FeatureLoading label="Loading activity" />}
       <FeatureError error={query.error} retry={() => void query.refetch()} />

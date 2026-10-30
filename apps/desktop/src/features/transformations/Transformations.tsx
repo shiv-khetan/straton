@@ -15,7 +15,7 @@ import type {
   ModelLineage,
   Run,
 } from '@/lib/api';
-import { Button, EmptyState, Tabs } from '@/components/workbench/primitives';
+import { Button, EmptyState } from '@/components/workbench/primitives';
 import { normalizeModelLineage } from '@/features/transformations/model-model';
 import { datasetLabel } from '@/lib/view-model';
 import ModelCanvas from '@/features/transformations/ModelCanvas';
@@ -25,6 +25,7 @@ import { ModelList } from './ModelList';
 import { ModelConsole, ModelInspector } from './ModelPanels';
 import type { AsyncState } from './ModelPanels';
 import { ModelSheet } from './ModelSheet';
+import { PageTabs } from '@/components/workbench/page-layout';
 const initial: ModelInput = {
   name: '',
   sql: 'SELECT id, name FROM app_db.users',
@@ -284,11 +285,14 @@ export default function Models({
   };
   return (
     <div className="models-workbench">
-      <div className="models-toolbar">
-        <Tabs id="model-view" items={['Canvas', 'List']} value={view} onChange={setView} />
-        {/* "New model" lives in the page title row, like every page's primary action. */}
-        <span className="hint">{models.length} models · lineage from engine catalog</span>
-      </div>
+      {/* "New model" lives in the page title row, like every page's primary action. */}
+      <PageTabs
+        id="model-view"
+        items={['Canvas', 'List']}
+        value={view}
+        onChange={setView}
+        aside={models.length + ' models · lineage from engine catalog'}
+      />
       <div className="models-body">
         <div className="map-center">
           {graphError && (

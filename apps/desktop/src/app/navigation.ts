@@ -55,6 +55,33 @@ export const navigation: { label: NavGroup; items: NavItem[] }[] = [
     ],
   },
 ];
+// How each route lays out its body. Record<Route, ...> makes the compiler reject a route
+// without one. document: scrolling page with standard padding (PageTabs, sections, trays);
+// workbench: full-bleed tool that manages its own panes; connect: the centred sign-in form.
+export const pageLayout: Record<Route, 'document' | 'workbench' | 'connect'> = {
+  Dashboard: 'document',
+  Activity: 'document',
+  Favorites: 'document',
+  Recent: 'document',
+  Sources: 'document',
+  Explorer: 'workbench',
+  SQL: 'workbench',
+  'Query History': 'workbench',
+  Pipelines: 'document',
+  Models: 'workbench',
+  Jobs: 'document',
+  Schedules: 'document',
+  Optimizer: 'document',
+  Analytics: 'document',
+  Dashboards: 'document',
+  'Data Quality': 'document',
+  'Data Map': 'workbench',
+  Access: 'document',
+  Backups: 'document',
+  Settings: 'document',
+  'Config as Code': 'document',
+  Connect: 'connect',
+};
 const allItems = navigation.flatMap((group) => group.items);
 export const membersOf = (item: NavItem): Route[] => item.members ?? [item.route];
 /** The sidebar item that shows this route (a combined page for member routes). */

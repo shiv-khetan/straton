@@ -22,7 +22,6 @@ import type {
   Relationship,
   Run,
 } from '@/lib/api';
-import { Tabs } from '@/components/workbench/primitives';
 import { datasetLabel } from '@/lib/view-model';
 import { ConsoleDrawer, RunHistory, Skeleton } from '@/features/console/ConsoleDrawer';
 import { datasetJobs } from '@/features/console/workbench-model';
@@ -39,6 +38,7 @@ import { manualSelection, relationshipInput } from './relationship-form';
 import { SelectionInspector } from './SelectionInspector';
 import { useMapLayout } from './use-map-layout';
 import { useVisibleGraph } from './use-visible-graph';
+import { PageTabs } from '@/components/workbench/page-layout';
 type Props = {
   map: DataMap;
   jobs: Job[];
@@ -65,9 +65,7 @@ export default function DataMapView(props: Props) {
   return (
     // The map canvas sizes itself with h-full, so this column needs a definite height.
     <div className="flex h-full min-h-0 flex-col">
-      <div className="px-4 [&_.tabs]:mb-0">
-        <Tabs id="lineage-mode" items={['Lineage', 'Impact']} value={mode} onChange={setMode} />
-      </div>
+      <PageTabs id="lineage-mode" items={['Lineage', 'Impact']} value={mode} onChange={setMode} />
       <div
         id={'lineage-mode-panel-' + mode}
         role="tabpanel"

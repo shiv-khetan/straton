@@ -42,12 +42,6 @@ export default function Backups({
   const backups = inventory.data ?? [];
   return (
     <>
-      <div className="page-heading">
-        <div>
-          <h1>Backups</h1>
-          <p className="hint">Engine snapshots, ready when you need them.</p>
-        </div>
-      </div>
       <Tray title="Engine backups">
         {inventory.isPending && <FeatureLoading label="Loading backups" />}
         <FeatureError error={inventory.error} retry={() => void inventory.refetch()} />

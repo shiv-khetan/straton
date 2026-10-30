@@ -196,16 +196,6 @@
   .failed-jobs > h2 {
     @apply mb-3 text-body font-semibold text-ink;
   }
-  .section-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 12px;
-  }
-  .section-toolbar h2 {
-    margin: 0;
-  }
   .overview-row {
     display: flex;
     align-items: center;

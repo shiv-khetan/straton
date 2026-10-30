@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { PageActionsSlot } from '@/components/workbench/primitives';
+import { SectionHeader } from '@/components/workbench/page-layout';
 import type { Route } from '@/stores/route-history';
 
 export type CombinedSection = {
@@ -73,45 +74,41 @@ export function CombinedPage({
   }, [sections.map((s) => s.route).join()]);
   return (
     <div ref={root}>
-      <nav
-        aria-label="Page sections"
-        className="sticky top-0 z-sticky -mx-6 mb-4 flex gap-1 border-b border-line bg-background px-6 py-2"
-      >
-        {sections.map((s) => (
-          <button
-            key={s.route}
-            type="button"
-            aria-current={inView === s.route ? 'location' : undefined}
-            className={
-              'rounded-sm px-2.5 py-1 text-body transition-colors duration-fast ' +
-              (inView === s.route
-                ? 'bg-primary-soft font-medium text-primary'
-                : 'text-ink-2 hover:bg-panel-2 hover:text-ink')
-            }
-            onClick={() => {
-              if (s.route === page) reveal(s.route);
-              else onNavigate(s.route);
-            }}
-          >
-            {s.label}
-          </button>
-        ))}
-      </nav>
+      <div className="page-tabs">
+        <nav aria-label="Page sections" className="tabs">
+          {sections.map((s) => (
+            <button
+              key={s.route}
+              type="button"
+              aria-current={inView === s.route ? 'location' : undefined}
+              onClick={() => {
+                if (s.route === page) reveal(s.route);
+                else onNavigate(s.route);
+              }}
+            >
+              {s.label}
+            </button>
+          ))}
+        </nav>
+      </div>
       <div className="space-y-10">
         {sections.map((s) => (
           <section
             key={s.route}
             id={sectionId(s.route)}
             aria-labelledby={sectionId(s.route) + '-title'}
-            className="scroll-mt-14"
+            className="scroll-mt-16"
           >
-            <div className="mb-3 flex min-h-8 flex-wrap items-center gap-2 border-b border-line pb-2">
-              <h2 id={sectionId(s.route) + '-title'} className="me-auto">
-                {s.label}
-              </h2>
-              {s.actions}
-              <span id={sectionId(s.route) + '-actions'} className="contents" />
-            </div>
+            <SectionHeader
+              id={sectionId(s.route) + '-title'}
+              title={s.label}
+              actions={
+                <>
+                  {s.actions}
+                  <span id={sectionId(s.route) + '-actions'} className="contents" />
+                </>
+              }
+            />
             <PageActionsSlot.Provider value={sectionId(s.route) + '-actions'}>
               {s.content}
             </PageActionsSlot.Provider>

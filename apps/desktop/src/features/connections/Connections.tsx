@@ -77,12 +77,6 @@ export default function Sources({
   const props = { config, setConfig };
   return (
     <>
-      <div className="page-heading">
-        <div>
-          <h1>Sources</h1>
-          <p className="hint">Connect systems and discover their datasets.</p>
-        </div>
-      </div>
       <SourceTable
         sources={sources}
         client={client}

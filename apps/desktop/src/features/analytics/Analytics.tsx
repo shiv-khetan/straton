@@ -32,6 +32,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { ChartPreview } from './ChartPreview';
+import { PageIntro } from '@/components/workbench/page-layout';
 const fresh = (): ChartInput => ({
   name: '',
   sql: 'SELECT 1 AS value',
@@ -72,10 +73,8 @@ function AnalyticsLibrary({
         />
       ) : (
         <>
-          <div className="section-toolbar">
-            <p className="text-ink-2">
-              Saved charts built from SQL, with your access rules applied.
-            </p>
+          <PageIntro>Saved charts built from SQL, with your access rules applied.</PageIntro>
+          <div className="contents">
             <PageActions>
               <Button disabled={readOnly} onClick={() => setEditing('new')}>
                 <Plus size={16} aria-hidden="true" />
