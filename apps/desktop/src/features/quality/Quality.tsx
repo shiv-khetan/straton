@@ -39,7 +39,7 @@ import {
   FeatureLoading,
   useFeatureAction,
 } from '@/components/workbench/FeatureState';
-import { Pill, StatePill, Sparkline } from '@/components/workbench/primitives';
+import { Pill, StatePill, Sparkline, Tray } from '@/components/workbench/primitives';
 import { relativeTime } from '@/lib/view-model';
 const kinds: QualityKind[] = [
   'not_null',
@@ -252,8 +252,7 @@ export default function Quality({
           </nav>
         </>
       )}
-      <section>
-        <h2 className="mb-3 font-medium">Recent failures</h2>
+      <Tray title="Recent failures">
         {recent.isPending && <FeatureLoading />}
         <FeatureError error={recent.error} retry={() => void recent.refetch()} />
         {recent.data
@@ -274,7 +273,7 @@ export default function Quality({
         {recent.data && !recent.data.some((r) => r.status !== 'passed') && (
           <p className="text-ink-2">No failures in the loaded history.</p>
         )}
-      </section>
+      </Tray>
       {!!summary.data?.datasets.length && (
         <details>
           <summary>Scores by dataset</summary>

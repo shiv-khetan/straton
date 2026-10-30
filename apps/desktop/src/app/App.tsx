@@ -22,7 +22,7 @@ import { useEngineData } from './useEngineData';
 import { useGlobalShortcuts } from './useGlobalShortcuts';
 import { lastPage, useRouteStore } from '@/stores/route';
 import { isRoute } from '@/stores/route-history';
-import { navItemOf, pageLabelOf, routeAvailable } from './navigation';
+import { navItemOf, pageLabelOf, pageLayout, routeAvailable } from './navigation';
 import { queryApi } from '@/lib/queryApi';
 import { useLibrary } from '@/stores/library';
 import type { LibraryEntry } from '@/stores/library';
@@ -325,10 +325,9 @@ function AppContent() {
           <div
             className={
               'page-content' +
-              (graphPage || ['SQL', 'Query History', 'Explorer'].includes(page)
-                ? ' workbench-page'
-                : '') +
-              (page === 'Connect' ? ' connect-page' : '')
+              { document: '', workbench: ' workbench-page', connect: ' connect-page' }[
+                pageLayout[page]
+              ]
             }
           >
             <PageRoutes

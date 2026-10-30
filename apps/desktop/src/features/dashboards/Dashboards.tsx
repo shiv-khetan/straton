@@ -53,6 +53,7 @@ import { ResultGrid } from '@/components/workbench/ResultGrid';
 import { ChartPreview } from '@/features/analytics/ChartPreview';
 import { addDashboardChart, packLayout, reorderLayout } from './layout-model';
 import './styles.css';
+import { PageIntro } from '@/components/workbench/page-layout';
 function DashboardLibrary({
   client,
   me,
@@ -109,8 +110,8 @@ function DashboardLibrary({
         </>
       ) : (
         <>
-          <div className="section-toolbar">
-            <p className="text-ink-2">Arrange saved charts into a shared view of your data.</p>
+          <PageIntro>Arrange saved charts into a shared view of your data.</PageIntro>
+          <div className="contents">
             <PageActions>
               <Button disabled={readOnly} onClick={() => setId('new')}>
                 <Plus size={16} aria-hidden="true" />

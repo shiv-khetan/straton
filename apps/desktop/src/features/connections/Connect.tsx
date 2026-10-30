@@ -39,7 +39,7 @@ export default function Connect({
       <div className="icon-tile tone-primary">
         <Icon name="connect" size={24} />
       </div>
-      <h1>Connect your engine</h1>
+      <h2>Connect your engine</h2>
       <p className="hint">Your workspace starts with a connection.</p>
       <form onSubmit={submit}>
         <Field label="Engine URL">

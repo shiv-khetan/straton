@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Api, Dataset, Grant, Role, Source, User } from '@/lib/api';
-import { Tabs, Feedback } from '@/components/workbench/primitives';
+import { Feedback } from '@/components/workbench/primitives';
 import { Skeleton } from '@/features/console/ConsoleDrawer';
 import { PoliciesTab } from './PoliciesTab';
 import { RolesTab } from './RolesTab';
 import { TokenSheets } from './TokenSheets';
 import { UsersTab } from './UsersTab';
+import { PageTabs } from '@/components/workbench/page-layout';
 export type Work = (fn: () => Promise<unknown>, text: string, refresh?: boolean) => Promise<void>;
 export default function Access({
   client,
@@ -71,16 +72,10 @@ export default function Access({
   );
   return (
     <>
-      <div className="page-heading">
-        <div>
-          <h1>Access</h1>
-          <p className="hint">Manage people, their permissions, and the data they can see.</p>
-        </div>
-      </div>
+      <PageTabs id="access" items={['Users', 'Roles', 'Policies']} value={tab} onChange={setTab} />
       {error && <Feedback error message={error} onClose={() => setError('')} />}
       {message && <Feedback message={message} onClose={() => setMessage('')} />}
       {loading && <Skeleton label="Loading access settings…" />}
-      <Tabs id="access" items={['Users', 'Roles', 'Policies']} value={tab} onChange={setTab} />
       <section role="tabpanel" id={'access-panel-' + tab} aria-labelledby={'access-tab-' + tab}>
         {tab === 'Users' && (
           <UsersTab

@@ -10,7 +10,7 @@
     border-radius: var(--radius-drawer);
     @apply p-6 m-0;
   }
-  .connect-card > h1 {
+  .connect-card > h2 {
     @apply mt-3;
   }
   .checklist {

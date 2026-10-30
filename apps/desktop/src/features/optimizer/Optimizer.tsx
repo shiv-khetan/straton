@@ -2,13 +2,14 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Api, Dataset, Me } from '@/lib/api';
 import { can } from '@/features/access/access-model';
-import { Button, Feedback, Tabs } from '@/components/workbench/primitives';
+import { Button, Feedback } from '@/components/workbench/primitives';
 import { Field } from '@/components/workbench/Field';
 import { rankRecommendations } from './optimizer-model';
 import { datasetLabel } from '@/lib/view-model';
 import { ConfirmDialog, LakeDetails, RecommendationCard } from './OptimizerParts';
 import type { Confirmation } from './OptimizerParts';
 import './styles.css';
+import { PageTabs } from '@/components/workbench/page-layout';
 export default function Optimizer({
   client,
   me,
@@ -82,24 +83,18 @@ export default function Optimizer({
   }
   return (
     <div className="optimizer-page">
-      <div className="page-heading">
-        <div>
-          <h1>Optimizer</h1>
-          <p className="hint">Tune the lake first. Review and approve each source change.</p>
-        </div>
-      </div>
+      <PageTabs
+        id="optimizer"
+        items={['Source advisor', 'Lake layout']}
+        value={tab}
+        onChange={setTab}
+      />
       {notice && <Feedback message={notice} onClose={() => setNotice('')} />}
       {error && (
         <p role="alert" className="message">
           {error} Review the current status before retrying.
         </p>
       )}
-      <Tabs
-        items={['Source advisor', 'Lake layout']}
-        value={tab}
-        onChange={setTab}
-        id="optimizer"
-      />
       <section
         role="tabpanel"
         id={'optimizer-panel-' + tab}
@@ -108,7 +103,7 @@ export default function Optimizer({
       >
         {tab === 'Source advisor' ? (
           <>
-            <div className="optimizer-toolbar">
+            <div className="toolbar">
               <Field label="Source">
                 <select value={source} onChange={(e) => setSource(e.target.value)} disabled={busy}>
                   <option value="">All sources</option>
@@ -193,7 +188,7 @@ export default function Optimizer({
           </>
         ) : (
           <>
-            <div className="optimizer-toolbar">
+            <div className="toolbar">
               <Field label="Dataset">
                 <select
                   value={dataset}

@@ -345,7 +345,8 @@
     margin-bottom: -1px;
     @apply bg-transparent text-ink-2 whitespace-nowrap hover:text-ink;
   }
-  .tabs button[aria-selected='true'] {
+  .tabs button[aria-selected='true'],
+  .tabs button[aria-current] {
     @apply text-ink font-medium;
     border-bottom-color: var(--primary);
   }

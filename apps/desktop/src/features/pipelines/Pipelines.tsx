@@ -32,6 +32,7 @@ import { useDraftGuard } from './useDraftGuard';
 import { Editor } from './PipelineEditor';
 import { RunActions, RunHistory } from './PipelineRuns';
 import './styles.css';
+import { PageIntro } from '@/components/workbench/page-layout';
 const empty = (): PipelineInput => ({
   name: '',
   description: '',
@@ -309,8 +310,8 @@ function PipelineList({
   );
   return (
     <>
-      <div className="section-toolbar">
-        <p className="text-ink-2">Orchestrate syncs, transformations and quality checks.</p>
+      <PageIntro>Orchestrate syncs, transformations and quality checks.</PageIntro>
+      <div className="contents">
         <PageActions>
           <Button disabled={readOnly} onClick={onNew}>
             <Plus size={16} aria-hidden="true" />

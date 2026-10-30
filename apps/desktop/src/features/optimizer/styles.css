@@ -14,19 +14,6 @@
   font-weight: 600;
   margin: 8px 0 0;
 }
-.optimizer-toolbar {
-  display: flex;
-  align-items: end;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.optimizer-toolbar .field {
-  min-width: 220px;
-  max-width: 100%;
-}
-.optimizer-toolbar select {
-  max-width: 100%;
-}
 .optimizer-history {
   display: flex;
   align-items: center;

@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
-import { orderSections, sidebarLayout } from '../src/app/sidebar-model.ts';
+import { sidebarLayout } from '../src/app/sidebar-model.ts';
 import {
   itemEntry,
   membersOf,
   navigation,
   navItemOf,
   pageLabelOf,
+  pageLayout,
   routeAvailable,
   sectionOf,
 } from '../src/app/navigation.ts';
+import { routes } from '../src/stores/route-history.ts';
 import { parseSidebar, defaultSidebar } from '../src/stores/sidebar-state.ts';
 
 const sections = [
@@ -16,39 +18,40 @@ const sections = [
   { label: 'A', items: ['1', '2', '3'].map((route) => ({ route })) },
   { label: 'B', items: ['4', '5', '6'].map((route) => ({ route })) },
 ];
-const view = (active, pinned = [], expanded = []) => {
-  const layout = sidebarLayout(active, sections, pinned, expanded);
+const view = (pinned = []) => {
+  const layout = sidebarLayout(sections, pinned);
   return {
     favorites: layout.favorites.map((item) => item.route),
-    sections: layout.sections.map((s) => [s.label, s.open, s.items.map((item) => item.route)]),
+    sections: layout.sections.map((s) => [s.label, s.items.map((item) => item.route)]),
   };
 };
 
-// Nothing is pinned by default: no Favorites, active section open and first, others closed.
-assert.deepEqual(view('A'), {
+// Nothing is pinned by default: no Favorites, every section open in its fixed order.
+assert.deepEqual(view(), {
   favorites: [],
   sections: [
-    ['A', true, ['1', '2', '3']],
-    ['Overview', false, ['Overview']],
-    ['B', false, ['4', '5', '6']],
+    ['Overview', ['Overview']],
+    ['A', ['1', '2', '3']],
+    ['B', ['4', '5', '6']],
   ],
 });
 // A pinned item moves to Favorites (in pin order) and leaves its own section.
-assert.deepEqual(view('B', ['5', '2']), {
+assert.deepEqual(view(['5', '2']), {
   favorites: ['5', '2'],
   sections: [
-    ['B', true, ['4', '6']],
-    ['Overview', false, ['Overview']],
-    ['A', false, ['1', '3']],
+    ['Overview', ['Overview']],
+    ['A', ['1', '3']],
+    ['B', ['4', '6']],
   ],
 });
-// Duplicate or unknown pins are ignored; expanding opens an inactive section.
-assert.deepEqual(view('Overview', ['3', '3', 'gone'], ['B']).favorites, ['3']);
-assert.deepEqual(view('Overview', [], ['B']).sections.at(-1), ['B', true, ['4', '5', '6']]);
+// Duplicate or unknown pins are ignored.
+assert.deepEqual(view(['3', '3', 'gone']).favorites, ['3']);
 assert.deepEqual(
-  orderSections('Intelligence', navigation).map((section) => section.label),
-  ['Intelligence', 'Workspace', 'Data', 'Engineering', 'Administration'],
+  sidebarLayout(navigation, []).sections.map((section) => section.label),
+  ['Workspace', 'Data', 'Engineering', 'Intelligence', 'Administration'],
 );
+// Every route declares its body layout.
+assert.deepEqual(Object.keys(pageLayout).sort(), [...routes].sort());
 
 // Combined pages: one sidebar item, every member route still lands on it.
 for (const route of ['Pipelines', 'Jobs', 'Schedules']) {

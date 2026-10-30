@@ -20,6 +20,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { nextCron } from './cron-model';
+import { PageIntro } from '@/components/workbench/page-layout';
 export default function Schedules({
   client,
   jobs,
@@ -114,11 +115,11 @@ export default function Schedules({
   const visible = rows.filter((r) => kind === 'all' || r.kind === kind);
   return (
     <section className="space-y-4">
-      <div className="section-toolbar">
-        <p className="max-w-prose text-ink-2">
-          Upcoming runs computed from the engine’s UTC cron schedules. Next run is an estimate;
-          execution depends on engine availability and active work.
-        </p>
+      <PageIntro>
+        Upcoming runs computed from the engine’s UTC cron schedules. Next run is an estimate;
+        execution depends on engine availability and active work.
+      </PageIntro>
+      <div className="toolbar">
         <Choice
           label="Schedule type"
           value={kind}
