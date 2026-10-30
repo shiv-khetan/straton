@@ -1,39 +1,28 @@
-import { databaseSslMode, mongoTlsDefault } from './source-model';
-import { StatePill } from '@/components/workbench/primitives';
-import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
-import { Input } from '@/components/ui/input';
+import { databaseSslMode } from './source-model';
 import { Button } from '@/components/ui/button';
-import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
+import { Input } from '@/components/ui/input';
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Field } from '@/components/workbench/Field';
 import type { Action } from '@/components/workbench/Field';
-import { invoke } from '@tauri-apps/api/core';
 import type { Api, Source, SourceKind } from '@/lib/api';
-import { Tray, RowMenu, Sheet, Table as UiTable } from '@/components/workbench/primitives';
-const fields: Record<string, string[]> = {
-  postgres: ['host', 'port', 'database', 'username', 'ca_cert_path', 'options', 'batch_size'],
-  mysql: ['host', 'port', 'database', 'username', 'batch_size'],
-  mongodb: ['database', 'username', 'auth_source', 'replica_set', 'sample_size', 'batch_size'],
-  sqlserver: ['host', 'port', 'instance', 'database', 'username', 'batch_size'],
-  sqlite: ['path', 'batch_size'],
-  csv: ['path', 'batch_size', 'sample_size'],
-  stripe: ['account_label', 'rate_limit_rps'],
-  salesforce: ['login_url', 'client_id', 'rate_limit_rps'],
-  external: [],
-};
-const numericFields = ['port', 'batch_size', 'sample_size', 'rate_limit_rps'];
-const stripeObjects = [
-  'customers',
-  'charges',
-  'payment_intents',
-  'invoices',
-  'subscriptions',
-  'products',
-  'prices',
-  'refunds',
-  'balance_transactions',
-];
+import { Sheet } from '@/components/workbench/primitives';
+import { ManualDatasetSheet } from './ManualDatasetSheet';
+import {
+  AdvisorToggle,
+  ConfigFields,
+  DatabaseSsl,
+  kindLabels,
+  MongoFields,
+  numericFields,
+  SalesforceFields,
+  SecretField,
+  sourceKinds,
+  SqlServerSecurity,
+  StripeObjects,
+} from './SourceFormSections';
+import type { Config } from './SourceFormSections';
+import { SourceTable } from './SourceTable';
 export default function Sources({
   sources,
   client,
@@ -52,14 +41,10 @@ export default function Sources({
   const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [kind, setKind] = useState<SourceKind>('postgres');
-  const [config, setConfig] = useState<Record<string, string | number | boolean | string[]>>({});
+  const [config, setConfig] = useState<Config>({});
   const [secret, setSecret] = useState('');
   const sslMode = databaseSslMode(kind, config);
   const [manual, setManual] = useState('');
-  const [datasetName, setDatasetName] = useState('');
-  const [columns, setColumns] = useState([
-    { name: 'id', type: 'Int64', nullable: false, pk: true },
-  ]);
   function reset() {
     setEditing(null);
     setName('');
@@ -89,6 +74,7 @@ export default function Sources({
       editing ? 'Source updated' : 'Source created',
     );
   }
+  const props = { config, setConfig };
   return (
     <>
       <div className="page-heading">
@@ -97,139 +83,20 @@ export default function Sources({
           <p className="hint">Connect systems and discover their datasets.</p>
         </div>
       </div>
-      <Tray title="Connected systems">
-        <UiTable label="Sources">
-          <TableHeader>
-            <TableRow>
-              <TableHead scope="col">Name</TableHead>
-              <TableHead scope="col">Kind</TableHead>
-              <TableHead scope="col">Status</TableHead>
-              <TableHead scope="col">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {sources.map((source) => (
-              <TableRow key={source.id} id={'source:' + source.id} tabIndex={-1}>
-                <TableCell>{source.name}</TableCell>
-                <TableCell>
-                  <code>{source.kind}</code>
-                </TableCell>
-                <TableCell>
-                  <StatePill state={source.kind === 'external' ? 'External' : 'Configured'} />
-                </TableCell>
-                <TableCell>
-                  <div className="actions row-actions">
-                    {[
-                      'postgres',
-                      'sqlserver',
-                      'mysql',
-                      'mongodb',
-                      'sqlite',
-                      'csv',
-                      'stripe',
-                      'salesforce',
-                      'external',
-                    ].includes(source.kind) && (
-                      <>
-                        <Button
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() => {
-                            setEditing(source.id);
-                            setName(source.name);
-                            setKind(source.kind);
-                            setConfig(source.config);
-                            setSecret('');
-                          }}
-                        >
-                          Edit
-                        </Button>
-                      </>
-                    )}
-                    {!['external', 'parquet', 'models'].includes(source.kind) && (
-                      <>
-                        <Button
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() =>
-                            void action(
-                              () => client.discoverSource(source.id),
-                              'Catalog discovered',
-                            )
-                          }
-                        >
-                          Discover
-                        </Button>
-                      </>
-                    )}
-                    {source.kind === 'external' && (
-                      <Button
-                        variant="outline"
-                        disabled={busy}
-                        onClick={() => setManual(source.id)}
-                      >
-                        Add dataset
-                      </Button>
-                    )}
-                    {!['parquet', 'models'].includes(source.kind) && (
-                      <RowMenu label={'More actions for ' + source.name}>
-                        {!['external', 'parquet', 'models'].includes(source.kind) && (
-                          <>
-                            {' '}
-                            <Button
-                              variant="outline"
-                              disabled={busy}
-                              onClick={() =>
-                                void action(
-                                  () => client.checkSource(source.id),
-                                  'Connection check passed',
-                                )
-                              }
-                            >
-                              Check
-                            </Button>
-                          </>
-                        )}
-                        {[
-                          'postgres',
-                          'sqlserver',
-                          'mysql',
-                          'mongodb',
-                          'sqlite',
-                          'csv',
-                          'stripe',
-                          'salesforce',
-                          'external',
-                        ].includes(source.kind) && (
-                          <>
-                            {' '}
-                            <Button
-                              variant="outline"
-                              disabled={busy}
-                              onClick={async () => {
-                                if (await confirmDialog('Delete source “' + source.name + '”?'))
-                                  void action(
-                                    () => client.deleteSource(source.id),
-                                    'Source deleted',
-                                  );
-                              }}
-                            >
-                              Delete
-                            </Button>
-                          </>
-                        )}
-                      </RowMenu>
-                    )}
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </UiTable>
-        {!sources.length && (
-          <p className="empty">Add a source, then Discover to populate your Data Map.</p>
-        )}
-      </Tray>
+      <SourceTable
+        sources={sources}
+        client={client}
+        action={action}
+        busy={busy}
+        onEdit={(source) => {
+          setEditing(source.id);
+          setName(source.name);
+          setKind(source.kind);
+          setConfig(source.config);
+          setSecret('');
+        }}
+        onAddDataset={setManual}
+      />
       <Sheet
         open={open || !!editing}
         title={editing ? 'Edit source' : 'Add source'}
@@ -262,352 +129,38 @@ export default function Sources({
                   setSecret('');
                 }}
               >
-                {[
-                  'postgres',
-                  'sqlserver',
-                  'mysql',
-                  'mongodb',
-                  'sqlite',
-                  'csv',
-                  'stripe',
-                  'salesforce',
-                  'external',
-                ].map((k) => (
+                {sourceKinds.map((k) => (
                   <option key={k} value={k}>
-                    {(
-                      {
-                        sqlserver: 'SQL Server',
-                        mysql: 'MySQL / MariaDB',
-                        mongodb: 'MongoDB',
-                        postgres: 'Postgres / Neon',
-                      } as Record<string, string>
-                    )[k] ?? k}
+                    {kindLabels[k] ?? k}
                   </option>
                 ))}
               </select>
             </Field>
-            {kind === 'sqlserver' && (
-              <>
-                <Field label="Authentication">
-                  <select
-                    value={(config.auth as string | undefined) ?? 'windows'}
-                    onChange={(e) => {
-                      const next: typeof config = { ...config, auth: e.target.value };
-                      if (e.target.value === 'windows') delete next.username;
-                      setConfig(next);
-                      setSecret('');
-                    }}
-                  >
-                    <option value="windows">Windows integrated</option>
-                    <option value="sql">SQL login</option>
-                  </select>
-                </Field>
-                {config.auth !== 'sql' && (
-                  <p className="hint">Connects as the Windows account running the engine.</p>
-                )}
-                <fieldset className="checklist">
-                  <legend>Connection security</legend>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={config.encrypt !== false}
-                      onChange={(e) => setConfig({ ...config, encrypt: e.target.checked })}
-                    />
-                    Encrypt connection
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={config.trust_server_certificate === true}
-                      aria-describedby="sqlserver-trust-help"
-                      onChange={(e) =>
-                        setConfig({ ...config, trust_server_certificate: e.target.checked })
-                      }
-                    />
-                    Trust server certificate
-                  </label>
-                  <p id="sqlserver-trust-help" className="hint">
-                    Trusting the server certificate skips certificate and hostname validation.
-                    Enable only when you have verified the server on a trusted network.
-                  </p>
-                  {config.encrypt === false && (
-                    <p role="status" className="message">
-                      Encryption is disabled. Data may travel unencrypted.
-                    </p>
-                  )}
-                  {config.trust_server_certificate === true && (
-                    <p role="status" className="message">
-                      Certificate validation is disabled. The server's identity will not be
-                      verified.
-                    </p>
-                  )}
-                </fieldset>
-              </>
-            )}
+            {kind === 'sqlserver' && <SqlServerSecurity {...props} setSecret={setSecret} />}
             {['postgres', 'mysql'].includes(kind) && (
-              <fieldset className="checklist">
-                <legend>Connection security</legend>
-                <Field label="SSL mode">
-                  <select
-                    aria-describedby="database-ssl-help"
-                    value={sslMode}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        [kind === 'postgres' ? 'sslmode' : 'ssl_mode']: e.target.value,
-                      })
-                    }
-                  >
-                    {(kind === 'postgres'
-                      ? ['disable', 'prefer', 'require', 'verify-full']
-                      : ['disabled', 'preferred', 'required', 'verify_identity']
-                    ).map((mode) => (
-                      <option key={mode} value={mode}>
-                        {mode.replaceAll('_', ' ')}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <p id="database-ssl-help" className="hint">
-                  Remote hosts require encryption by default. Use{' '}
-                  {kind === 'postgres' ? 'verify-full' : 'verify identity'} to verify the
-                  certificate and hostname. Preferred mode can fall back to an unencrypted
-                  connection.
-                </p>
-                {['disable', 'disabled', 'prefer', 'preferred'].includes(sslMode) && (
-                  <p role="status" className="message">
-                    This mode allows data to travel unencrypted.
-                  </p>
-                )}
-                {['require', 'required'].includes(sslMode) && (
-                  <p role="status" className="message">
-                    Encryption is required; the server's identity is not verified.
-                  </p>
-                )}
-              </fieldset>
+              <DatabaseSsl {...props} kind={kind} sslMode={sslMode} />
             )}
-            {kind === 'mongodb' && (
-              <>
-                <Field label="Hosts (comma-separated) or mongodb+srv host">
-                  <Input
-                    required
-                    placeholder="localhost:27017 or mongodb+srv://cluster.example.net"
-                    value={
-                      (config.host as string | undefined) ??
-                      (config.hosts as string[] | undefined)?.join(', ') ??
-                      ''
-                    }
-                    onChange={(e) => {
-                      const next = { ...config };
-                      delete next.host;
-                      delete next.hosts;
-                      if (e.target.value.startsWith('mongodb+srv://')) next.host = e.target.value;
-                      else next.hosts = e.target.value.split(',').map((h) => h.trim());
-                      setConfig(next);
-                    }}
-                  />
-                </Field>
-                <fieldset className="checklist">
-                  <legend>Connection security</legend>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={(config.tls as boolean | undefined) ?? mongoTlsDefault(config)}
-                      onChange={(e) => setConfig({ ...config, tls: e.target.checked })}
-                      aria-describedby="mongo-tls-help"
-                    />
-                    Encrypt connection (TLS)
-                  </label>
-                  <p id="mongo-tls-help" className="hint">
-                    TLS verifies the server certificate and hostname. It is enabled by default for
-                    remote hosts. Enter hosts only; passwords are stored in the engine OS keychain.
-                  </p>
-                  {(config.tls ?? mongoTlsDefault(config)) === false && (
-                    <p role="status" className="message">
-                      Encryption is disabled. Data may travel unencrypted.
-                    </p>
-                  )}
-                </fieldset>
-                <p className="hint">
-                  Schema inference samples up to 1,000 documents by default. Explorer shows field
-                  coverage; inferred relationships are suggestions. ObjectId watermarks track
-                  inserts by creation time; use an updated timestamp to track edits.
-                </p>
-              </>
-            )}
+            {kind === 'mongodb' && <MongoFields {...props} />}
             {['sqlserver', 'postgres', 'mysql', 'mongodb'].includes(kind) && (
-              <fieldset className="checklist">
-                <legend>Source advisor</legend>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={config.advisor_may_write === true}
-                    aria-describedby="advisor-write-warning"
-                    onChange={(e) => setConfig({ ...config, advisor_may_write: e.target.checked })}
-                  />
-                  Advisor may write
-                </label>
-                <p id="advisor-write-warning" className="hint">
-                  Allows an admin to execute each approved recommendation on this source database
-                  using its saved credentials. Index builds can block writes and consume disk and
-                  log space. Every apply is audited and includes a rollback command. Nothing runs
-                  automatically.
-                </p>
-              </fieldset>
+              <AdvisorToggle {...props} />
             )}
-            {(fields[kind] || [])
-              .filter(
-                (key) => !(kind === 'sqlserver' && key === 'username' && config.auth !== 'sql'),
-              )
-              .map((key) => (
-                <Field
-                  key={key}
-                  label={
-                    key === 'ca_cert_path'
-                      ? 'CA certificate path on engine machine (optional)'
-                      : key === 'options'
-                        ? 'Neon endpoint option (optional)'
-                        : key === 'path'
-                          ? 'Path on engine machine'
-                          : key[0].toUpperCase() + key.slice(1).replaceAll('_', ' ')
-                  }
-                >
-                  <Input
-                    required={
-                      ['host', 'database', 'path'].includes(key) ||
-                      (key === 'username' && kind !== 'mongodb')
-                    }
-                    type={numericFields.includes(key) ? 'number' : 'text'}
-                    min="1"
-                    max={
-                      key === 'port' ? '65535' : key === 'rate_limit_rps' ? '1000' : '2147483647'
-                    }
-                    placeholder={
-                      key === 'options'
-                        ? 'endpoint=ep-example'
-                        : key === 'port' && ['mysql', 'postgres', 'sqlserver'].includes(kind)
-                          ? (
-                              { mysql: '3306', postgres: '5432', sqlserver: '1433' } as Record<
-                                string,
-                                string
-                              >
-                            )[kind] + ' (default)'
-                          : key === 'rate_limit_rps'
-                            ? (kind === 'salesforce' ? '10' : '25') + ' (default)'
-                            : key === 'login_url'
-                              ? 'https://login.salesforce.com (or test.salesforce.com)'
-                              : undefined
-                    }
-                    value={(config[key] as string | number | undefined) ?? ''}
-                    onChange={(e) => setConfig({ ...config, [key]: e.target.value })}
-                  />
-                </Field>
-              ))}
-            {kind === 'stripe' && (
-              <fieldset className="checklist">
-                <legend>Objects to sync</legend>
-                {stripeObjects.map((o) => {
-                  const chosen = (config.objects as string[] | undefined) ?? stripeObjects;
-                  return (
-                    <label key={o}>
-                      <input
-                        type="checkbox"
-                        checked={chosen.includes(o)}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            objects: e.target.checked
-                              ? stripeObjects.filter((x) => x === o || chosen.includes(x))
-                              : chosen.filter((x) => x !== o),
-                          })
-                        }
-                      />
-                      <code>{o}</code>
-                    </label>
-                  );
-                })}
-              </fieldset>
-            )}
+            <ConfigFields {...props} kind={kind} />
+            {kind === 'stripe' && <StripeObjects {...props} />}
             {(kind === 'postgres' ||
               kind === 'mysql' ||
               kind === 'mongodb' ||
               kind === 'stripe' ||
               (kind === 'sqlserver' && config.auth === 'sql')) && (
-              <Field label={kind === 'stripe' ? 'API key (write-only)' : 'Password (write-only)'}>
-                <Input
-                  type="password"
-                  required={
-                    (kind === 'sqlserver' ||
-                      kind === 'mysql' ||
-                      (kind === 'mongodb' && Boolean(config.username))) &&
-                    !sources.find((s) => s.id === editing)?.credential_id
-                  }
-                  autoComplete="new-password"
-                  value={secret}
-                  onChange={(e) => setSecret(e.target.value)}
-                  aria-describedby={kind === 'stripe' ? 'stripe-key-help' : undefined}
-                  placeholder={
-                    editing && sources.find((s) => s.id === editing)?.credential_id
-                      ? 'Leave blank to keep current secret'
-                      : 'Stored in engine OS keychain'
-                  }
-                />
-              </Field>
-            )}
-            {kind === 'stripe' && (
-              <p id="stripe-key-help" className="hint">
-                Use a restricted key (<code>rk_…</code>) with read-only access to the selected
-                objects and to Events.
-              </p>
+              <SecretField
+                kind={kind}
+                config={config}
+                secret={secret}
+                setSecret={setSecret}
+                hasCredential={!!sources.find((s) => s.id === editing)?.credential_id}
+              />
             )}
             {kind === 'salesforce' && (
-              <>
-                <Field label="Objects (API names, comma-separated)">
-                  <Input
-                    required
-                    placeholder="Account, Contact, Opportunity"
-                    value={((config.objects as string[] | undefined) ?? []).join(', ')}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        objects: e.target.value
-                          .split(',')
-                          .map((s) => s.trim())
-                          .filter(Boolean),
-                      })
-                    }
-                  />
-                </Field>
-                <div className="actions">
-                  <Button
-                    variant="outline"
-                    type="button"
-                    disabled={busy || !config.client_id}
-                    onClick={() =>
-                      void action(async () => {
-                        // PKCE sign-in runs in the desktop shell; only the grant comes back here.
-                        const grant = await invoke<{
-                          refresh_token: string;
-                          instance_url: string;
-                        }>('salesforce_authorize', {
-                          loginUrl: (config.login_url as string) || 'https://login.salesforce.com',
-                          clientId: config.client_id,
-                        });
-                        setSecret(grant.refresh_token);
-                        setConfig({ ...config, instance_url: grant.instance_url });
-                      }, 'Signed in to Salesforce — save the source to keep it')
-                    }
-                  >
-                    {config.instance_url ? 'Sign in again' : 'Sign in with Salesforce'}
-                  </Button>
-                  {config.instance_url && <code>{config.instance_url as string}</code>}
-                </div>
-                <p className="hint">
-                  Uses your connected app's consumer key with PKCE and the callback{' '}
-                  <code>http://localhost:1717/OauthRedirect</code>. The refresh token is stored only
-                  in the engine's OS keychain.
-                </p>
-              </>
+              <SalesforceFields {...props} setSecret={setSecret} busy={busy} action={action} />
             )}
           </div>
           <div className="actions">
@@ -626,106 +179,14 @@ export default function Sources({
         </form>
       </Sheet>
       {manual && (
-        <Sheet
-          open={!!manual}
-          title={'Add dataset to ' + sources.find((s) => s.id === manual)?.name}
+        <ManualDatasetSheet
+          sourceId={manual}
+          sourceName={sources.find((s) => s.id === manual)?.name}
+          client={client}
+          action={action}
+          busy={busy}
           onClose={() => setManual('')}
-        >
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void action(async () => {
-                await client.createDataset(manual, { name: datasetName, columns });
-                setManual('');
-                setDatasetName('');
-                setColumns([{ name: 'id', type: 'Int64', nullable: false, pk: true }]);
-              }, 'Dataset created');
-            }}
-          >
-            <Field label="Dataset name">
-              <Input
-                required
-                value={datasetName}
-                onChange={(e) => setDatasetName(e.target.value)}
-              />
-            </Field>
-            {columns.map((column, i) => (
-              <div className="column-editor" key={i}>
-                <Field label="Column name">
-                  <Input
-                    required
-                    value={column.name}
-                    onChange={(e) =>
-                      setColumns(
-                        columns.map((c, j) => (j === i ? { ...c, name: e.target.value } : c)),
-                      )
-                    }
-                  />
-                </Field>
-                <Field label="Type">
-                  <Input
-                    required
-                    value={column.type}
-                    onChange={(e) =>
-                      setColumns(
-                        columns.map((c, j) => (j === i ? { ...c, type: e.target.value } : c)),
-                      )
-                    }
-                  />
-                </Field>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={column.nullable}
-                    onChange={(e) =>
-                      setColumns(
-                        columns.map((c, j) => (j === i ? { ...c, nullable: e.target.checked } : c)),
-                      )
-                    }
-                  />{' '}
-                  Nullable
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={column.pk}
-                    onChange={(e) =>
-                      setColumns(
-                        columns.map((c, j) => (j === i ? { ...c, pk: e.target.checked } : c)),
-                      )
-                    }
-                  />{' '}
-                  PK
-                </label>
-                <Button
-                  variant="outline"
-                  type="button"
-                  disabled={columns.length === 1}
-                  onClick={() => setColumns(columns.filter((_, j) => j !== i))}
-                >
-                  Remove
-                </Button>
-              </div>
-            ))}
-            <div className="actions">
-              <Button
-                variant="outline"
-                type="button"
-                onClick={() =>
-                  setColumns([...columns, { name: '', type: 'Utf8', nullable: true, pk: false }])
-                }
-              >
-                Add column
-              </Button>
-              <Button variant="default" disabled={busy}>
-                Create dataset
-              </Button>
-              <Button variant="outline" type="button" onClick={() => setManual('')}>
-                Cancel
-              </Button>
-            </div>
-          </form>
-        </Sheet>
+        />
       )}
     </>
   );
