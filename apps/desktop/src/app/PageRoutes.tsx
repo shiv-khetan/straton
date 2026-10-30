@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { api } from '@/lib/api';
 import type { Api, Connection, Dataset, EngineEvent, Source } from '@/lib/api';
 import Explorer from '@/features/explorer/Explorer';
-import QueryHistory from '@/features/sql/QueryHistory';
+
 import Models from '@/features/transformations/Transformations';
 import Access from '@/features/access/Access';
 import BackupsView from '@/features/security/Backups';
@@ -13,17 +13,19 @@ import Sources from '@/features/connections/Connections';
 import Jobs from '@/features/jobs/Jobs';
 import { RunTable } from '@/features/jobs/RunTable';
 import { can, canPage } from '@/features/access/access-model';
-import { Feedback } from '@/components/workbench/primitives';
+import { Button, Feedback, Icon } from '@/components/workbench/primitives';
 import { ReadOnlyScope } from '@/components/workbench/ReadOnlyScope';
 import { tableReference } from '@/features/sql/sql-model';
 import { syncableKinds } from '@/lib/view-model';
 import { Skeleton } from '@/features/console/ConsoleDrawer';
 import { useSqlWorkspace } from '@/stores/sql-workspace';
-import { laterRoutes } from '@/stores/route-history';
+import { laterRoutes, routeLabels } from '@/stores/route-history';
 import type { Route } from '@/stores/route-history';
 import type { LibraryEntry } from '@/stores/library';
 import { LibraryPage } from '@/features/library/LibraryPage';
 import { LaterPage } from '@/features/library/LaterPage';
+import { CombinedPage } from './CombinedPage';
+import type { CombinedSection } from './CombinedPage';
 import { ErrorBoundary } from './ErrorBoundary';
 import { routeAvailable } from './navigation';
 import type { useEngineData } from './useEngineData';
@@ -87,14 +89,9 @@ export type PageRoutesProps = {
   openEntry: (entry: LibraryEntry) => void;
 };
 
-const lazyPages: Route[] = [
-  'Pipelines',
-  'Data Quality',
-  'Analytics',
-  'Dashboards',
-  'Activity',
-  'Schedules',
-];
+const lazyPages: Route[] = ['Data Quality', 'Activity'];
+const orchestration: Route[] = ['Pipelines', 'Jobs', 'Schedules'];
+const analytics: Route[] = ['Analytics', 'Dashboards'];
 
 export function PageRoutes(p: PageRoutesProps) {
   const { page, data, client, online } = p;
@@ -109,11 +106,21 @@ export function PageRoutes(p: PageRoutesProps) {
       {loading && page !== 'Connect' && <Skeleton label="Loading engine workspace…" />}
       {laterRoutes.includes(page) && <LaterPage name={p.pageLabel} />}
       {(page === 'Favorites' || page === 'Recent') && (
-        <LibraryPage
-          kind={page}
-          scope={p.scope}
-          onOpen={p.openEntry}
-          available={(entry) => routeAvailable(me, entry.route)}
+        <CombinedPage
+          page={page}
+          onNavigate={p.navigate}
+          sections={(['Favorites', 'Recent'] as const).map((kind) => ({
+            route: kind,
+            label: routeLabels[kind],
+            content: (
+              <LibraryPage
+                kind={kind}
+                scope={p.scope}
+                onOpen={p.openEntry}
+                available={(entry) => routeAvailable(me, entry.route)}
+              />
+            ),
+          }))}
         />
       )}
       {p.error && <Feedback message={p.error} error onClose={p.onDismissError} />}
@@ -133,6 +140,8 @@ export function PageRoutes(p: PageRoutesProps) {
         />
       )}
       {ready && me && lazyPages.includes(page) && <LazyPage {...p} client={client} />}
+      {ready && me && orchestration.includes(page) && <OrchestrationPage {...p} client={client} />}
+      {ready && me && analytics.includes(page) && <AnalyticsPage {...p} client={client} />}
       {ready && me && page === 'Dashboard' && (
         <Dashboard
           client={client}
@@ -186,30 +195,6 @@ export function PageRoutes(p: PageRoutesProps) {
           onClose={() => p.onSheet(null)}
         />
       )}
-      {ready && can(me, 'sync_admin') && page === 'Jobs' && (
-        <Jobs
-          sources={
-            [
-              ...sources,
-              ...map.nodes.filter(
-                (n) => n.type === 'source' && !sources.some((s) => s.id === n.id),
-              ),
-            ] as Pick<Source, 'id' | 'name' | 'kind'>[]
-          }
-          datasets={p.datasets}
-          jobs={jobs}
-          runs={runs}
-          events={p.events}
-          focusRun={p.entityRequest?.kind === 'run' ? p.entityRequest : null}
-          initialStateFilter={p.jobStateFilter}
-          open={p.sheet === 'job'}
-          onClose={() => p.onSheet(null)}
-          seed={p.jobSeed}
-          client={client}
-          action={p.action}
-          busy={p.busy}
-        />
-      )}
       {ready && can(me, 'read') && page === 'Explorer' && (
         <Explorer
           client={client}
@@ -218,10 +203,8 @@ export function PageRoutes(p: PageRoutesProps) {
           onQuery={(sql) => openSql(p, sql)}
         />
       )}
-      {can(me, 'read') && page === 'Query History' && (
-        <QueryHistory scope={p.scope} onOpen={(sql) => openSql(p, sql)} />
-      )}
-      {ready && can(me, 'read') && page === 'SQL' && (
+
+      {ready && can(me, 'read') && (page === 'SQL' || page === 'Query History') && (
         <Suspense fallback={<Skeleton label="Loading SQL Workspace…" />}>
           <SqlView
             scope={p.scope}
@@ -232,6 +215,7 @@ export function PageRoutes(p: PageRoutesProps) {
             consoleCollapsed={p.consoleCollapsed}
             onConsoleCollapsed={p.onConsoleCollapsed}
             readOnly={!online}
+            showHistory={page === 'Query History'}
           />
         </Suspense>
       )}
@@ -254,12 +238,37 @@ const previewSql = (dataset: Dataset) =>
   'SELECT * FROM ' + tableReference(dataset.sql_schema, dataset.sql_table) + ' LIMIT 100';
 
 function LazyPage(p: PageRoutesProps & { client: Api }) {
-  const { page, client, online, scope } = p;
-  const { jobs, models } = p.data;
+  const { page, client, online } = p;
   const me = p.data.me!;
   return (
     <Suspense fallback={<Skeleton label={'Loading ' + p.pageLabel + '…'} />}>
-      {page === 'Pipelines' && (
+      {page === 'Data Quality' && (
+        <Quality
+          client={client}
+          me={me}
+          datasets={p.datasets}
+          models={p.data.models}
+          readOnly={!online}
+          request={p.entityRequest?.kind === 'check' ? p.entityRequest : null}
+          createRequest={p.qualityCreateRequest}
+        />
+      )}
+      {page === 'Activity' && <Activity client={client} me={me} />}
+    </Suspense>
+  );
+}
+
+// Pipelines, sync jobs and schedules on one page.
+function OrchestrationPage(p: PageRoutesProps & { client: Api }) {
+  const { client, online } = p;
+  const { jobs, runs, models, sources, map } = p.data;
+  const me = p.data.me!;
+  const sections: CombinedSection[] = [];
+  if (canPage(me, 'Pipelines'))
+    sections.push({
+      route: 'Pipelines',
+      label: routeLabels.Pipelines,
+      content: (
         <Pipelines
           client={client}
           me={me}
@@ -268,40 +277,48 @@ function LazyPage(p: PageRoutesProps & { client: Api }) {
           readOnly={!online}
           request={p.entityRequest?.kind === 'pipeline' ? p.entityRequest : null}
         />
-      )}
-      {page === 'Data Quality' && (
-        <Quality
-          client={client}
-          me={me}
+      ),
+    });
+  if (can(me, 'sync_admin'))
+    sections.push({
+      route: 'Jobs',
+      label: routeLabels.Jobs,
+      actions: (
+        <Button type="button" disabled={!online || p.busy} onClick={() => p.openJobSheet(null)}>
+          <Icon name="plus" />
+          New sync job
+        </Button>
+      ),
+      content: (
+        <Jobs
+          sources={
+            [
+              ...sources,
+              ...map.nodes.filter(
+                (n) => n.type === 'source' && !sources.some((s) => s.id === n.id),
+              ),
+            ] as Pick<Source, 'id' | 'name' | 'kind'>[]
+          }
           datasets={p.datasets}
-          models={models}
-          readOnly={!online}
-          request={p.entityRequest?.kind === 'check' ? p.entityRequest : null}
-          createRequest={p.qualityCreateRequest}
-        />
-      )}
-      {page === 'Analytics' &&
-        (p.usageChart ? (
-          <UsageChart
-            client={client}
-            id={p.usageChart}
-            scope={scope}
-            onClose={() => p.onUsageChart('')}
-          />
-        ) : (
-          <Analytics client={client} me={me} scope={scope} readOnly={!online} />
-        ))}
-      {page === 'Dashboards' && (
-        <Dashboards
+          jobs={jobs}
+          runs={runs}
+          events={p.events}
+          focusRun={p.entityRequest?.kind === 'run' ? p.entityRequest : null}
+          initialStateFilter={p.jobStateFilter}
+          open={p.sheet === 'job'}
+          onClose={() => p.onSheet(null)}
+          seed={p.jobSeed}
           client={client}
-          me={me}
-          scope={scope}
-          readOnly={!online}
-          onAnalytics={() => p.navigate('Analytics')}
+          action={p.action}
+          busy={p.busy}
         />
-      )}
-      {page === 'Activity' && <Activity client={client} me={me} />}
-      {page === 'Schedules' && (
+      ),
+    });
+  if (canPage(me, 'Schedules'))
+    sections.push({
+      route: 'Schedules',
+      label: routeLabels.Schedules,
+      content: (
         <Schedules
           client={client}
           jobs={jobs}
@@ -309,7 +326,54 @@ function LazyPage(p: PageRoutesProps & { client: Api }) {
           canSeeJobs={can(me, 'sync_admin')}
           onNavigate={p.navigate}
         />
-      )}
+      ),
+    });
+  return (
+    <Suspense fallback={<Skeleton label={'Loading ' + p.pageLabel + '…'} />}>
+      <CombinedPage page={p.page} sections={sections} onNavigate={p.navigate} />
+    </Suspense>
+  );
+}
+
+// The chart builder and the dashboards that collect its charts, on one page.
+function AnalyticsPage(p: PageRoutesProps & { client: Api }) {
+  const { client, online, scope } = p;
+  const me = p.data.me!;
+  return (
+    <Suspense fallback={<Skeleton label={'Loading ' + p.pageLabel + '…'} />}>
+      <CombinedPage
+        page={p.page}
+        onNavigate={p.navigate}
+        sections={[
+          {
+            route: 'Analytics',
+            label: 'Charts',
+            content: p.usageChart ? (
+              <UsageChart
+                client={client}
+                id={p.usageChart}
+                scope={scope}
+                onClose={() => p.onUsageChart('')}
+              />
+            ) : (
+              <Analytics client={client} me={me} scope={scope} readOnly={!online} />
+            ),
+          },
+          {
+            route: 'Dashboards',
+            label: routeLabels.Dashboards,
+            content: (
+              <Dashboards
+                client={client}
+                me={me}
+                scope={scope}
+                readOnly={!online}
+                onAnalytics={() => p.navigate('Analytics')}
+              />
+            ),
+          },
+        ]}
+      />
     </Suspense>
   );
 }

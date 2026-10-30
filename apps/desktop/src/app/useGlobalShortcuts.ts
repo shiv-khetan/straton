@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { Me } from '@/lib/api';
 import { useRouteStore } from '@/stores/route';
-import { navigation, routeAvailable } from './navigation';
+import { itemEntry, navigation } from './navigation';
 
 // App-wide keys: ? for the shortcut list, Mod+K for search, Alt+digit for sections,
 // Alt+arrows for history. Registered once; identity is read through a ref.
@@ -25,10 +25,12 @@ export function useGlobalShortcuts(
       // Alt+1..5 jumps to a section's first page the user can open.
       if (event.altKey && !event.ctrlKey && /^[1-9]$/.test(event.key)) {
         const group = navigation[Number(event.key) - 1];
-        const item = group?.items.find((entry) => routeAvailable(latest.current.me, entry.route));
-        if (item) {
+        const route = group?.items
+          .map((item) => itemEntry(latest.current.me, item))
+          .find((entry) => entry !== undefined);
+        if (route) {
           event.preventDefault();
-          useRouteStore.getState().navigate(item.route);
+          useRouteStore.getState().navigate(route);
         }
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {

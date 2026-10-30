@@ -4,7 +4,7 @@ import type { Command } from '@/features/console/workbench-model';
 import { datasetLabel } from '@/lib/view-model';
 import { routeLabels } from '@/stores/route-history';
 import type { Route } from '@/stores/route-history';
-import { navigation, routeAvailable } from './navigation';
+import { membersOf, navigation, routeAvailable } from './navigation';
 
 // Everything the command palette can jump to or run, filtered to what this identity may use.
 export function buildCommands(
@@ -15,7 +15,7 @@ export function buildCommands(
   sources: Source[],
 ): Command[] {
   return [
-    ...[...navigation.flatMap((group) => group.items.map((item) => item.route)), 'Connect' as Route]
+    ...[...navigation.flatMap((group) => group.items.flatMap(membersOf)), 'Connect' as Route]
       .filter((route) => routeAvailable(me, route))
       .map((route) => ({
         id: 'route:' + route,

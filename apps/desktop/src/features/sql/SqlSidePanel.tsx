@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { X } from 'lucide-react';
+import { toast } from 'sonner';
+import { StatePill } from '@/components/workbench/primitives';
+import { useSqlWorkspace } from '@/stores/sql-workspace';
 import type { Api, Me, SavedQuery } from '@/lib/api';
 import { offlineMessage } from '@/lib/offline-state';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -8,10 +11,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/features/console/ConsoleDrawer';
 import { tableReference } from './sql-model';
+import { relativeTime } from '@/lib/view-model';
 
 type Catalog = Awaited<ReturnType<Api['sqlTables']>>;
 
-// Left rail of the SQL workspace: table catalog and saved queries, with the save form on top.
+// Left rail of the SQL workspace: table catalog, saved queries and this device's query
+// history, with the save form on top.
 export function SqlSidePanel({
   hidden,
   sideTab,
@@ -26,6 +31,8 @@ export function SqlSidePanel({
   onInsertTable,
   onOpenSaved,
   onRemove,
+  scope,
+  onOpenHistory,
 }: {
   hidden: boolean;
   sideTab: string;
@@ -40,6 +47,8 @@ export function SqlSidePanel({
   onInsertTable: (reference: string) => void;
   onOpenSaved: (query: SavedQuery) => void;
   onRemove: (query: SavedQuery) => void;
+  scope: string;
+  onOpenHistory: (sql: string) => void;
 }) {
   return (
     <aside id="sql-catalog" className="sql-tables" hidden={hidden}>
@@ -48,8 +57,11 @@ export function SqlSidePanel({
           <TabsTrigger className="sql-panel-tab" value="Catalog">
             Catalog
           </TabsTrigger>
-          <TabsTrigger className="sql-panel-tab" value="Saved">
-            Saved queries
+          <TabsTrigger className="sql-panel-tab" value="Saved" title="Saved queries">
+            Saved
+          </TabsTrigger>
+          <TabsTrigger className="sql-panel-tab" value="History">
+            History
           </TabsTrigger>
         </TabsList>
         <label>
@@ -123,6 +135,9 @@ export function SqlSidePanel({
             <p className="hint">Save a query to reuse it here or share it with your team.</p>
           )}
         </TabsContent>
+        <TabsContent value="History">
+          <HistoryList scope={scope} search={search} onOpen={onOpenHistory} />
+        </TabsContent>
       </Tabs>
     </aside>
   );
@@ -186,5 +201,78 @@ export function SaveQueryForm({
         </p>
       )}
     </form>
+  );
+}
+
+// Executions run on this device, newest first. Opening one starts a new tab with its SQL.
+function HistoryList({
+  scope,
+  search,
+  onOpen,
+}: {
+  scope: string;
+  search: string;
+  onOpen: (sql: string) => void;
+}) {
+  const entries = useSqlWorkspace((s) => s.history);
+  const clear = useSqlWorkspace((s) => s.clear);
+  const restore = useSqlWorkspace((s) => s.restore);
+  const mine = entries.filter((e) => e.scope === scope);
+  const shown = mine.filter((e) => e.sql.toLowerCase().includes(search.toLowerCase()));
+  return (
+    <>
+      {shown.map((e) => (
+        <div className="saved-query" key={e.id}>
+          <Button
+            variant="ghost"
+            className="h-auto min-w-0 flex-1 flex-col items-start gap-1 px-2 py-2.5 text-left"
+            title={
+              e.sql +
+              '\n\n' +
+              new Date(e.at).toLocaleString() +
+              ' · ' +
+              e.elapsed_ms.toLocaleString() +
+              ' ms · ' +
+              e.row_count.toLocaleString() +
+              ' rows'
+            }
+            onClick={() => onOpen(e.sql)}
+          >
+            <span className="mono max-w-full truncate font-normal">
+              {e.sql.trim().split('\n')[0]}
+            </span>
+            <small className="flex items-center gap-2">
+              <StatePill state={e.status} />
+              {relativeTime(e.at)}
+            </small>
+          </Button>
+        </div>
+      ))}
+      {!shown.length && (
+        <p className="hint">
+          {search ? 'No queries match your search.' : 'Queries you run appear here.'}
+        </p>
+      )}
+      {mine.length > 0 && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-2"
+          onClick={() => {
+            clear(scope);
+            toast('Query history cleared', {
+              description:
+                mine.length +
+                (mine.length === 1 ? ' query' : ' queries') +
+                ' removed from this device.',
+              action: { label: 'Undo', onClick: () => restore(mine) },
+            });
+          }}
+        >
+          Clear history
+        </Button>
+      )}
+      <p className="hint">Up to 500 executions are kept on this device.</p>
+    </>
   );
 }

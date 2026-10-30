@@ -39,6 +39,7 @@ export default function SqlView({
   readOnly,
   scope,
   me,
+  showHistory = false,
 }: {
   client: Api;
   initialQuery: string;
@@ -48,6 +49,8 @@ export default function SqlView({
   revision: number;
   consoleCollapsed: boolean;
   onConsoleCollapsed: (v: boolean) => void;
+  /** Opens the side panel on query history (the Query History route). */
+  showHistory?: boolean;
 }) {
   const store = useSqlWorkspace();
   const active = store.tabs.find((t) => t.id === store.active);
@@ -71,6 +74,11 @@ export default function SqlView({
   const [sideTab, setSideTab] = useState('Catalog');
   const [search, setSearch] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(true);
+  useEffect(() => {
+    if (!showHistory) return;
+    setCatalogOpen(true);
+    setSideTab('History');
+  }, [showHistory]);
   const [error, setError] = useState('');
   const catalog = useQuery({
     // Distinct from the client proxy's own cache key, or fetchQuery would await itself.
@@ -280,6 +288,8 @@ export default function SqlView({
           }}
           onOpenSaved={(q) => store.add(q.sql, q.name, q.id)}
           onRemove={(q) => void remove(q)}
+          scope={scope}
+          onOpenHistory={(sql) => store.add(sql)}
         />
         <section className="sql-workspace">
           <div className="query-tabs" aria-label="SQL tabs">

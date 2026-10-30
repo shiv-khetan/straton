@@ -16,7 +16,7 @@
     min-height: 0;
   }
   .sql-tables {
-    width: 200px;
+    width: 232px;
     flex-shrink: 0;
     min-width: 0;
     overflow: auto;
@@ -28,7 +28,7 @@
     margin: 12px 0 20px;
   }
   .sql-panel-tab {
-    @apply h-auto flex-none rounded-none border-0 bg-transparent font-normal after:hidden data-[state=active]:bg-transparent data-[state=active]:font-medium data-[state=active]:shadow-none dark:data-[state=active]:bg-transparent;
+    @apply h-auto flex-none rounded-none px-1.5 border-0 bg-transparent font-normal after:hidden data-[state=active]:bg-transparent data-[state=active]:font-medium data-[state=active]:shadow-none dark:data-[state=active]:bg-transparent;
   }
   .sql-side-tabs {
     width: 100%;
@@ -194,45 +194,6 @@
     padding: 32px;
     text-align: center;
     color: var(--ink-2);
-  }
-  .query-history {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-  .history-toolbar {
-    display: flex;
-    justify-content: space-between;
-    gap: 24px;
-    align-items: flex-end;
-  }
-  .history-toolbar label {
-    flex: 1;
-    max-width: 440px;
-  }
-  .history-list article {
-    padding: 16px 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .history-list article > div {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-  .history-list time {
-    font: var(--code-sm) var(--font-code);
-    color: var(--ink-2);
-  }
-  .history-list pre {
-    max-height: 180px;
-    overflow: auto;
-    padding: 12px;
-    margin-top: 12px;
-    background: var(--surface-2);
-    border-radius: var(--radius-control);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
   }
   .query-status {
     border: 1px solid var(--line);
