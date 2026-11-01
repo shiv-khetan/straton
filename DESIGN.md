@@ -118,8 +118,14 @@ Header, tab bar and sidebar share `--surface`; content sits on `--bg` (white in 
   panels and drawers, 120ms for tooltips. Transition named properties, never `all`.
 - Things entering the screen use ease-out (`--ease-out-quart`). Nothing bounces. No hover
   lift or scale that shifts layout.
-- Animate only `opacity` and `transform`. Honour `prefers-reduced-motion` (`MotionConfig
-  reducedMotion="user"`). Motion explains a change of state or place, never decorates data.
+- Animate only `opacity` and `transform` (running indicators pulse a pseudo-element, never a
+  box-shadow). `prefers-reduced-motion` collapses all CSS motion (`styles/global.css`).
+  Motion explains a change of state or place, never decorates data.
+- No motion on keyboard-opened or high-frequency surfaces: the command palette opens
+  instantly, tooltips after the first appear instantly, the sidebar resizes without animating.
+- Trigger-anchored layers enter from their trigger (offset follows Radix `data-side`); side
+  sheets slide from their edge; nothing moves at rest (pipeline edges animate only while a run
+  is active).
 
 ## Pre-delivery checklist
 

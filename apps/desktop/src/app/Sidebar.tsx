@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
 import { PanelLeftClose, PanelLeftOpen, Pin } from 'lucide-react';
 import type { Me } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -33,9 +32,7 @@ export function Sidebar({
   const { width, collapsed, setWidth, toggleCollapsed } = usePreferences();
   const page = useRouteStore((state) => state.page);
   const [narrow, setNarrow] = useState(() => matchMedia('(max-width: 900px)').matches);
-  const [dragging, setDragging] = useState(false);
   const start = useRef({ x: 0, width });
-  const reduced = useReducedMotion();
   useEffect(() => {
     const media = matchMedia('(max-width: 900px)');
     const update = () => setNarrow(media.matches);
@@ -118,12 +115,12 @@ export function Sidebar({
     );
   };
   return (
-    <motion.aside
+    // Width changes instantly: animating a layout property would reflow the editor, grids
+    // and canvas on every frame, and a collapse needs no explaining.
+    <aside
       className="relative flex min-h-0 shrink-0 flex-col gap-2 border-r border-line bg-panel p-2 pt-4"
       aria-label="Workspace sidebar"
-      initial={false}
-      animate={{ width: rail ? sidebarBounds.rail : width }}
-      transition={{ duration: reduced || dragging ? 0 : 0.18, ease: [0.25, 1, 0.5, 1] }}
+      style={{ width: rail ? sidebarBounds.rail : width }}
     >
       <nav
         className={
@@ -224,7 +221,6 @@ export function Sidebar({
             event.preventDefault();
             start.current = { x: event.clientX, width };
             event.currentTarget.setPointerCapture(event.pointerId);
-            setDragging(true);
           }}
           onPointerMove={(event) => {
             if (event.currentTarget.hasPointerCapture(event.pointerId))
@@ -234,9 +230,8 @@ export function Sidebar({
             if (event.currentTarget.hasPointerCapture(event.pointerId))
               event.currentTarget.releasePointerCapture(event.pointerId);
           }}
-          onLostPointerCapture={() => setDragging(false)}
         />
       )}
-    </motion.aside>
+    </aside>
   );
 }

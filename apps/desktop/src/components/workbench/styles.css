@@ -68,7 +68,17 @@
     line-height: 1.5;
     padding: 1px 6px;
   }
+  /* Running: a ring expands and fades on the GPU (transform + opacity), not a repainted
+     box-shadow. */
   .status-chip.state-running .status-dot {
+    position: relative;
+  }
+  .status-chip.state-running .status-dot::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: currentColor;
     animation: live-pulse var(--duration-pulse) var(--ease-out-quart) infinite;
   }
   .icon-tile {
@@ -182,6 +192,15 @@
   .dataset-node.state-running {
     outline: 2px solid var(--running);
     outline-offset: -2px;
+  }
+  /* ::before, because ::after draws every node's border. */
+  .dataset-node.state-running::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border: 2px solid var(--running-tint);
+    border-radius: inherit;
+    pointer-events: none;
     animation: running-ring var(--duration-pulse) var(--ease-out-quart) infinite;
   }
   .external-node {
@@ -412,19 +431,20 @@
   @keyframes running-ring {
     0%,
     100% {
-      box-shadow: 0 0 0 0 var(--running-tint);
+      opacity: 0;
     }
     50% {
-      box-shadow: 0 0 0 4px var(--running-tint);
+      opacity: 1;
     }
   }
   @keyframes live-pulse {
-    0%,
-    100% {
-      box-shadow: 0 0 0 0 var(--running-tint);
+    from {
+      transform: scale(1);
+      opacity: 0.45;
     }
-    50% {
-      box-shadow: 0 0 0 3px var(--running-tint);
+    to {
+      transform: scale(2.6);
+      opacity: 0;
     }
   }
   @keyframes batch-progress {

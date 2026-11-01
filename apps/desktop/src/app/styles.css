@@ -157,6 +157,8 @@
   [data-slot='collapsible-content'][data-state='open'] {
     animation: overlay-enter var(--duration-shell) var(--ease-out-quart);
   }
+  /* Trigger-anchored layers emerge from their trigger: the 4px offset points back toward it
+     (Radix sets data-side), so a menu below its button drops down, one above rises up. */
   [data-slot='dropdown-menu-content'],
   [data-slot='dropdown-menu-sub-content'],
   [data-slot='popover-content'],
@@ -164,11 +166,32 @@
   [data-slot='context-menu-content'],
   [data-slot='select-content'],
   [data-slot='tooltip-content'] {
+    --overlay-from: translateY(-4px);
     animation: overlay-enter var(--duration-fast) var(--ease-out-quart);
   }
-  [data-slot='dialog-content'],
-  [data-slot='sheet-content'] {
+  [data-side='top'] {
+    --overlay-from: translateY(4px);
+  }
+  [data-side='left'] {
+    --overlay-from: translateX(4px);
+  }
+  [data-side='right'] {
+    --overlay-from: translateX(-4px);
+  }
+  /* Moving between tooltips: Radix marks them instant-open; they appear without motion. */
+  [data-slot='tooltip-content'][data-state='instant-open'] {
+    animation: none;
+  }
+  [data-slot='dialog-content'] {
     animation: overlay-enter var(--duration-shell) var(--ease-out-quart);
+  }
+  /* Side sheets slide in from their edge, not up from below. */
+  [data-slot='sheet-content'] {
+    animation: sheet-enter var(--duration-shell) var(--ease-out-quart);
+  }
+  /* The command palette opens from a keyboard shortcut many times a day: no motion. */
+  [data-slot='dialog-content'].command-dialog {
+    animation: none;
   }
   [data-slot='dialog-content'][data-state='closed'],
   [data-slot='sheet-content'][data-state='closed'] {
