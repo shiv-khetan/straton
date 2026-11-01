@@ -3,6 +3,8 @@ name = "straton-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 straton-core = { path = "../straton-core" }

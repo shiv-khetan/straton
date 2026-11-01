@@ -1,0 +1,51 @@
+/* Docs theme: the app's identity (DESIGN.md): indigo accent, Geist + JetBrains Mono. */
+@font-face {
+  font-family: 'Geist Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('fonts/geist-latin-wght-normal.woff2') format('woff2-variations');
+}
+@font-face {
+  font-family: 'JetBrains Mono Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url('fonts/jetbrains-mono-latin-wght-normal.woff2') format('woff2-variations');
+}
+:root {
+  --md-text-font: 'Geist Variable', 'Segoe UI', system-ui, sans-serif;
+  --md-code-font: 'JetBrains Mono Variable', ui-monospace, monospace;
+}
+[data-md-color-scheme='default'] {
+  --md-primary-fg-color: #4f46e5;
+  --md-primary-fg-color--light: #6366f1;
+  --md-primary-fg-color--dark: #4338ca;
+  --md-accent-fg-color: #4338ca;
+  --md-typeset-a-color: #4338ca;
+}
+[data-md-color-scheme='slate'] {
+  --md-primary-fg-color: #312e81;
+  --md-primary-fg-color--light: #4f46e5;
+  --md-primary-fg-color--dark: #1e1b4b;
+  --md-accent-fg-color: #a5b4fc;
+  --md-typeset-a-color: #a5b4fc;
+  --md-default-bg-color: #0b0d12;
+}
+.md-typeset h1 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.md-typeset .md-button {
+  border-radius: 4px;
+}
+.md-typeset .grid.cards > ul > li {
+  border-radius: 6px;
+}
+.md-typeset h1 {
+  color: var(--md-default-fg-color);
+}
+.md-typeset .md-content__button + h1,
+.md-typeset h1:first-child {
+  margin-bottom: 0.6em;
+}

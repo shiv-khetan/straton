@@ -4,3 +4,21 @@ dist/
 /data/
 *.db
 *.db-*
+
+# Local configuration and secrets
+/straton.toml
+.env
+.env.*
+*.pem
+*.key
+
+# Docs build
+/site/
+.venv/
+__pycache__/
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -15,7 +15,7 @@ Open-source, self-hosted data platform: Rust engine (`crates/`) and Tauri + Reac
 ## Design rules
 
 - Read DESIGN.md before any UI work. Never change its fonts, colours, radii or spacing without
-  asking me.
+  asking the maintainers.
 - App screens are built from the existing primitives and page anatomy in DESIGN.md
   (`components/ui`, `components/workbench`). Use Hallmark only for product or business pages
   outside the app (website, docs, launch pages); MotionSites is not used in this project.
