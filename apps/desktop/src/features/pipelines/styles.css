@@ -59,15 +59,14 @@
   stroke-width: 2.5;
   stroke-linecap: round;
   stroke-dasharray: 10 90;
-  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--primary) 70%, transparent));
   animation: flow-travel 1.6s linear infinite;
   pointer-events: none;
 }
-/* At rest the editor only hints at direction: slower, fainter. */
+/* At rest nothing moves: a faint static dash still shows direction. Motion is reserved for
+   a running pipeline, where it reports state. */
 .flow-edge.flow-idle .flow-pulse {
   opacity: 0.35;
-  animation-duration: 4.8s;
-  filter: none;
+  animation: none;
 }
 @keyframes flow-travel {
   from {

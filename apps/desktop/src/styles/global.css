@@ -127,7 +127,7 @@
 @keyframes overlay-enter {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: var(--overlay-from, translateY(4px));
   }
   to {
     opacity: 1;

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MotionConfig } from 'motion/react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
 import { applyTheme, useThemeStore } from '@/stores/theme';
@@ -26,12 +25,10 @@ export function Providers({ children }: { children: ReactNode }) {
   }, []);
   return (
     <QueryClientProvider client={queryClient}>
-      <MotionConfig reducedMotion="user">
-        <TooltipProvider delayDuration={250}>
-          {children}
-          <Toaster position="bottom-right" closeButton />
-        </TooltipProvider>
-      </MotionConfig>
+      <TooltipProvider delayDuration={250}>
+        {children}
+        <Toaster position="bottom-right" closeButton />
+      </TooltipProvider>
     </QueryClientProvider>
   );
 }
