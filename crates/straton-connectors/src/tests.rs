@@ -206,3 +206,59 @@ fn csv_incremental_is_unsupported() {
             let _ = std::fs::remove_dir_all(dir);
         });
 }
+
+#[test]
+fn driver_errors_map_to_fixed_actionable_causes_without_leaking_text() {
+    use crate::classify;
+    for (raw, expected) in [
+        (
+            "error returned from database: (code: 14) unable to open database file",
+            "not found",
+        ),
+        (
+            "password authentication failed for user \"svc_reader\"",
+            "authentication",
+        ),
+        (
+            "Access denied for user 'root'@'10.0.0.5' (using password: YES)",
+            "authentication",
+        ),
+        (
+            "error communicating with database: Connection refused (os error 111)",
+            "reach the source host",
+        ),
+        (
+            "pool timed out while waiting for an open connection",
+            "in time",
+        ),
+        (
+            "relation \"public.orders\" does not exist",
+            "table or column",
+        ),
+        ("database is locked", "locked"),
+        ("invalid peer certificate: UnknownIssuer", "TLS"),
+        (
+            "HTTP status client error (429 Too Many Requests)",
+            "rate limiting",
+        ),
+        ("Permission denied (os error 13)", "permission denied"),
+        (
+            "something entirely unexpected",
+            "connector operation failed",
+        ),
+    ] {
+        let message = classify(&raw.to_lowercase());
+        assert!(message.contains(expected), "{raw} -> {message}");
+        assert!(!message.is_empty() && !message.contains("connector operation failed: "));
+        // Nothing from the driver text survives: no users, hosts, tables or values.
+        for secret in [
+            "svc_reader",
+            "root",
+            "10.0.0.5",
+            "public.orders",
+            "UnknownIssuer",
+        ] {
+            assert!(!message.contains(secret), "{message} leaks {secret}");
+        }
+    }
+}

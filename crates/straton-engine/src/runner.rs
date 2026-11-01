@@ -35,40 +35,34 @@ pub async fn state(
     tx.commit().await?;
     event(events, id, &actual);
     if actual == "failed" {
+        // One notification per failure, naming what failed so it can be found without opening it.
+        let job = sqlx::query(
+            "SELECT j.builtin,j.name FROM runs r JOIN jobs j ON j.id=r.job_id WHERE r.id=?",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+        let (kind, title) = if job.get::<bool, _>("builtin") {
+            ("backup.failed", "Backup failed".to_owned())
+        } else {
+            (
+                "run.failed",
+                format!("{} failed", job.get::<String, _>("name")),
+            )
+        };
         crate::notify::emit(
             pool,
             events,
             crate::notify::Notice {
                 severity: "error",
-                kind: "run.failed",
-                title: "Job run failed",
+                kind,
+                title: &title,
                 entity_kind: "run",
                 entity_id: id,
                 user_id: None,
             },
         )
         .await?;
-        let builtin: bool = sqlx::query_scalar(
-            "SELECT j.builtin FROM runs r JOIN jobs j ON j.id=r.job_id WHERE r.id=?",
-        )
-        .bind(id)
-        .fetch_one(pool)
-        .await?;
-        if builtin {
-            crate::notify::emit(
-                pool,
-                events,
-                crate::notify::Notice {
-                    severity: "error",
-                    kind: "backup.failed",
-                    title: "Backup failed",
-                    entity_kind: "run",
-                    entity_id: id,
-                    user_id: None,
-                },
-            )
-            .await?;
-        }
     }
     Ok(())
 }

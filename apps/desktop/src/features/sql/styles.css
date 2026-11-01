@@ -101,11 +101,14 @@
     flex-direction: row;
     align-items: center;
   }
+  /* Document tabs attached to the editor (not boxes inside the frame): the active tab
+     shares the editor background and covers the strip's bottom rule. */
   .query-tabs {
     display: flex;
-    gap: 4px;
+    align-items: flex-end;
+    gap: 2px;
     overflow-x: auto;
-    padding: 6px;
+    padding: 6px 6px 0;
     flex-shrink: 0;
     background: var(--panel);
     border-bottom: 1px solid var(--line);
@@ -114,12 +117,21 @@
     display: flex;
     align-items: center;
     border: 1px solid transparent;
-    border-radius: var(--radius-control);
+    border-bottom: 0;
+    border-radius: var(--radius-control) var(--radius-control) 0 0;
+    margin-bottom: -1px;
+    padding-bottom: 1px;
     flex-shrink: 0;
+    color: var(--ink-2);
+  }
+  .query-tabs > div:hover {
+    color: var(--ink);
   }
   .query-tabs > div.active {
-    background: var(--surface);
+    /* Same colour Monaco paints (editor.background = --bg), so tab and editor read as one. */
+    background: var(--bg);
     border-color: var(--line);
+    color: var(--ink);
   }
   .query-tabs > div > button:first-child {
     max-width: 240px;

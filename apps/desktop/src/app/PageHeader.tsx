@@ -9,6 +9,7 @@ import { datasetState } from '@/features/console/workbench-model';
 import type { Route } from '@/stores/route-history';
 import { navItemOf, sectionLabels, sectionOf } from './navigation';
 import type { useEngineData } from './useEngineData';
+import { CronText } from '@/features/schedules/CronText';
 
 type EngineData = ReturnType<typeof useEngineData>;
 
@@ -88,7 +89,13 @@ export function PageHeader({
                 }
               />
               <Pill>{selectedModel.materialization}</Pill>
-              <Pill>{selectedModel.cron ?? selectedModel.trigger}</Pill>
+              <Pill>
+                {selectedModel.cron ? (
+                  <CronText cron={selectedModel.cron} />
+                ) : (
+                  selectedModel.trigger
+                )}
+              </Pill>
             </>
           )}
           {navItemOf(page).route === 'Pipelines' && (

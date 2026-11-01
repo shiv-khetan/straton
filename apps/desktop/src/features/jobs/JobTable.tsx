@@ -13,6 +13,7 @@ import {
   Table as UiTable,
 } from '@/components/workbench/primitives';
 import { datasetLabel } from '@/lib/view-model';
+import { CronText } from '@/features/schedules/CronText';
 
 // Sync jobs with name search, run now, enable/disable and a jump to each job's history.
 export function JobTable({
@@ -53,7 +54,7 @@ export function JobTable({
             <TableHead scope="col">Name</TableHead>
             <TableHead scope="col">Dataset</TableHead>
             <TableHead scope="col">Mode / watermark</TableHead>
-            <TableHead scope="col">Schedule (UTC)</TableHead>
+            <TableHead scope="col">Schedule</TableHead>
             <TableHead scope="col">
               <span className="visually-hidden">Actions</span>
             </TableHead>
@@ -90,7 +91,7 @@ export function JobTable({
                   </div>
                 </TableCell>
                 <TableCell>
-                  <code>{job.cron || 'Manual'}</code>
+                  <CronText cron={job.cron} />
                 </TableCell>
                 <TableCell>
                   <div className="actions row-actions">

@@ -1,3 +1,4 @@
+import { CronText } from '@/features/schedules/CronText';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { Api, Job, Model } from '@/lib/api';
@@ -175,7 +176,7 @@ export default function Schedules({
                 </TableCell>
                 <TableCell>{r.kind}</TableCell>
                 <TableCell>
-                  <code>{r.cron}</code>
+                  <CronText cron={r.cron} />
                 </TableCell>
                 <TableCell>
                   <StatePill

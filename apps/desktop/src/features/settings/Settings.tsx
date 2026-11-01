@@ -9,6 +9,7 @@ import { queryKeys } from '@/lib/queryKeys';
 import { useThemeStore } from '@/stores/theme';
 import type { ThemePreference } from '@/stores/theme';
 import { usePreferences } from '@/stores/preferences';
+import { CronText } from '@/features/schedules/CronText';
 
 const themes: Record<string, ThemePreference> = { System: 'system', Light: 'light', Dark: 'dark' };
 
@@ -80,7 +81,7 @@ export function engineRows(s: EngineSettings): { title: string; rows: [string, R
     {
       title: 'Backups',
       rows: [
-        ['Schedule (UTC)', <code>{s.backup.cron}</code>],
+        ['Schedule', <CronText cron={s.backup.cron} />],
         ['Directory', <code>{s.backup.dir}</code>],
         ['Snapshots kept', s.backup.keep],
       ],
