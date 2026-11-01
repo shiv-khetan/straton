@@ -11,9 +11,18 @@ import {
   FeatureError,
   FeatureLoading,
 } from '@/components/workbench/FeatureState';
-import { groupActivity } from './activity-model';
+import { activityText, groupActivity } from './activity-model';
 import { PageToolbar } from '@/components/workbench/page-layout';
-export default function Activity({ client, me }: { client: Api; me: Me }) {
+export default function Activity({
+  client,
+  me,
+  names = {},
+}: {
+  client: Api;
+  me: Me;
+  /** Entity id -> readable name, so rows never show bare ids. */
+  names?: Record<string, string>;
+}) {
   const [group, setGroup] = useState('');
   const [actor, setActor] = useState('');
   const [entity, setEntity] = useState('');
@@ -137,16 +146,23 @@ export default function Activity({ client, me }: { client: Api; me: Me }) {
             {g.items.map((e) => (
               <li key={e.id} className="flex flex-wrap items-start gap-4 py-3">
                 <time
-                  className="w-20 shrink-0 font-mono text-caption text-ink-2"
+                  className="w-20 shrink-0 text-caption text-ink-2 tabular-nums"
                   dateTime={new Date(e.at * 1000).toISOString()}
                 >
                   {new Date(e.at * 1000).toISOString().slice(11, 19)}
                 </time>
                 <div className="min-w-0 flex-1">
-                  <p>{e.summary}</p>
-                  <p className="mt-1 break-all text-caption text-ink-2">
-                    {e.actor_name ?? e.actor_id ?? 'Engine'} · {e.action}
-                    {e.entity_id ? ' · ' + e.entity_id : ''}
+                  <p>
+                    {activityText(e.action, e.summary)}
+                    {e.entity_id && names[e.entity_id] && (
+                      <span className="text-ink-2"> · {names[e.entity_id]}</span>
+                    )}
+                  </p>
+                  <p
+                    className="mt-1 text-caption text-ink-2"
+                    title={e.action + (e.entity_id ? ' · ' + e.entity_id : '')}
+                  >
+                    {e.actor_name ?? e.actor_id ?? 'Engine'}
                   </p>
                 </div>
               </li>

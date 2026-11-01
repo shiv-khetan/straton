@@ -92,7 +92,12 @@ export function Impact({
           value={root}
           options={[
             { value: '', label: 'Choose an impact root' },
-            ...datasets.map((d) => ({ value: 'dataset:' + d.id, label: d.name })),
+            ...datasets
+              .map((d) => ({
+                value: 'dataset:' + d.id,
+                label: d.sql_schema && d.sql_table ? d.sql_schema + '.' + d.sql_table : d.name,
+              }))
+              .sort((a, b) => a.label.localeCompare(b.label)),
             ...(models.data ?? []).map((m) => ({
               value: 'model:' + m.id,
               label: 'Model · ' + m.name,

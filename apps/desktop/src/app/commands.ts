@@ -21,10 +21,10 @@ export function buildCommands(
         id: 'route:' + route,
         label: routeLabels[route],
         kind: 'action' as const,
-        detail: 'Go to page',
+        detail: route === 'Connect' ? 'Change engine connection' : undefined,
       })),
     ...(can(me, 'read')
-      ? [{ id: 'sql', label: 'Open SQL', kind: 'action' as const, detail: 'SQL Studio' }]
+      ? [{ id: 'sql', label: 'Open SQL Workspace', kind: 'action' as const, detail: 'New query' }]
       : []),
     ...(me
       ? [

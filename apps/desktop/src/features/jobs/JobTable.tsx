@@ -5,7 +5,9 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
 import { Field } from '@/components/workbench/Field';
 import type { Action } from '@/components/workbench/Field';
-import type { Api, Dataset, Job } from '@/lib/api';
+import type { Api, Dataset, Job, Run } from '@/lib/api';
+import { lastJobRun } from '@/features/overview/attention-model';
+import { relativeTime } from '@/lib/view-model';
 import {
   Tray,
   Pill,
@@ -37,6 +39,7 @@ export const togglable = (job: Job) => !job.builtin && !!job.source_id;
 // Sync jobs with name search, selection and bulk actions, run now, enable/disable and history.
 export function JobTable({
   jobs,
+  runs,
   datasets,
   client,
   action,
@@ -45,6 +48,7 @@ export function JobTable({
   onHistory,
 }: {
   jobs: Job[];
+  runs: Run[];
   datasets: Dataset[];
   client: Api;
   action: Action;
@@ -150,8 +154,11 @@ export function JobTable({
             </TableHead>
             <TableHead scope="col">Name</TableHead>
             <TableHead scope="col">Dataset</TableHead>
-            <TableHead scope="col">Mode / watermark</TableHead>
+            <TableHead scope="col" className="max-[1100px]:hidden">
+              Mode / watermark
+            </TableHead>
             <TableHead scope="col">Schedule</TableHead>
+            <TableHead scope="col">Last run</TableHead>
             <TableHead scope="col">
               <span className="visually-hidden">Actions</span>
             </TableHead>
@@ -172,19 +179,27 @@ export function JobTable({
                   <span className="max-w-44 truncate" title={job.name}>
                     {job.name}
                   </span>
-                  <StatePill state={job.enabled ? 'Enabled' : 'Disabled'} />
+                  {!job.enabled && <StatePill state="Disabled" />}
                 </div>
               </TableCell>
-              <TableCell>
-                {datasetLabel(
-                  datasets.find((d) => d.source_id === job.source_id && d.name === job.dataset) ?? {
-                    name: job.dataset,
-                  },
+              <TableCell className="max-w-48 truncate whitespace-nowrap">
+                {job.builtin ? (
+                  <span className="text-ink-2">Engine backup</span>
+                ) : (
+                  datasetLabel(
+                    datasets.find(
+                      (d) => d.source_id === job.source_id && d.name === job.dataset,
+                    ) ?? { name: job.dataset },
+                  )
                 )}
               </TableCell>
-              <TableCell>
+              <TableCell className="max-[1100px]:hidden">
                 <div className="flex items-center gap-2 whitespace-nowrap">
-                  <Pill>{job.mode === 'incremental' ? 'Incremental' : 'Full refresh'}</Pill>
+                  {job.builtin ? (
+                    <span className="text-ink-3">—</span>
+                  ) : (
+                    <Pill>{job.mode === 'incremental' ? 'Incremental' : 'Full refresh'}</Pill>
+                  )}
                   {job.mode === 'incremental' && (
                     <code className="text-ink-2" title="Watermark">
                       {job.watermark ?? 'No watermark yet'}
@@ -196,6 +211,13 @@ export function JobTable({
                 <CronText cron={job.cron} />
               </TableCell>
               <TableCell>
+                <LastRun
+                  summary={lastJobRun(job.id, runs)}
+                  onOpen={() => onHistory(job.id)}
+                  name={job.name}
+                />
+              </TableCell>
+              <TableCell>
                 <div className="actions row-actions">
                   <Button
                     variant="outline"
@@ -204,7 +226,12 @@ export function JobTable({
                   >
                     Run now
                   </Button>
-                  <Button variant="outline" onClick={() => onHistory(job.id)}>
+                  {/* On narrow windows the Last run cell opens history instead. */}
+                  <Button
+                    variant="outline"
+                    className="max-[1100px]:hidden"
+                    onClick={() => onHistory(job.id)}
+                  >
                     History
                   </Button>
                   {!job.builtin && job.source_id && (
@@ -233,5 +260,34 @@ export function JobTable({
       </UiTable>
       {!jobs.length && <p className="empty">Create a job after discovering a source.</p>}
     </Tray>
+  );
+}
+
+/** Latest finished run: state, when, and a failure streak (×N) when it keeps failing. */
+function LastRun({
+  summary,
+  onOpen,
+  name,
+}: {
+  summary: ReturnType<typeof lastJobRun>;
+  onOpen: () => void;
+  name: string;
+}) {
+  if (!summary) return <span className="text-ink-3">Never run</span>;
+  return (
+    <button
+      type="button"
+      className="last-run flex items-center gap-2 whitespace-nowrap tabular-nums"
+      aria-label={'Run history for ' + name}
+      onClick={onOpen}
+    >
+      <StatePill state={summary.run.state} />
+      <span className="text-ink-2">{relativeTime(summary.run.available_at * 1000)}</span>
+      {summary.streak > 1 && (
+        <span className="text-danger-ink" title={summary.streak + ' failures in a row'}>
+          ×{summary.streak}
+        </span>
+      )}
+    </button>
   );
 }

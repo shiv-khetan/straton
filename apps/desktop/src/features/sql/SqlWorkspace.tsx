@@ -356,11 +356,11 @@ export default function SqlView({
                 </Button>
                 <Button variant="ghost" onClick={formatSql}>
                   <Braces size={16} />
-                  Format
+                  <span className="max-[1023px]:sr-only">Format</span>
                 </Button>
                 <Button variant="ghost" onClick={beginSave} disabled={readOnly}>
                   <Save size={16} />
-                  Save
+                  <span className="max-[1023px]:sr-only">Save</span>
                 </Button>
               </PageActions>
               <ResizablePanelGroup orientation="vertical">
@@ -389,7 +389,7 @@ export default function SqlView({
                     }}
                   />
                 </ResizablePanel>
-                <ResizableHandle withHandle />
+                <ResizableHandle withHandle aria-label="Resize editor and results" />
                 <ResizablePanel minSize="100px">
                   <SqlOutput
                     tabId={active.id}
@@ -398,6 +398,7 @@ export default function SqlView({
                     tab={resultTab}
                     onTab={setResultTab}
                     scope={scope}
+                    tables={catalog.data?.tables}
                   />
                 </ResizablePanel>
               </ResizablePanelGroup>

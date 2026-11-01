@@ -65,6 +65,13 @@ export function CreateJobSheet({
     }
   }, [open]);
   const [cron, setCron] = useState('0 */5 * * * *');
+  const missing = !source
+    ? 'Choose a source.'
+    : !dataset
+      ? 'Choose a dataset.'
+      : mode === 'incremental' && !hasIncrementalSettings(sourceKind, watermark, keys)
+        ? 'Incremental mode needs a watermark and key columns.'
+        : '';
   return (
     <Sheet open={open} title="Create sync job" onClose={onClose}>
       <form
@@ -232,18 +239,16 @@ export function CreateJobSheet({
           )}
           <CronField value={cron} onChange={setCron} />
         </div>
-        <Button
-          variant="default"
-          disabled={
-            readOnly ||
-            busy ||
-            !source ||
-            !dataset ||
-            (mode === 'incremental' && !hasIncrementalSettings(sourceKind, watermark, keys))
-          }
-        >
-          Create job
-        </Button>
+        <div className="sheet-actions">
+          <Button variant="default" disabled={readOnly || busy || !!missing}>
+            Create job
+          </Button>
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          {/* Say why the primary action is unavailable instead of a silent disabled button. */}
+          {missing && !readOnly && <span className="hint">{missing}</span>}
+        </div>
       </form>
     </Sheet>
   );

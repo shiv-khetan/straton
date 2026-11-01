@@ -62,6 +62,7 @@ export default function Jobs({
     <>
       <JobTable
         jobs={jobs}
+        runs={runs}
         datasets={datasets}
         client={client}
         action={action}

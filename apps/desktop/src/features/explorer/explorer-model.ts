@@ -12,6 +12,20 @@ export const filterOps: FilterOp[] = [
   'not_null',
   'in',
 ];
+/** Readable operator names for the filter picker; values stay the API's operator ids. */
+export const filterOpLabels: Record<FilterOp, string> = {
+  eq: '= equals',
+  ne: '≠ not equal',
+  lt: '< less than',
+  lte: '≤ at most',
+  gt: '> greater than',
+  gte: '≥ at least',
+  contains: 'contains',
+  starts_with: 'starts with',
+  is_null: 'is null',
+  not_null: 'is not null',
+  in: 'is one of',
+};
 export function parseFilter(column: string, op: FilterOp, text: string): ExplorerFilter {
   if (!column || !filterOps.includes(op)) throw new Error('Choose a column and operator.');
   if (op === 'is_null' || op === 'not_null') return { column, op };

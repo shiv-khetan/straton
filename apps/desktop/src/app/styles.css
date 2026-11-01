@@ -54,7 +54,7 @@
     @apply truncate;
   }
   .page-content {
-    @apply min-h-0 min-w-0 flex-1 overflow-auto px-6 pt-5 pb-6;
+    @apply relative min-h-0 min-w-0 flex-1 overflow-auto px-6 pt-5 pb-6;
   }
   .page-content.workbench-page {
     @apply overflow-hidden p-0;
@@ -91,6 +91,14 @@
   .page-content:not(.workbench-page) [data-slot='table-container']:not(.tray *, .card *) {
     @apply rounded-card border border-line bg-surface;
   }
+  /* A table cell that opens detail: looks like content, underlines on hover/focus. */
+  [data-slot='table-cell'] button.last-run {
+    @apply min-h-0 border-0 bg-transparent p-0 text-body hover:underline focus-visible:underline;
+  }
+  /* Primary and Cancel at the end of a sheet form, with the reason when unavailable. */
+  .sheet-actions {
+    @apply mt-2 flex flex-wrap items-center gap-2;
+  }
   /* Bulk actions for selected table rows. */
   .bulk-bar {
     @apply mb-3 flex flex-wrap items-center gap-2 rounded-card border border-line bg-primary-soft px-3 py-2 text-body;
@@ -120,7 +128,8 @@
     @apply text-ink-2;
   }
   .settings-list dd {
-    @apply m-0 min-w-0;
+    /* Labels and controls, not data: overrides the global mono dd. */
+    @apply m-0 min-w-0 font-sans text-body;
     overflow-wrap: anywhere;
   }
   .page-intro {

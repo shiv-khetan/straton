@@ -457,6 +457,14 @@ function CheckEditor({
     else await client.createQualityCheck(body);
     onClose();
   }
+  // Why Save is unavailable, shown next to it.
+  const missing = !draft.name.trim()
+    ? 'Name the check.'
+    : draft.kind !== 'custom_sql' && !target
+      ? 'Choose a dataset or model.'
+      : ['not_null', 'unique', 'range'].includes(draft.kind) && !draft.column_name
+        ? 'Choose a column.'
+        : '';
   return (
     <Dialog
       open
@@ -509,9 +517,14 @@ function CheckEditor({
                 value: '',
                 label: draft.kind === 'custom_sql' ? 'No target (custom SQL)' : 'Choose target',
               },
+              // The SQL name is unique and readable (lake aliases otherwise show a source UUID).
               ...datasets
                 .filter((d) => d.source_id !== 'straton-models')
-                .map((d) => ({ value: 'dataset:' + d.id, label: d.name })),
+                .map((d) => ({
+                  value: 'dataset:' + d.id,
+                  label: d.sql_schema && d.sql_table ? d.sql_schema + '.' + d.sql_table : d.name,
+                }))
+                .sort((a, b) => a.label.localeCompare(b.label)),
               ...models.map((m) => ({ value: 'model:' + m.id, label: 'Model · ' + m.name })),
             ]}
             onChange={(v) =>
@@ -584,22 +597,15 @@ function CheckEditor({
           </div>
           <label className="flex items-center gap-2">
             <Checkbox
-              checked={draft.enabled}
+              // Only meaningful with a schedule; the stored value is kept for when one is set.
+              checked={!!draft.cron && draft.enabled}
+              disabled={!draft.cron}
               onCheckedChange={(v) => patch({ enabled: v === true })}
             />
             Schedule enabled
           </label>
           <div className="flex flex-wrap gap-2">
-            <Button
-              type="submit"
-              disabled={
-                readOnly ||
-                action.pending ||
-                !draft.name.trim() ||
-                (draft.kind !== 'custom_sql' && !target) ||
-                (['not_null', 'unique', 'range'].includes(draft.kind) && !draft.column_name)
-              }
-            >
+            <Button type="submit" disabled={readOnly || action.pending || !!missing}>
               {action.pending ? 'Saving…' : 'Save check'}
             </Button>
             <Button type="button" variant="outline" disabled={action.pending} onClick={onClose}>
@@ -622,6 +628,7 @@ function CheckEditor({
                 {confirmDelete ? 'Confirm delete' : 'Delete check'}
               </Button>
             )}
+            {missing && !readOnly && <span className="hint self-center">{missing}</span>}
           </div>
         </form>
       </DialogContent>

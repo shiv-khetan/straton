@@ -34,3 +34,15 @@
     @apply rounded-tray;
   }
 }
+
+/* Last failure under a Failing status: one line, full text on hover. */
+.source-error {
+  display: block;
+  max-width: 28rem;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger-ink);
+  font-size: var(--body-sm);
+}

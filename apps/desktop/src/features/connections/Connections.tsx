@@ -139,14 +139,7 @@ export default function Sources({
                 ))}
               </select>
             </Field>
-            {kind === 'sqlserver' && <SqlServerSecurity {...props} setSecret={setSecret} />}
-            {['postgres', 'mysql'].includes(kind) && (
-              <DatabaseSsl {...props} kind={kind} sslMode={sslMode} />
-            )}
-            {kind === 'mongodb' && <MongoFields {...props} />}
-            {['sqlserver', 'postgres', 'mysql', 'mongodb'].includes(kind) && (
-              <AdvisorToggle {...props} />
-            )}
+            {/* Where to connect first; security and advanced options after. */}
             <ConfigFields {...props} kind={kind} />
             {kind === 'stripe' && <StripeObjects {...props} />}
             {(kind === 'postgres' ||
@@ -162,6 +155,15 @@ export default function Sources({
                 hasCredential={!!sources.find((s) => s.id === editing)?.credential_id}
               />
             )}
+            {kind === 'sqlserver' && <SqlServerSecurity {...props} setSecret={setSecret} />}
+            {['postgres', 'mysql'].includes(kind) && (
+              <DatabaseSsl {...props} kind={kind} sslMode={sslMode} />
+            )}
+            {kind === 'mongodb' && <MongoFields {...props} />}
+            {/* Write access for the advisor is a deliberate later step, not a creation default. */}
+            {editing && ['sqlserver', 'postgres', 'mysql', 'mongodb'].includes(kind) && (
+              <AdvisorToggle {...props} />
+            )}
             {kind === 'salesforce' && (
               <SalesforceFields {...props} setSecret={setSecret} busy={busy} action={action} />
             )}
@@ -173,11 +175,16 @@ export default function Sources({
             >
               Save source
             </Button>
-            {editing && (
-              <Button variant="outline" type="button" onClick={reset}>
-                Cancel edit
-              </Button>
-            )}
+            <Button
+              variant="outline"
+              type="button"
+              onClick={() => {
+                reset();
+                onClose();
+              }}
+            >
+              Cancel
+            </Button>
           </div>
         </form>
       </Sheet>

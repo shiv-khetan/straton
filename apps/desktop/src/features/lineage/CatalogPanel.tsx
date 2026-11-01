@@ -1,3 +1,4 @@
+import { Checkbox } from '@/components/ui/checkbox';
 import { useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button, Icon, SchemaTree } from '@/components/workbench/primitives';
@@ -104,12 +105,11 @@ export function CatalogPanel({
             <legend>Relationships</legend>
             {edgeKinds.map((kind) => (
               <label key={kind}>
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={enabledKinds.includes(kind)}
-                  onChange={(e) =>
+                  onCheckedChange={(checked) =>
                     onEnabledKinds(
-                      e.target.checked
+                      checked === true
                         ? [...enabledKinds, kind]
                         : enabledKinds.filter((k) => k !== kind),
                     )

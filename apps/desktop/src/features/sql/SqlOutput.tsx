@@ -1,3 +1,5 @@
+import type { SqlTable } from '@/lib/api';
+import { explainSqlError } from './sql-error';
 import type { SqlExplain, SqlResult } from '@/lib/api';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ResultGrid } from '@/components/workbench/ResultGrid';
@@ -17,6 +19,7 @@ export function SqlOutput({
   tab,
   onTab,
   scope,
+  tables = [],
 }: {
   tabId: string;
   output?: Execution;
@@ -24,6 +27,8 @@ export function SqlOutput({
   tab: string;
   onTab: (tab: string) => void;
   scope: string;
+  /** Catalog tables, used to suggest the closest table or column name. */
+  tables?: SqlTable[];
 }) {
   return (
     <Tabs value={tab} onValueChange={onTab} className="sql-output gap-0">
@@ -51,13 +56,19 @@ export function SqlOutput({
       </div>
       {output?.error && (
         <div className="sql-error" role="alert">
-          <h3>Query could not finish</h3>
-          <pre>{output.error}</pre>
-          {/line|position/i.test(output.error) && (
-            <p className="hint">
-              Use the line or position above to locate the statement in the editor.
-            </p>
-          )}
+          {(() => {
+            const view = explainSqlError(output.error, tables);
+            return (
+              <>
+                <h3>{view.title}</h3>
+                {view.hint && <p>{view.hint}</p>}
+                <details>
+                  <summary>Engine message</summary>
+                  <pre>{view.detail}</pre>
+                </details>
+              </>
+            );
+          })()}
         </div>
       )}
       {running?.tab === tabId && <Skeleton label="Executing query…" />}
