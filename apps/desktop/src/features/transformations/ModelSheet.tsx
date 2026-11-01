@@ -1,3 +1,4 @@
+import { CronField } from '@/features/schedules/CronField';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { FeatureError } from '@/components/workbench/FeatureState';
@@ -218,15 +219,13 @@ function DefinitionForm({
           </select>
         </label>
         {draft.trigger === 'cron' && (
-          <label className="field">
-            <span>Cron · UTC, seconds first</span>
-            <Input
-              required
-              disabled={!editable || busy}
-              value={draft.cron ?? ''}
-              onChange={(e) => setDraft({ ...draft, cron: e.target.value })}
-            />
-          </label>
+          <CronField
+            required
+            optional={false}
+            disabled={!editable || busy}
+            value={draft.cron ?? ''}
+            onChange={(cron) => setDraft({ ...draft, cron })}
+          />
         )}
       </div>
       <label>

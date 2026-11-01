@@ -1,3 +1,4 @@
+import { CronField } from '@/features/schedules/CronField';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ReactFlow, Background, Controls, Handle, MarkerType, Position } from '@xyflow/react';
@@ -319,14 +320,11 @@ function DraftFields({
             onChange={(e) => patch({ name: e.target.value })}
           />
         </Field>
-        <Field label="Cron (seconds first, UTC)">
-          <Input
-            value={draft.cron ?? ''}
-            placeholder="0 0 * * * *"
-            disabled={readOnly}
-            onChange={(e) => patch({ cron: e.target.value || null })}
-          />
-        </Field>
+        <CronField
+          value={draft.cron ?? ''}
+          disabled={readOnly}
+          onChange={(cron) => patch({ cron: cron || null })}
+        />
         <label className="flex items-center gap-2">
           <Checkbox
             checked={draft.enabled}

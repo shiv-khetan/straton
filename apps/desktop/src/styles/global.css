@@ -144,7 +144,7 @@
 }
 
 @media (pointer: coarse) {
-  button,
+  button:not([data-slot='checkbox']),
   [role='tab'],
   [role='menuitem'],
   .schema-tree summary {

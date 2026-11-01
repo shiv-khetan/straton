@@ -1,3 +1,4 @@
+import { CronField } from '@/features/schedules/CronField';
 import { checkPage } from './pagination';
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -576,13 +577,10 @@ function CheckEditor({
               ]}
               onChange={(v) => patch({ severity: v as 'error' | 'warn' })}
             />
-            <Field label="Cron (seconds first, UTC)">
-              <Input
-                placeholder="0 0 * * * *"
-                value={draft.cron ?? ''}
-                onChange={(e) => patch({ cron: e.target.value || null })}
-              />
-            </Field>
+            <CronField
+              value={draft.cron ?? ''}
+              onChange={(cron) => patch({ cron: cron || null })}
+            />
           </div>
           <label className="flex items-center gap-2">
             <Checkbox
