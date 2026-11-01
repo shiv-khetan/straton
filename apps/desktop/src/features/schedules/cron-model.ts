@@ -119,3 +119,68 @@ export function nextCron(expression: string, after: Date = new Date()): Date | n
   }
   return null;
 }
+
+const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const pad = (n: number) => String(n).padStart(2, '0');
+/** Values `[from, from+k, ...]` up to max with one step k > 1, or null. */
+function stepOf(values: number[], from: number, max: number): number | null {
+  if (values.length < 2 || values[0] !== from) return null;
+  const k = values[1] - values[0];
+  if (k <= 1) return null;
+  const expected = Math.floor((max - from) / k) + 1;
+  return values.length === expected && values.every((v, i) => v === from + i * k) ? k : null;
+}
+/**
+ * Plain-English schedule for the engine's 6/7-field UTC cron (seconds first, Sunday = 1),
+ * e.g. "Every 15 minutes" or "Weekdays at 09:30 UTC". Returns null when the expression is
+ * invalid or too irregular to describe exactly; callers then show the expression itself.
+ */
+export function describeCron(expression: string): string | null {
+  try {
+    const text = expression.trim().replace(/\s*([,\-/])\s*/g, '$1');
+    const parts = (aliases[text] ?? text).split(/\s+/);
+    if (parts.length !== 6 && parts.length !== 7) return null;
+    const s = field(parts[0], 0, 59),
+      m = field(parts[1], 0, 59),
+      h = field(parts[2], 0, 23),
+      dom = field(parts[3], 1, 31, [], true),
+      mon = field(parts[4], 1, 12, months),
+      dow = field(parts[5], 1, 7, days, true),
+      year = field(parts[6] ?? '*', 1970, 2100);
+    const all = (v: number[], min: number, max: number) => v.length === max - min + 1;
+    if (!all(mon, 1, 12) || !all(year, 1970, 2100)) return null;
+    const anyDay = all(dom, 1, 31) && all(dow, 1, 7);
+    const plural = (k: number, unit: string) => (k === 1 ? 'Every ' + unit : `Every ${k} ${unit}s`);
+    if (anyDay && all(h, 0, 23) && all(m, 0, 59)) {
+      if (all(s, 0, 59)) return 'Every second';
+      const k = stepOf(s, 0, 59);
+      if (k) return plural(k, 'second');
+      return s.length === 1 ? 'Every minute' : null;
+    }
+    if (s.length !== 1) return null;
+    if (anyDay && all(h, 0, 23)) {
+      const k = stepOf(m, 0, 59);
+      if (k && s[0] === 0) return plural(k, 'minute');
+      if (m.length === 1) return m[0] === 0 && s[0] === 0 ? 'Hourly' : `Hourly at :${pad(m[0])}`;
+      return null;
+    }
+    if (m.length !== 1) return null;
+    if (anyDay) {
+      const k = stepOf(h, 0, 23);
+      if (k) return plural(k, 'hour') + (m[0] ? ` at :${pad(m[0])}` : '');
+    }
+    if (h.length !== 1) return null;
+    const time = `${pad(h[0])}:${pad(m[0])}${s[0] ? ':' + pad(s[0]) : ''} UTC`;
+    if (anyDay) return 'Daily at ' + time;
+    if (all(dom, 1, 31)) {
+      if (dow.join() === '2,3,4,5,6') return 'Weekdays at ' + time;
+      if (dow.join() === '1,7') return 'Weekends at ' + time;
+      if (dow.length === 1) return `Weekly on ${dayNames[dow[0] - 1]} at ${time}`;
+      return dow.map((d) => dayNames[d - 1].slice(0, 3)).join(', ') + ' at ' + time;
+    }
+    if (all(dow, 1, 7) && dom.length === 1) return `Monthly on day ${dom[0]} at ${time}`;
+    return null;
+  } catch {
+    return null;
+  }
+}

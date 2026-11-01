@@ -10,6 +10,7 @@ import { FeatureError, FeatureLoading } from '@/components/workbench/FeatureStat
 import { StatePill, Tray } from '@/components/workbench/primitives';
 import { relativeTime } from '@/lib/view-model';
 import { formatBytes } from './storage-model';
+import { failingJobs } from './attention-model';
 import { lastSourceRun, sourceHealth } from '@/features/connections/source-health';
 import { offlineMessage } from '@/lib/offline-state';
 export function SourceHealth({
@@ -269,10 +270,7 @@ export function NeedsAttention({
   const failingChecks = (
     quality.data?.latest.filter((item) => item.run && item.run.status !== 'passed') ?? []
   ).slice(0, 3);
-  const failedRuns = runs
-    .filter((r) => r.state === 'failed')
-    .sort((a, b) => b.available_at - a.available_at)
-    .slice(0, 3);
+  const failedRuns = failingJobs(runs);
   const clear = quality.data && !failingChecks.length && !failedRuns.length;
   return (
     <Tray title="Needs attention">
@@ -288,12 +286,16 @@ export function NeedsAttention({
             <StatePill state={run.status} />
           </button>
         ))}
-        {failedRuns.map((r) => (
+        {failedRuns.map(({ run: r, streak }) => (
           <button type="button" className="overview-row" key={r.id} onClick={onOpenRuns}>
             <span>
               {jobs.find((j) => j.id === r.job_id)?.name ?? r.job_id}
               <small>
-                {(r.error ?? 'Run failed') + ' · ' + relativeTime(r.available_at * 1000)}
+                {[
+                  r.error ?? 'Run failed',
+                  relativeTime(r.available_at * 1000),
+                  ...(streak > 1 ? [streak + ' failures in a row'] : []),
+                ].join(' · ')}
               </small>
             </span>
             <StatePill state="failed" />

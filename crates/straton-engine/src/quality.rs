@@ -366,6 +366,15 @@ pub async fn run(sql: &Sql, events: &Events, check: &str, pipeline: Option<&str>
     store::audit(&mut tx, "quality.run", check, status).await?;
     tx.commit().await?;
     if status != "passed" {
+        let title = format!(
+            "{} {}",
+            r.get::<String, _>("name"),
+            if status == "failed" {
+                "failed"
+            } else {
+                "could not run"
+            }
+        );
         notify::emit(
             &sql.pool,
             events,
@@ -376,7 +385,7 @@ pub async fn run(sql: &Sql, events: &Events, check: &str, pipeline: Option<&str>
                     "error"
                 },
                 kind: "quality.failed",
-                title: "Quality check failed",
+                title: &title,
                 entity_kind: "check",
                 entity_id: check,
                 user_id: Some(r.get("owner_id")),

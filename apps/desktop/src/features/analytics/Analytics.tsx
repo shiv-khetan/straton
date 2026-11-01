@@ -85,14 +85,9 @@ function AnalyticsLibrary({
           {charts.isPending && <FeatureLoading label="Loading charts" />}
           <FeatureError error={charts.error} retry={() => void charts.refetch()} />
           {charts.data?.length === 0 && (
-            <FeatureEmpty
-              title="Turn a query into a chart"
-              action="New chart"
-              disabled={readOnly}
-              onAction={() => setEditing('new')}
-            >
+            <FeatureEmpty title="Turn a query into a chart">
               Map columns from a read-only SQL query, preview it, and add the saved chart to a
-              dashboard.
+              dashboard. Start with New chart above.
             </FeatureEmpty>
           )}
           {!!charts.data?.length && (

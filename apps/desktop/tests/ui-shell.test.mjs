@@ -80,3 +80,53 @@ for (const listed of [...Object.keys(reads), ...transient, ...mutations])
   assert.ok(methods.includes(listed), listed + ' is not an API client method');
 assert.ok('engineSettings' in reads && transient.has('explorerProfile'));
 console.log('Query cache: every client method is a read, transient call or mutation.');
+
+const { describeCron, nextCron } = await import('../src/features/schedules/cron-model.ts');
+for (const [cron, text] of [
+  ['0 */15 * * * *', 'Every 15 minutes'],
+  ['0 0 * * * *', 'Hourly'],
+  ['@hourly', 'Hourly'],
+  ['0 30 * * * *', 'Hourly at :30'],
+  ['0 0 */6 * * *', 'Every 6 hours'],
+  ['0 0 2 * * *', 'Daily at 02:00 UTC'],
+  ['0 30 9 * * MON-FRI', 'Weekdays at 09:30 UTC'],
+  ['0 30 9 * * 2-6', 'Weekdays at 09:30 UTC'],
+  // The engine numbers Sunday as 1: "1-5" is Sunday to Thursday, not weekdays.
+  ['0 30 9 * * 1-5', 'Sun, Mon, Tue, Wed, Thu at 09:30 UTC'],
+  ['0 0 0 * * 1', 'Weekly on Sunday at 00:00 UTC'],
+  ['0 0 0 1 * *', 'Monthly on day 1 at 00:00 UTC'],
+  ['*/30 * * * * *', 'Every 30 seconds'],
+  ['0 * * * * *', 'Every minute'],
+  ['0 0 9 * 1 *', null],
+  ['0 0 9 13 * 6', null],
+  ['not cron', null],
+]) {
+  assert.equal(describeCron(cron), text, cron);
+  if (text) assert.ok(nextCron(cron, new Date(Date.UTC(2026, 0, 1))), cron + ' is valid');
+}
+console.log('Cron: schedules are described in words using the engine dialect, or left as code.');
+
+const { failingJobs } = await import('../src/features/overview/attention-model.ts');
+const r = (job_id, state, available_at) => ({
+  id: job_id + available_at,
+  job_id,
+  state,
+  available_at,
+});
+const attention = failingJobs([
+  r('a', 'failed', 3),
+  r('a', 'failed', 2),
+  r('a', 'succeeded', 1), // failing twice in a row
+  r('b', 'failed', 1),
+  r('b', 'succeeded', 5), // recovered: not listed
+  r('c', 'failed', 4),
+  r('c', 'running', 9), // running run is not finished
+]);
+assert.deepEqual(
+  attention.map((x) => [x.run.job_id, x.streak]),
+  [
+    ['c', 1],
+    ['a', 2],
+  ],
+);
+console.log('Needs attention: one entry per still-failing job, with its failure streak.');

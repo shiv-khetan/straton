@@ -5443,6 +5443,8 @@ async fn phase3_activity_paging_notifications_per_user_and_failures() {
     let admin_id = rows[0]["id"].as_str().unwrap().to_owned();
     assert_eq!(rows.as_array().unwrap().len(), 1);
     assert_eq!(rows[0]["kind"], "run.failed");
+    // The title names the failed job; the error detail stays out of notifications.
+    assert_eq!(rows[0]["title"], "Test failed");
     assert!(!rows.to_string().contains("private failure"));
     assert_eq!(
         request(
@@ -5549,7 +5551,17 @@ async fn phase3_activity_paging_notifications_per_user_and_failures() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|n| n["kind"] == "backup.failed")
+            .any(|n| n["kind"] == "backup.failed" && n["title"] == "Backup failed")
+    );
+    // A failed backup is one notification, not a generic run failure plus a backup failure.
+    assert!(
+        !request(&a, "GET", "/v1/notifications", json!(null))
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["kind"] == "run.failed" && n["title"] == "Backup failed")
     );
     sqlx::query("DROP TRIGGER audit_log_no_update")
         .execute(&f.pool)

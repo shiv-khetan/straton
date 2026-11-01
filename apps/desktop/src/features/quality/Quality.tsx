@@ -152,14 +152,9 @@ export default function Quality({
       {checks.isPending && <FeatureLoading label="Loading quality checks" />}
       <FeatureError error={checks.error} retry={() => void checks.refetch()} />
       {checks.data?.length === 0 && (
-        <FeatureEmpty
-          title="Define what good data looks like"
-          action="New check"
-          disabled={readOnly}
-          onAction={() => setEditing('new')}
-        >
-          Start with a required column or a row count, then schedule checks or add them to a
-          pipeline.
+        <FeatureEmpty title="Define what good data looks like">
+          Start with a required column or a row count using New check above, then schedule checks or
+          add them to a pipeline.
         </FeatureEmpty>
       )}
       {!!checks.data?.length && (

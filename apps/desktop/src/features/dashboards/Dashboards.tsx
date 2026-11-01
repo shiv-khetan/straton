@@ -122,13 +122,9 @@ function DashboardLibrary({
           {list.isPending && <FeatureLoading label="Loading dashboards" />}
           <FeatureError error={list.error} retry={() => void list.refetch()} />
           {list.data?.length === 0 && (
-            <FeatureEmpty
-              title="Bring your charts together"
-              action="New dashboard"
-              disabled={readOnly}
-              onAction={() => setId('new')}
-            >
+            <FeatureEmpty title="Bring your charts together">
               Create a dashboard, choose charts from Analytics, and arrange their widths and order.
+              Start with New dashboard above.
             </FeatureEmpty>
           )}
           {!!list.data?.length && (

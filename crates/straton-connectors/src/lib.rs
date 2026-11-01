@@ -20,8 +20,76 @@ use straton_core::{
     Column, Connector, Dataset, DatasetSchema, Error, ReadOptions, Relationship, RelationshipKind,
     Result,
 };
-fn error(_: impl std::fmt::Display) -> Error {
-    Error::Connector("connector operation failed".into())
+/// Map a driver error to a fixed, user-actionable cause. The driver's own text is never
+/// included: it can carry hosts, usernames, connection strings or row values. Only the
+/// constant phrases below can reach the API, run history and logs.
+fn error(e: impl std::fmt::Display) -> Error {
+    Error::Connector(classify(&e.to_string().to_lowercase()).into())
+}
+pub(crate) fn classify(text: &str) -> &'static str {
+    let any = |needles: &[&str]| needles.iter().any(|n| text.contains(n));
+    if any(&["database is locked", "database table is locked"]) {
+        "the source database is locked by another process; retry when it is free"
+    } else if any(&[
+        "password authentication failed",
+        "authentication failed",
+        "access denied for user",
+        "login failed",
+        "invalid_grant",
+        "invalid_client",
+        "unauthorized",
+        "invalid api key",
+        "bad credentials",
+    ]) {
+        "authentication was rejected; update the source's secret"
+    } else if any(&[
+        "no such file",
+        "unable to open database file",
+        "os error 2)",
+        "cannot find the path",
+        "cannot find the file",
+    ]) {
+        "the source file or directory was not found; check the path"
+    } else if any(&[
+        "permission denied",
+        "access is denied",
+        "os error 13)",
+        "insufficient privilege",
+        "permission was denied",
+    ]) {
+        "permission denied; grant the engine read access to the source"
+    } else if any(&[
+        "no such table",
+        "no such column",
+        "does not exist",
+        "doesn't exist",
+        "unknown column",
+        "invalid object name",
+        "invalid column name",
+    ]) {
+        "a table or column was not found; run Discover to refresh the catalog"
+    } else if any(&["too many requests", "rate limit", "429"]) {
+        "the source is rate limiting requests; lower rate_limit_rps or retry later"
+    } else if any(&["certificate", "tls handshake", "ssl", "handshake failure"]) {
+        "the TLS connection could not be verified; check TLS settings and certificates"
+    } else if any(&["timed out", "timeout", "deadline has elapsed"]) {
+        "the source did not respond in time; check that it is reachable and not overloaded"
+    } else if any(&[
+        "connection refused",
+        "no route to host",
+        "network is unreachable",
+        "failed to lookup address",
+        "name or service not known",
+        "nodename nor servname",
+        "dns error",
+        "error connecting",
+        "connection reset",
+        "broken pipe",
+    ]) {
+        "could not reach the source host; check the host, port and network"
+    } else {
+        "connector operation failed"
+    }
 }
 fn invalid(message: &str) -> Error {
     Error::Invalid(message.into())

@@ -1,3 +1,4 @@
+import { CronText } from '@/features/schedules/CronText';
 import { Plus } from 'lucide-react';
 import { PageActions } from '@/components/workbench/primitives';
 import { useEffect, useState } from 'react';
@@ -284,7 +285,7 @@ function PipelineRow({
       </TableCell>
       <TableCell>{last?.started_at ? relativeTime(last.started_at * 1000) : '—'}</TableCell>
       <TableCell>
-        <code>{p.cron ?? 'Manual'}</code>
+        <CronText cron={p.cron} />
         {!p.enabled && <StatePill state="disabled" />}
       </TableCell>
     </TableRow>
@@ -319,9 +320,12 @@ function PipelineList({
           </Button>
         </PageActions>
       </div>
-      <Field label="Search pipelines by name">
-        <Input type="search" value={search} onChange={(event) => setSearch(event.target.value)} />
-      </Field>
+      {/* Search only once there is something to search. */}
+      {!!pipelines.data?.length && (
+        <Field label="Search pipelines by name">
+          <Input type="search" value={search} onChange={(event) => setSearch(event.target.value)} />
+        </Field>
+      )}
       {!!pipelines.data?.length && (
         <p role="status" className="text-caption text-ink-2">
           {visible.length} of {pipelines.data.length} pipelines
@@ -341,13 +345,9 @@ function PipelineList({
         <FeatureError error={pipelines.error} retry={() => void pipelines.refetch()} />
       )}
       {pipelines.data?.length === 0 && (
-        <FeatureEmpty
-          title="Build your first pipeline"
-          action="New pipeline"
-          disabled={readOnly}
-          onAction={onNew}
-        >
-          Connect existing jobs, models and checks in the order they should run.
+        <FeatureEmpty title="Build your first pipeline">
+          Connect existing jobs, models and checks in the order they should run. Start with New
+          pipeline above.
         </FeatureEmpty>
       )}
       {!!pipelines.data?.length && (
@@ -357,7 +357,7 @@ function PipelineList({
               <TableHead>Pipeline</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Last run</TableHead>
-              <TableHead>Schedule (UTC)</TableHead>
+              <TableHead>Schedule</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
