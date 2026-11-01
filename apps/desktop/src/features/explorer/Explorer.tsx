@@ -14,7 +14,7 @@ import {
   PanelLeft,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Api, Dataset, ExplorerFilter, FilterOp } from '@/lib/api';
+import type { Api, Dataset, ExplorerFilter, FilterOp, ProfileRequest, SqlCell } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -108,6 +108,70 @@ function FilterBar({
         ))}
       </div>
     </div>
+  );
+}
+const formatCell = (value: SqlCell) =>
+  value === null ? '—' : typeof value === 'number' ? value.toLocaleString() : String(value);
+/** On-demand column profile for the rows currently in view (same filters and policies). */
+function ProfilePanel({
+  client,
+  scope,
+  request,
+}: {
+  client: Api;
+  scope: string;
+  request: ProfileRequest;
+}) {
+  const [requested, setRequested] = useState(false);
+  const profile = useQuery({
+    queryKey: ['engine', 'explorer', 'profile', scope, request],
+    queryFn: () => client.explorerProfile(request),
+    enabled: requested,
+    staleTime: 30_000,
+  });
+  return (
+    <section className="table-profile" aria-label="Column profile">
+      <h3>Profile</h3>
+      {!requested ? (
+        <Button variant="outline" size="sm" onClick={() => setRequested(true)}>
+          Profile columns
+        </Button>
+      ) : profile.isPending ? (
+        <p className="hint">Profiling…</p>
+      ) : profile.isError ? (
+        <p role="alert" className="hint">
+          {profile.error instanceof Error ? profile.error.message : 'Profile failed'}
+        </p>
+      ) : (
+        <table className="profile-table">
+          <caption className="hint">
+            {profile.data.rows.toLocaleString()} rows matching current filters
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Column</th>
+              <th scope="col">Null %</th>
+              <th scope="col">Distinct ≈</th>
+              <th scope="col">Min</th>
+              <th scope="col">Max</th>
+            </tr>
+          </thead>
+          <tbody>
+            {profile.data.columns.map((c) => (
+              <tr key={c.name}>
+                <th scope="row">
+                  <code>{c.name}</code>
+                </th>
+                <td>{(c.null_ratio * 100).toFixed(1)}</td>
+                <td>{c.approx_distinct === null ? '—' : c.approx_distinct.toLocaleString()}</td>
+                <td title={formatCell(c.min)}>{formatCell(c.min)}</td>
+                <td title={formatCell(c.max)}>{formatCell(c.max)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }
 function TableView({
@@ -360,6 +424,16 @@ function TableView({
                   may vary outside this sample.
                 </p>
               )}
+              <ProfilePanel
+                client={client}
+                scope={scope}
+                request={{
+                  schema: request.schema,
+                  table: request.table,
+                  filters: request.filters,
+                  search: request.search,
+                }}
+              />
               <h3>Columns</h3>
               {table.columns.map((c) => (
                 <div key={c.name} className="metadata-column">

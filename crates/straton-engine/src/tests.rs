@@ -6307,3 +6307,166 @@ async fn mysql_view_fallback_and_mongo_sample_metadata() {
 
 #[path = "column_view_tests.rs"]
 mod column_view_tests;
+
+#[tokio::test]
+async fn scoped_source_admins_cannot_repoint_sources_and_engine_files_are_off_limits() {
+    let f = Fixture::new().await;
+    let a = app(&f);
+    let outside = std::env::temp_dir().join(format!("straton-outside-{}.db", store::id()));
+    let state_db = f.dir.join("state.db");
+    // Even a global admin cannot point a file source at the engine's own state.
+    for path in [
+        state_db.to_string_lossy().into_owned(),
+        f.dir.join("backups/x.db").to_string_lossy().into_owned(),
+        f.dir.join("sub/../state.db").to_string_lossy().into_owned(),
+    ] {
+        let (s, r) = request(
+            &a,
+            "POST",
+            "/v1/sources",
+            json!({"name":"Engine","kind":"sqlite","config":{"path":path}}),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{path}: {r}");
+    }
+    let (s, src) = request(
+        &a,
+        "POST",
+        "/v1/sources",
+        json!({"name":"App","kind":"sqlite","config":{"path":outside.to_string_lossy()}}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{src}");
+    let id = src["id"].as_str().unwrap().to_owned();
+    let role = access_role(&a, "owner").await;
+    access_grant(&a, &role, "source", &id, "admin").await;
+    let (_, token) = access_user(&a, "owner", &[&role]).await;
+    let path = format!("/v1/sources/{id}");
+    // Repointing the connection (or changing its kind) needs a global admin.
+    for body in [
+        json!({"name":"App","kind":"sqlite","config":{"path":"/tmp/elsewhere.db"}}),
+        json!({"name":"App","kind":"csv","config":{"path":outside.to_string_lossy()}}),
+    ] {
+        let (s, r) = request_as(&a, &token, "PUT", &path, body).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{r}");
+    }
+    // Renaming and tuning stay available to the scoped owner.
+    let (s, r) = request_as(
+        &a,
+        &token,
+        "PUT",
+        &path,
+        json!({"name":"Renamed","kind":"sqlite","config":{"path":outside.to_string_lossy(),"batch_size":500}}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["name"], "Renamed");
+    // A global admin can still repoint it.
+    let (s, r) = request(
+        &a,
+        "PUT",
+        &path,
+        json!({"name":"Renamed","kind":"sqlite","config":{"path":"/tmp/elsewhere.db"}}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    f.close().await;
+}
+
+#[tokio::test]
+async fn explorer_profile_summarises_columns_and_export_is_capped() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let body = json!({"schema":"app_db","table":"users"});
+    let (s, v) = request(&a, "POST", "/v1/explorer/profile", body.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], 2);
+    let id = v["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "id")
+        .unwrap();
+    assert_eq!(id["nulls"], 0);
+    assert_eq!(id["non_null"], 2);
+    assert_eq!(id["approx_distinct"], 2);
+    assert_eq!(id["min"], 1);
+    assert_eq!(id["max"], 2);
+    let name = v["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "name")
+        .unwrap();
+    assert_eq!(name["min"], "Alice");
+    assert_eq!(name["max"], "Bob");
+    // Filters narrow the profile exactly like /rows.
+    let (s, v) = request(
+        &a,
+        "POST",
+        "/v1/explorer/profile",
+        json!({"schema":"app_db","table":"users","columns":["id"],"filters":[{"column":"id","op":"gt","value":"1"}]}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], 1);
+    assert_eq!(v["columns"].as_array().unwrap().len(), 1);
+    for patch in [
+        json!({"limit":10}),
+        json!({"sort":[{"column":"id","dir":"asc"}]}),
+        json!({"table":"missing"}),
+        json!({"columns":["missing"]}),
+    ] {
+        let mut q = body.clone();
+        q.as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        let (s, v) = request(&a, "POST", "/v1/explorer/profile", q).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{patch}: {v}");
+    }
+    let mut q = explorer_body();
+    q["format"] = json!("csv");
+    q["max_rows"] = json!(1_000_001);
+    assert_eq!(
+        request(&a, "POST", "/v1/explorer/export", q).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let audited: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action='explorer.profile'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(audited, 2);
+    drop(a);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn responses_carry_security_headers_including_errors() {
+    let f = Fixture::new().await;
+    let a = app(&f);
+    for (uri, token) in [
+        ("/health", None),
+        ("/v1/status", Some("good-token")),
+        ("/v1/status", Some("bad")),
+    ] {
+        let mut req = Request::builder().uri(uri);
+        if let Some(t) = token {
+            req = req.header("authorization", format!("Bearer {t}"));
+        }
+        let res = a
+            .clone()
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let h = res.headers();
+        assert_eq!(h["cache-control"], "no-store", "{uri}");
+        assert_eq!(h["x-content-type-options"], "nosniff");
+        assert_eq!(h["x-frame-options"], "DENY");
+        assert_eq!(h["referrer-policy"], "no-referrer");
+        assert!(h.contains_key("content-security-policy"));
+    }
+    drop(a);
+    f.close().await;
+}

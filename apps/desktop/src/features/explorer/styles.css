@@ -166,6 +166,37 @@
     margin: 0 0 20px;
     overflow-wrap: anywhere;
   }
+  .table-profile {
+    margin-bottom: 20px;
+  }
+  .profile-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: var(--body-sm);
+  }
+  .profile-table caption {
+    text-align: left;
+    caption-side: top;
+    padding-bottom: 6px;
+  }
+  .profile-table th,
+  .profile-table td {
+    padding: 4px 4px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .profile-table thead th {
+    color: var(--ink-2);
+    font-weight: 500;
+  }
+  .profile-table td:nth-child(2),
+  .profile-table td:nth-child(3) {
+    font-variant-numeric: tabular-nums;
+  }
   .metadata-column {
     display: flex;
     gap: 8px;

@@ -61,6 +61,26 @@ export interface ExplorerTree {
     schemas: { name: string; tables: Dataset[] }[];
   }[];
 }
+export interface ColumnProfile {
+  name: string;
+  type: string;
+  non_null: number;
+  nulls: number;
+  null_ratio: number;
+  approx_distinct: number | null;
+  min: SqlCell;
+  max: SqlCell;
+}
+export interface TableProfile {
+  schema: string;
+  table: string;
+  rows: number;
+  columns: ColumnProfile[];
+}
+export type ProfileRequest = Pick<
+  ExplorerRequest,
+  'schema' | 'table' | 'columns' | 'filters' | 'search'
+>;
 export interface SavedQuery {
   id: string;
   owner_id: string;
@@ -705,6 +725,8 @@ export function api(connection: Connection) {
     explorerTree: () => request<ExplorerTree>('/v1/explorer/tree'),
     explorerRows: (body: ExplorerRequest) =>
       request<ExplorerRows>('/v1/explorer/rows', 'POST', body),
+    explorerProfile: (body: ProfileRequest) =>
+      request<TableProfile>('/v1/explorer/profile', 'POST', body),
     explorerExport: (body: ExplorerRequest & { format: 'csv' | 'parquet'; max_rows?: number }) =>
       request<ArrayBuffer>('/v1/explorer/export', 'POST', body, true),
     storage: () => request<StorageUsage>('/v1/storage'),

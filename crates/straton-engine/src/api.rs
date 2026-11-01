@@ -85,7 +85,33 @@ pub fn router(app: App) -> Router {
         .route("/v1/events", get(events))
         .route_layer(middleware::from_fn_with_state(app.clone(), auth))
         .route("/health", get(|| async { Json(json!({"ok":true})) }))
+        .layer(middleware::map_response(security_headers))
         .with_state(app)
+}
+/// Defense-in-depth headers: the API serves JSON and file exports only, never pages,
+/// and responses can carry query results, so nothing may be cached, sniffed or framed.
+async fn security_headers(mut res: Response) -> Response {
+    use axum::http::{HeaderValue, header};
+    let h = res.headers_mut();
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    h.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'"),
+    );
+    h.insert(
+        "cross-origin-resource-policy",
+        HeaderValue::from_static("same-origin"),
+    );
+    res
 }
 async fn auth(State(app): State<App>, mut req: Request<axum::body::Body>, next: Next) -> Response {
     let supplied = req
@@ -324,6 +350,24 @@ async fn save_source(
         }
     }
     catalog::path_component(&s.id).map_err(|_| bad("invalid source id"))?;
+    reject_engine_paths(&a, &s.config)?;
+    if update && !actor.admin() {
+        // A scoped source admin may rename or tune a source, but must not repoint it:
+        // a new host/path would send the stored secret elsewhere or read engine files.
+        let current = sqlx::query("SELECT kind,config FROM sources WHERE id=?")
+            .bind(&s.id)
+            .fetch_optional(&a.pool)
+            .await?
+            .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "not found".into()))?;
+        let old: Value = serde_json::from_str(current.get("config")).unwrap_or(json!({}));
+        if current.get::<&str, _>("kind") != kind
+            || LOCATION_FIELDS
+                .iter()
+                .any(|f| old.get(f) != s.config.get(f))
+        {
+            return Err(forbidden());
+        }
+    }
     let mut tx = a.pool.begin().await?;
     let query = if update {
         "UPDATE sources SET name=?2,kind=?3,credential_id=CASE WHEN ?3='sqlserver' AND json_extract(?5,'$.auth')='windows' THEN NULL ELSE COALESCE(?4,credential_id) END,config=?5 WHERE id=?1"
@@ -859,6 +903,83 @@ fn validate_config(kind: &str, config: &Value) -> ApiResult<()> {
     if kind != "external" {
         straton_connectors::build(kind, config, None)
             .map_err(|_| bad("invalid connector configuration"))?;
+    }
+    Ok(())
+}
+/// Config fields that decide where a connector connects, how the stored secret is
+/// protected in transit, which files it reads, or whether the engine may write to it.
+/// Only global admins may change them.
+const LOCATION_FIELDS: &[&str] = &[
+    "path",
+    "host",
+    "hosts",
+    "port",
+    "instance",
+    "database",
+    "username",
+    "auth",
+    "auth_source",
+    "replica_set",
+    "api_base",
+    "instance_url",
+    "login_url",
+    "client_id",
+    "sslmode",
+    "ssl_mode",
+    "tls",
+    "encrypt",
+    "trust_server_certificate",
+    "ca_cert_path",
+    "options",
+    "advisor_may_write",
+];
+/// File-based sources must never read the engine's own data directory
+/// (state.db, token file, key sidecars, encrypted snapshots, backups).
+fn reject_engine_paths(a: &App, config: &Value) -> ApiResult<()> {
+    let Some(path) = config.get("path").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let canonical = |p: &std::path::Path| {
+        // Resolve the longest existing ancestor so not-yet-created paths are still checked.
+        let mut existing = p.to_path_buf();
+        let mut rest = Vec::new();
+        while !existing.exists() {
+            match (existing.file_name(), existing.parent()) {
+                (Some(name), Some(parent)) => {
+                    rest.push(name.to_owned());
+                    existing = parent.to_path_buf();
+                }
+                _ => break,
+            }
+        }
+        let mut resolved = existing.canonicalize().unwrap_or(existing);
+        resolved.extend(rest.into_iter().rev());
+        resolved
+    };
+    let candidate = std::path::Path::new(path);
+    let candidate = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(anyhow::Error::from)?
+            .join(candidate)
+    };
+    let candidate = canonical(&candidate);
+    let config = a.backups.config();
+    for root in [&config.data_dir, &config.backup.dir] {
+        let root = if root.is_absolute() {
+            root.clone()
+        } else {
+            std::env::current_dir()
+                .map_err(anyhow::Error::from)?
+                .join(root)
+        };
+        let root = canonical(&root);
+        if candidate.starts_with(&root) {
+            return Err(bad(
+                "source path must not reference the engine data directory",
+            ));
+        }
     }
     Ok(())
 }
