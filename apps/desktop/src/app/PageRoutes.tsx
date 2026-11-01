@@ -165,6 +165,9 @@ export function PageRoutes(p: PageRoutesProps) {
       {ready && canPage(me, 'Sources') && page === 'Sources' && (
         <Sources
           sources={sources}
+          jobs={data.jobs}
+          runs={data.runs}
+          datasets={p.datasets}
           client={client}
           busy={p.busy}
           action={p.action}

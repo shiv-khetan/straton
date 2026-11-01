@@ -15,10 +15,22 @@
     background: #c42b1c;
   }
   .page-header {
-    @apply flex shrink-0 flex-wrap items-center justify-between gap-3 bg-surface px-6 pt-4 pb-3;
+    @apply flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line bg-surface px-6 pt-4 pb-3;
+  }
+  /* With a tab bar the pair shares one rule, drawn under the tabs. */
+  .page-header:has(+ .page-content .page-tabs) {
+    @apply border-b-transparent;
   }
   .page-header > div:first-child {
     @apply min-w-0;
+  }
+  /* Same height as the breadcrumb row it replaces on Overview and Connect. */
+  .page-header-meta {
+    min-height: 1.5rem;
+    @apply flex items-center overflow-hidden;
+  }
+  .page-header [data-slot='breadcrumb'] {
+    @apply flex min-h-6 items-center;
   }
   .page-header .field {
     @apply m-0 flex-row items-center gap-1.5;
@@ -42,14 +54,17 @@
     @apply truncate;
   }
   .page-content {
-    @apply min-h-0 min-w-0 flex-1 overflow-auto px-6 pt-1 pb-6;
+    @apply min-h-0 min-w-0 flex-1 overflow-auto px-6 pt-5 pb-6;
   }
   .page-content.workbench-page {
     @apply overflow-hidden p-0;
   }
   /* Page anatomy (components/workbench/page-layout.tsx): tab bar under the title, then body. */
+  /* The tab bar is part of the header chrome: same surface, no seam above it (the -mt-5
+     cancels .page-content's pt-5; -top-5 because sticky clamps to the content box), one
+     border below the pair, and the same 20px to the content as untabbed pages. */
   .page-tabs {
-    @apply sticky top-0 -mx-6 mb-5 flex items-center gap-4 border-b border-line bg-background px-6;
+    @apply sticky -top-5 -mx-6 -mt-5 mb-5 flex min-h-[2.375rem] items-center gap-4 border-b border-line bg-surface px-6;
     /* Above sticky table header cells, which share the page scroller. */
     z-index: calc(var(--z-sticky) + 1);
   }
@@ -60,7 +75,7 @@
     @apply flex shrink-0 items-center gap-3 text-caption text-ink-3;
   }
   .workbench-page .page-tabs {
-    @apply static mx-0 mb-0;
+    @apply static mx-0 mt-0 mb-0;
   }
   .section-header {
     @apply mb-3 flex min-h-8 items-center justify-between gap-4;
@@ -168,7 +183,7 @@
       @apply p-0;
     }
     .page-tabs {
-      @apply -mx-3 px-3;
+      @apply -top-3 -mx-3 -mt-3 mb-3 px-3;
     }
   }
 }

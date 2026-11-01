@@ -49,7 +49,24 @@ export function PageHeader({
   return (
     <header className="page-header">
       <div>
-        {navItemOf(page).route !== 'Dashboard' && page !== 'Connect' && (
+        {/* The row above the title is always present (breadcrumb, or engine telemetry on
+            Overview) so the title and actions never jump when switching pages. */}
+        {status && navItemOf(page).route === 'Dashboard' ? (
+          <div
+            className="page-header-meta flex flex-wrap gap-x-4 text-caption text-ink-3 tabular-nums"
+            aria-label="Engine telemetry"
+          >
+            <span>Queue {status.queue_depth}</span>
+            <span>Running {can(me, 'sync_admin') ? running : '—'}</span>
+            <span>
+              Up {Math.floor(status.uptime_seconds / 3600)} h{' '}
+              {Math.floor((status.uptime_seconds % 3600) / 60)} m
+            </span>
+            <span>Backup {relativeTime(backupTime(status.last_backup))}</span>
+          </div>
+        ) : navItemOf(page).route === 'Dashboard' || page === 'Connect' ? (
+          <div className="page-header-meta" aria-hidden="true" />
+        ) : (
           <Breadcrumb
             items={[
               sectionLabels[sectionOf(page).label],
@@ -78,20 +95,6 @@ export function PageHeader({
             <StatePill state={running ? 'running' : 'idle'} label={running + ' running'} />
           )}
         </div>
-        {status && navItemOf(page).route === 'Dashboard' && (
-          <div
-            className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-3 tabular-nums"
-            aria-label="Engine telemetry"
-          >
-            <span>Queue {status.queue_depth}</span>
-            <span>Running {can(me, 'sync_admin') ? running : '—'}</span>
-            <span>
-              Up {Math.floor(status.uptime_seconds / 3600)} h{' '}
-              {Math.floor((status.uptime_seconds % 3600) / 60)} m
-            </span>
-            <span>Backup {relativeTime(backupTime(status.last_backup))}</span>
-          </div>
-        )}
       </div>
       <div className="actions">
         <span id="page-actions" className="contents" />

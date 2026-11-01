@@ -107,7 +107,9 @@ async fn refresh(
     .fetch_one(&a.pool)
     .await?;
     if !supported {
-        return Err(bad("select a SQL Server or Postgres source"));
+        return Err(bad(
+            "select a Postgres, MySQL, SQL Server or MongoDB source",
+        ));
     }
     let result = advisor::refresh(&a.pool, &source).await?;
     changed(&a);

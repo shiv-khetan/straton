@@ -101,9 +101,11 @@ export function JobTable({
                     >
                       Run now
                     </Button>
+                    <Button variant="outline" onClick={() => onHistory(job.id)}>
+                      History
+                    </Button>
                     {!job.builtin && job.source_id && (
                       <RowMenu label={'More actions for ' + job.name}>
-                        {' '}
                         {!job.builtin && job.source_id && (
                           <Button
                             variant="outline"
@@ -132,9 +134,6 @@ export function JobTable({
                         )}
                       </RowMenu>
                     )}
-                    <Button variant="outline" onClick={() => onHistory(job.id)}>
-                      History
-                    </Button>
                   </div>
                 </TableCell>
               </TableRow>

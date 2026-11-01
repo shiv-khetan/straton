@@ -93,7 +93,7 @@ export function UsersTab({
                 <div className="actions">
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant="outline"
                     disabled={busy}
                     onClick={() => onTokens(u.id)}
                   >

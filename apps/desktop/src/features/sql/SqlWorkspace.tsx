@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { format } from 'sql-formatter';
-import { Play, Square, Plus, X, Save, Braces, PanelLeft } from 'lucide-react';
+import { Play, CircleStop, Plus, X, Save, Braces, PanelLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { monaco, autocomplete, editorTheme } from './monaco';
 import { useResolvedTheme } from '@/stores/theme';
@@ -344,7 +344,7 @@ export default function SqlView({
                   disabled={!running || running.explain}
                   onClick={() => void cancel()}
                 >
-                  <Square size={14} />
+                  <CircleStop size={14} />
                   Cancel
                 </Button>
                 <Button

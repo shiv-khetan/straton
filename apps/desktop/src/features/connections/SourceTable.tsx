@@ -2,7 +2,9 @@ import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { Button } from '@/components/ui/button';
 import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
 import type { Action } from '@/components/workbench/Field';
-import type { Api, Source } from '@/lib/api';
+import type { Api, Dataset, Job, Run, Source } from '@/lib/api';
+import { relativeTime } from '@/lib/view-model';
+import { lastSourceRun, sourceHealth } from './source-health';
 import { RowMenu, StatePill, Tray, Table as UiTable } from '@/components/workbench/primitives';
 import { sourceKinds } from './SourceFormSections';
 
@@ -14,8 +16,14 @@ export function SourceTable({
   busy,
   onEdit,
   onAddDataset,
+  jobs,
+  runs,
+  datasets,
 }: {
   sources: Source[];
+  jobs: Job[];
+  runs: Run[];
+  datasets: Dataset[];
   client: Api;
   action: Action;
   busy: boolean;
@@ -30,7 +38,10 @@ export function SourceTable({
             <TableHead scope="col">Name</TableHead>
             <TableHead scope="col">Kind</TableHead>
             <TableHead scope="col">Status</TableHead>
-            <TableHead scope="col">Actions</TableHead>
+            <TableHead scope="col">Last sync</TableHead>
+            <TableHead scope="col" className="text-end">
+              Actions
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -41,10 +52,24 @@ export function SourceTable({
                 <code>{source.kind}</code>
               </TableCell>
               <TableCell>
-                <StatePill state={source.kind === 'external' ? 'External' : 'Configured'} />
+                <StatePill
+                  state={
+                    source.kind === 'external'
+                      ? 'External'
+                      : ['parquet', 'models'].includes(source.kind)
+                        ? 'Built-in'
+                        : sourceHealth(source.id, jobs, runs, datasets)
+                  }
+                />
+              </TableCell>
+              <TableCell className="text-ink-2 tabular-nums">
+                {(() => {
+                  const last = lastSourceRun(source.id, jobs, runs);
+                  return last ? relativeTime(last.available_at * 1000) : '—';
+                })()}
               </TableCell>
               <TableCell>
-                <div className="actions row-actions">
+                <div className="actions row-actions justify-end">
                   {sourceKinds.includes(source.kind) && (
                     <>
                       <Button variant="outline" disabled={busy} onClick={() => onEdit(source)}>
@@ -78,7 +103,6 @@ export function SourceTable({
                     <RowMenu label={'More actions for ' + source.name}>
                       {!['external', 'parquet', 'models'].includes(source.kind) && (
                         <>
-                          {' '}
                           <Button
                             variant="outline"
                             disabled={busy}
@@ -95,7 +119,6 @@ export function SourceTable({
                       )}
                       {sourceKinds.includes(source.kind) && (
                         <>
-                          {' '}
                           <Button
                             variant="outline"
                             disabled={busy}

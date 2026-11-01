@@ -10,6 +10,7 @@ import { FeatureError, FeatureLoading } from '@/components/workbench/FeatureStat
 import { StatePill, Tray } from '@/components/workbench/primitives';
 import { relativeTime } from '@/lib/view-model';
 import { formatBytes } from './storage-model';
+import { lastSourceRun, sourceHealth } from '@/features/connections/source-health';
 import { offlineMessage } from '@/lib/offline-state';
 export function SourceHealth({
   sources,
@@ -72,20 +73,8 @@ export function SourceHealth({
         {sources
           .filter((s) => !['models', 'parquet'].includes(s.kind))
           .map((source) => {
-            const ids = new Set(jobs.filter((j) => j.source_id === source.id).map((j) => j.id));
-            const last = runs
-              .filter(
-                (r) =>
-                  ids.has(r.job_id) && ['succeeded', 'failed', 'interrupted'].includes(r.state),
-              )
-              .sort((a, b) => b.available_at - a.available_at)[0];
-            const synced = datasets.some((d) => d.source_id === source.id && d.last_synced_at);
-            const health =
-              checks[source.id]?.ok === false || (last && last.state !== 'succeeded')
-                ? 'Failing'
-                : last || synced || checks[source.id]?.ok
-                  ? 'Healthy'
-                  : 'Never synced';
+            const last = lastSourceRun(source.id, jobs, runs);
+            const health = sourceHealth(source.id, jobs, runs, datasets, checks[source.id]);
             return (
               <div className="overview-row" key={source.id}>
                 <span>
