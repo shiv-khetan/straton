@@ -1,0 +1,106 @@
+site_name: Straton
+site_description: Open-source, self-hosted data platform written in Rust.
+site_url: https://shiv-khetan.github.io/straton/
+repo_url: https://github.com/shiv-khetan/straton
+repo_name: straton
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; 2026 The Straton contributors · MIT License
+
+docs_dir: docs
+exclude_docs: |
+  hooks/
+  requirements.txt
+  assets/fonts/README.md
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  font: false
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+    - content.action.edit
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+extra_css:
+  - assets/extra.css
+
+hooks:
+  - docs/hooks/api_routes.py
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Guides:
+      - Sources and catalog: guides/sources.md
+      - SaaS connectors: guides/saas-connectors.md
+      - Incremental sync: guides/incremental-sync.md
+      - SQL endpoint: guides/sql.md
+      - SQL models: guides/models.md
+      - Access control: guides/access-control.md
+      - Desktop app: guides/desktop.md
+  - Operations:
+      - Configuration: operations/configuration.md
+      - Deployment: operations/deployment.md
+  - Security:
+      - Security policy: security/index.md
+      - Encryption, audit and supply chain: security/encryption.md
+  - Reference:
+      - HTTP API: reference/api.md
+  - Project:
+      - Vision and roadmap: project/roadmap.md
+      - Platform review (Nov 2026): project/review-2026-11.md
+      - Contributing: project/contributing.md
+      - Code of conduct: project/code-of-conduct.md
+      - Design system: project/design.md
+      - Changelog: project/changelog.md
