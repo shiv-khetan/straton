@@ -257,13 +257,13 @@ export function Tabs({
     <TabsRoot value={value} onValueChange={onChange} className="contents">
       <TabsList
         variant="line"
-        className="tabs h-auto w-full justify-start rounded-none bg-transparent p-0"
+        className="tabs h-auto w-full justify-start gap-4 rounded-none bg-transparent p-0"
         aria-label={id}
       >
         {items.map((item) => (
           <TabsTrigger
             key={item}
-            className="-mb-px h-auto flex-none rounded-none border-0 border-b-2 border-transparent px-0.5 pt-2 pb-1.5 font-normal after:hidden data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:font-medium data-[state=active]:text-ink data-[state=active]:shadow-none dark:data-[state=active]:border-primary dark:data-[state=active]:bg-transparent"
+            className="-mb-px h-auto flex-none rounded-none border-0 border-b-2 border-transparent px-0.5 pt-2 pb-1.5 text-body font-normal after:hidden data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:font-medium data-[state=active]:text-ink data-[state=active]:shadow-none dark:data-[state=active]:border-primary dark:data-[state=active]:bg-transparent"
             value={item}
             id={id + '-tab-' + item}
             aria-controls={id + '-panel-' + item}
@@ -505,11 +505,33 @@ export function Sparkline({
         ],
   );
   const hasData = series.some((n) => n !== null);
+  // No readings at all: keep the sparkline's footprint (a muted dashed baseline) so a tile
+  // without history lines up with its neighbours; the words stay in the label and tooltip.
+  if (!hasData)
+    return (
+      <svg
+        className="sparkline"
+        style={{ width, height }}
+        viewBox={'0 0 ' + width + ' ' + height}
+        role="img"
+        aria-label={label + ': no activity'}
+      >
+        <title>{label + ': No activity'}</title>
+        <line
+          x1="0"
+          x2={width}
+          y1={height - 2}
+          y2={height - 2}
+          stroke="var(--ink-3)"
+          strokeDasharray="2 3"
+        />
+      </svg>
+    );
   // A trend needs three readings; fewer is said in words rather than drawn as a stray mark.
   if (series.filter((n) => n !== null).length < minPoints)
     return (
       <span className="ms-auto self-center text-xs text-ink-3" role="img" aria-label={label}>
-        {hasData ? 'Not enough history' : 'No activity'}
+        Not enough history
       </span>
     );
   return (

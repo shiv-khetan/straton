@@ -317,7 +317,7 @@ export default function Models({
                 action={
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant="default"
                     disabled={readOnly}
                     onClick={() => edit(null)}
                   >

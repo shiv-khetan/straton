@@ -160,7 +160,7 @@ export default function Optimizer({
               <p className="empty">
                 {advisor.data?.sources.length
                   ? 'No recommendations in this view. Select a source and refresh to inspect its metadata and lake workload.'
-                  : 'Connect a SQL Server or Postgres source to receive recommendations.'}
+                  : 'Connect a Postgres, MySQL, SQL Server or MongoDB source to receive recommendations.'}
               </p>
             ) : (
               <>

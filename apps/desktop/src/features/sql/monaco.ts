@@ -59,13 +59,20 @@ export function autocomplete(tables: SqlTable[]) {
   });
 }
 export function editorTheme(dark: boolean) {
-  const css = getComputedStyle(document.documentElement);
+  // Tokens are `light-dark(...)` expressions. Canvas fillStyle cannot parse those (it keeps
+  // its default black), so let the browser resolve each token on a probe element that
+  // inherits the active color-scheme, then normalise the rgb() result through a canvas.
+  const probe = document.createElement('span');
+  probe.style.display = 'none';
+  document.body.append(probe);
+  const ctx = document.createElement('canvas').getContext('2d')!;
   const color = (name: string) => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 1;
-    canvas.height = 1;
-    const ctx = canvas.getContext('2d')!;
-    ctx.fillStyle = css.getPropertyValue(name).trim();
+    probe.style.color = '';
+    probe.style.color = 'var(' + name + ')';
+    const resolved = getComputedStyle(probe).color;
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillStyle = '#00000000';
+    ctx.fillStyle = resolved;
     ctx.fillRect(0, 0, 1, 1);
     return (
       '#' +
@@ -94,6 +101,7 @@ export function editorTheme(dark: boolean) {
       'editorWidget.border': color('--line'),
     },
   });
+  probe.remove();
   monaco.editor.setTheme(name);
   return name;
 }

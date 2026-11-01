@@ -5,7 +5,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Field } from '@/components/workbench/Field';
 import type { Action } from '@/components/workbench/Field';
-import type { Api, Source, SourceKind } from '@/lib/api';
+import type { Api, Dataset, Job, Run, Source, SourceKind } from '@/lib/api';
 import { Sheet } from '@/components/workbench/primitives';
 import { ManualDatasetSheet } from './ManualDatasetSheet';
 import {
@@ -25,6 +25,9 @@ import type { Config } from './SourceFormSections';
 import { SourceTable } from './SourceTable';
 export default function Sources({
   sources,
+  jobs,
+  runs,
+  datasets,
   client,
   action,
   busy,
@@ -32,6 +35,9 @@ export default function Sources({
   onClose,
 }: {
   sources: Source[];
+  jobs: Job[];
+  runs: Run[];
+  datasets: Dataset[];
   client: Api;
   action: Action;
   busy: boolean;
@@ -79,6 +85,9 @@ export default function Sources({
     <>
       <SourceTable
         sources={sources}
+        jobs={jobs}
+        runs={runs}
+        datasets={datasets}
         client={client}
         action={action}
         busy={busy}

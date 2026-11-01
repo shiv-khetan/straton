@@ -23,7 +23,7 @@ export function MapLegend({
 }) {
   const datasets = map.nodes.filter((d): d is Dataset => d.type === 'dataset');
   return (
-    <Panel position="top-left" className="map-legend">
+    <Panel position="bottom-left" className="map-legend">
       {legendStates.map((state) => (
         <Button
           variant="ghost"

@@ -1,7 +1,11 @@
 .optimizer-page {
   display: grid;
-  gap: 16px;
   min-width: 0;
+}
+/* 16px between blocks, but none after the first child (the shared tab bar), which already
+   keeps the standard 20px to the content. */
+.optimizer-page > * + * + * {
+  margin-top: 16px;
 }
 .optimizer-panel {
   display: grid;

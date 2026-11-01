@@ -231,9 +231,10 @@
     @apply text-center text-ink-2;
     font: var(--code-sm) var(--font-mono);
   }
+  /* Bottom-left, clear of the top-right tools and the bottom-right minimap. */
   .map-legend {
     @apply flex-nowrap whitespace-nowrap;
-    max-width: calc(100% - 300px);
+    max-width: calc(100% - 260px);
     @apply overflow-x-auto m-3;
   }
   .map-legend button {
