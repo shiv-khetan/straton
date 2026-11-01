@@ -29,7 +29,14 @@
   textarea {
     font: inherit;
   }
-  button {
+  /* Everything clickable shows the pointer (Tailwind v4 resets buttons to the default). */
+  button,
+  summary,
+  select,
+  [role='button'],
+  [role='tab'],
+  label:has(> input[type='checkbox']),
+  label:has(> input[type='radio']) {
     cursor: pointer;
   }
   button:disabled,
