@@ -27,6 +27,7 @@ export function canPage(me: Me | null, page: string): boolean {
       'Analytics',
       'Dashboards',
       'Data Quality',
+      'Settings',
     ].includes(page)
   )
     return me !== null;

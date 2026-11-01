@@ -91,6 +91,24 @@
   .page-content:not(.workbench-page) [data-slot='table-container']:not(.tray *, .card *) {
     @apply rounded-card border border-line bg-surface;
   }
+  /* Settings: label/value rows inside trays. */
+  /* One row per setting (overrides the global two-column dl grid). */
+  .settings-list {
+    @apply m-0 grid grid-cols-1 gap-0;
+  }
+  .settings-list > div {
+    @apply grid grid-cols-[minmax(10rem,14rem)_1fr] items-center gap-4 border-b border-line py-2.5 last:border-b-0;
+  }
+  .settings-warning {
+    @apply flex flex-wrap items-center gap-2 text-ink-2;
+  }
+  .settings-list dt {
+    @apply text-ink-2;
+  }
+  .settings-list dd {
+    @apply m-0 min-w-0;
+    overflow-wrap: anywhere;
+  }
   .page-intro {
     @apply mb-4 max-w-prose text-body text-ink-2;
   }

@@ -7,6 +7,9 @@ Type=simple
 User=straton
 Group=straton
 WorkingDirectory=/var/lib/straton
+# The Linux kernel keyring is in-memory only: without a secrets directory the KEK and
+# connector secrets are lost on reboot and encrypted data becomes unreadable.
+Environment=STRATON_SECRETS_DIR=/var/lib/straton/secrets
 ExecStart=/usr/local/bin/straton-engine run
 Restart=on-failure
 RestartSec=5

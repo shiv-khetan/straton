@@ -21,4 +21,5 @@ export const queryKeys = {
   roles: ['engine', 'roles'] as const,
   access: ['engine', 'access'] as const,
   keys: ['engine', 'keys'] as const,
+  settings: ['engine', 'settings'] as const,
 };

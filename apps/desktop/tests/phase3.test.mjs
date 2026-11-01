@@ -115,7 +115,8 @@ for (const type of ['pipeline_run', 'pipeline_node']) {
   assert.ok(keys.includes(queryKeys.activity));
 }
 assert.ok(eventQueryKeys({ type: 'notification' }).includes(queryKeys.notifications));
-assert.deepEqual(laterRoutes, ['Settings', 'Config as Code']);
+// Settings is a real page now; only Config as Code remains a placeholder.
+assert.deepEqual(laterRoutes, ['Config as Code']);
 console.log(
   'Phase 3: every cached read settles without recursion; previews stay transient; mutations/events invalidate; routes are live.',
 );

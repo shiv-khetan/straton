@@ -68,4 +68,4 @@ export const routeLabels: Record<Route, string> = {
   'Config as Code': 'Config as Code',
   Connect: 'Connect',
 };
-export const laterRoutes: readonly Route[] = ['Settings', 'Config as Code'];
+export const laterRoutes: readonly Route[] = ['Config as Code'];

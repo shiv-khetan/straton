@@ -24,7 +24,7 @@ Use the same verification command for the binary and other SBOMs, substituting t
 
 ## Encryption boundary and key recovery
 
-New snapshot and staging Parquet files use modular encryption with AES-GCM: the footer and every column share a dataset-specific 256-bit DEK. Local lake aliases reference the same encrypted physical snapshot. Model outputs have their own DEKs. Only wrapped DEKs are stored in state.db; wrapping uses ring AES-256-GCM with a fresh nonce and authenticated key/target identifiers. The KEK lives in the OS keychain under service straton, account kek. Key material is never returned through the API or written to logs.
+New snapshot and staging Parquet files use modular encryption with AES-GCM: the footer and every column share a dataset-specific 256-bit DEK. Local lake aliases reference the same encrypted physical snapshot. Model outputs have their own DEKs. Only wrapped DEKs are stored in state.db; wrapping uses ring AES-256-GCM with a fresh nonce and authenticated key/target identifiers. The KEK lives in the OS keychain under service straton, account kek, or in the secrets directory when one is configured (see below). Key material is never returned through the API or written to logs.
 
 [encryption] enabled defaults to true; STRATON_ENCRYPTION_ENABLED overrides it. Disabling encryption affects new runs only. Existing encrypted snapshots still require their keys; legacy snapshots without a _key sidecar remain readable. A recovered staging directory keeps its recorded key choice. A missing or invalid keychain KEK, unknown key id, or failed unwrap denies encrypted reads. Keep _key sidecars together with their snapshot directories.
 
@@ -33,6 +33,16 @@ New snapshot and staging Parquet files use modular encryption with AES-GCM: the 
 Admin key management is available under /v1/admin/keys and System → Backups → Security. KEK rotation re-wraps every DEK in one transaction. A pending KEK remains in the OS keychain across the commit/replacement window, so startup can finish a committed rotation; the old active entry is replaced only after commit. Dataset rotation waits until its active runs finish, retires its DEK, and allocates a new one for the next run. Cleanup retains retired keys while any snapshot or checkpoint references them.
 
 Database backups do not back up OS keychain secrets or Parquet files. Retain a protected, matching OS keychain backup when planning disaster recovery, including before KEK rotation: an older state.db backup may require the older KEK version. Losing the KEK makes its wrapped data irrecoverable. The restore command does not rewrite keys. mTLS is deferred; remote API and SQL connections require server TLS and bearer/user-token authentication.
+
+## Where secrets live (Linux: configure a secrets directory)
+
+By default connector secrets and the KEK go to the OS keychain: Windows Credential Manager, the macOS Keychain, and on Linux the kernel keyutils keyring. **The Linux kernel keyring is in-memory only and is cleared on reboot** (systemd services also get a fresh session keyring per start). An engine relying on it loses its KEK and connector secrets at the next reboot, and encrypted snapshots become unreadable.
+
+On Linux servers, containers and CI, set `[secrets] dir` (or `STRATON_SECRETS_DIR`). Each secret is then a separate file named by the hex of its account, created with owner-only permissions (0600 in a 0700 directory on Unix; an owner-only ACL on Windows) and replaced atomically (temp file, fsync, rename, directory fsync). Keep the directory outside `data_dir`, on encrypted storage where possible, and back it up separately from database backups: together they unlock encrypted snapshots. The engine logs a warning at startup when it would use the kernel keyring, and Settings shows the active store.
+
+With encryption disabled the engine never creates a KEK. If a KEK recorded earlier is unavailable, startup continues and only reads of previously encrypted snapshots are denied.
+
+To move an existing Linux engine to a secrets directory while the KEK is still in the kernel keyring (before rebooting), read each entry with `keyctl` and write it as `<hex(account)>.secret` (accounts: `kek`, `kek.pending` if present, and each source id); then set the directory and restart.
 
 ## Audit integrity
 

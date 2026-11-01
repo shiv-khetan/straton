@@ -169,33 +169,20 @@
   .table-profile {
     margin-bottom: 20px;
   }
-  .profile-table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-    font-size: var(--body-sm);
+  .profile-list ul {
+    @apply m-0 grid list-none gap-0 p-0;
   }
-  .profile-table caption {
-    text-align: left;
-    caption-side: top;
-    padding-bottom: 6px;
+  .profile-list li {
+    @apply grid min-w-0 gap-0.5 border-b border-line py-2 last:border-b-0;
   }
-  .profile-table th,
-  .profile-table td {
-    padding: 4px 4px;
-    border-bottom: 1px solid var(--line);
-    text-align: left;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .profile-name {
+    @apply truncate font-medium text-ink;
   }
-  .profile-table thead th {
-    color: var(--ink-2);
-    font-weight: 500;
+  .profile-stats {
+    @apply flex flex-wrap gap-x-3 text-caption text-ink-2 tabular-nums;
   }
-  .profile-table td:nth-child(2),
-  .profile-table td:nth-child(3) {
-    font-variant-numeric: tabular-nums;
+  .profile-range {
+    @apply truncate text-caption text-ink-3 tabular-nums;
   }
   .metadata-column {
     display: flex;

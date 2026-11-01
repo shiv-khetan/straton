@@ -127,6 +127,24 @@ async fn load_kek(pool: &SqlitePool) -> Result<Kek> {
     }
     anyhow::bail!("KEK missing or version mismatch in OS keychain; encrypted data is unavailable")
 }
+/// Engine startup. With encryption off the keychain is only needed to read snapshots that
+/// were encrypted earlier: never create a KEK then, and a missing KEK denies those reads
+/// instead of stopping the whole engine.
+pub async fn startup(pool: &SqlitePool, encryption_enabled: bool) -> Result<()> {
+    if encryption_enabled {
+        return initialize(pool).await;
+    }
+    let version: i64 = sqlx::query_scalar("SELECT kek_version FROM security_state WHERE id=1")
+        .fetch_one(pool)
+        .await?;
+    if version != 0 {
+        let _guard = GATE.write().await;
+        if let Err(e) = load_kek(pool).await {
+            tracing::warn!(error=%e, "encryption is disabled and the KEK is unavailable; existing encrypted snapshots cannot be read");
+        }
+    }
+    Ok(())
+}
 pub async fn initialize(pool: &SqlitePool) -> Result<()> {
     let _guard = GATE.write().await;
     let version: i64 = sqlx::query_scalar("SELECT kek_version FROM security_state WHERE id=1")

@@ -6,6 +6,35 @@ pub(super) fn routes() -> Router<App> {
         .route("/v1/admin/keys/rotate-kek", post(rotate_kek))
         .route("/v1/admin/keys/rotate/{target}", post(rotate_dataset))
         .route("/v1/audit/verify", get(verify))
+        .route("/v1/admin/settings", get(settings))
+}
+/// Effective engine configuration for the Settings page. Admin only. Never includes secrets,
+/// the token file, or TLS certificate/key paths: only whether TLS is configured.
+async fn settings(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+) -> ApiResult<Json<Value>> {
+    admin(&p)?;
+    let c = a.backups.config();
+    Ok(Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "bind": c.bind.to_string(),
+        "tls": c.tls_cert.is_some() && c.tls_key.is_some(),
+        "data_dir": c.data_dir.display().to_string(),
+        "max_concurrent_runs": c.max_concurrent_runs,
+        "max_attempts": c.max_attempts,
+        "backup": {"cron": c.backup.cron, "dir": c.backup.dir.display().to_string(), "keep": c.backup.keep},
+        "sql": {
+            "enabled": c.sql.enabled,
+            "bind": c.sql.bind.to_string(),
+            "query_timeout_secs": c.sql.query_timeout_secs,
+            "max_rows": c.sql.max_rows,
+            "memory_limit_mb": c.sql.memory_limit_mb,
+        },
+        "encryption": {"enabled": c.encryption.enabled},
+        "network": {"allow_private": c.network.allow_private},
+        "secret_store": crate::credentials::store_kind(),
+    })))
 }
 fn admin(p: &Principal) -> ApiResult<()> {
     if p.admin() { Ok(()) } else { Err(forbidden()) }

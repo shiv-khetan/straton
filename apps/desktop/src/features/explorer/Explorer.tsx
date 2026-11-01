@@ -27,6 +27,7 @@ import { ResultGrid, TypeIcon } from '@/components/workbench/ResultGrid';
 import { Skeleton } from '@/features/console/ConsoleDrawer';
 import { explorerRequest, filterOps, parseFilter } from './explorer-model';
 import { tableReference } from '@/features/sql/sql-model';
+import { relativeTime } from '@/lib/view-model';
 import { Inspector, PageActions } from '@/components/workbench/primitives';
 import { offlineMessage } from '@/lib/offline-state';
 function FilterBar({
@@ -143,33 +144,30 @@ function ProfilePanel({
           {profile.error instanceof Error ? profile.error.message : 'Profile failed'}
         </p>
       ) : (
-        <table className="profile-table">
-          <caption className="hint">
-            {profile.data.rows.toLocaleString()} rows matching current filters
-          </caption>
-          <thead>
-            <tr>
-              <th scope="col">Column</th>
-              <th scope="col">Null %</th>
-              <th scope="col">Distinct ≈</th>
-              <th scope="col">Min</th>
-              <th scope="col">Max</th>
-            </tr>
-          </thead>
-          <tbody>
+        <div className="profile-list">
+          <p className="hint">{profile.data.rows.toLocaleString()} rows matching current filters</p>
+          <ul>
             {profile.data.columns.map((c) => (
-              <tr key={c.name}>
-                <th scope="row">
-                  <code>{c.name}</code>
-                </th>
-                <td>{(c.null_ratio * 100).toFixed(1)}</td>
-                <td>{c.approx_distinct === null ? '—' : c.approx_distinct.toLocaleString()}</td>
-                <td title={formatCell(c.min)}>{formatCell(c.min)}</td>
-                <td title={formatCell(c.max)}>{formatCell(c.max)}</td>
-              </tr>
+              <li key={c.name}>
+                <code className="profile-name">{c.name}</code>
+                <span className="profile-stats">
+                  <span>{(c.null_ratio * 100).toFixed(1)}% null</span>
+                  {c.approx_distinct !== null && (
+                    <span>≈ {c.approx_distinct.toLocaleString()} distinct</span>
+                  )}
+                </span>
+                {(c.min !== null || c.max !== null) && (
+                  <span
+                    className="profile-range"
+                    title={formatCell(c.min) + ' – ' + formatCell(c.max)}
+                  >
+                    {formatCell(c.min)} – {formatCell(c.max)}
+                  </span>
+                )}
+              </li>
             ))}
-          </tbody>
-        </table>
+          </ul>
+        </div>
       )}
     </section>
   );
@@ -409,8 +407,8 @@ function TableView({
                   </code>
                 </dd>
                 <dt>Last sync</dt>
-                <dd>
-                  <code>{table.last_synced_at ?? 'Never synced'}</code>
+                <dd title={table.last_synced_at ?? undefined}>
+                  {table.last_synced_at ? relativeTime(table.last_synced_at) : 'Never synced'}
                 </dd>
                 <dt>Policies</dt>
                 <dd>

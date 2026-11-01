@@ -52,13 +52,13 @@ pub fn token(dir: &Path) -> Result<SecretString> {
     }
 }
 #[cfg(unix)]
-fn restrict(file: &File, _path: &Path) -> Result<()> {
+pub(crate) fn restrict(file: &File, _path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     Ok(())
 }
 #[cfg(windows)]
-fn restrict(_file: &File, path: &Path) -> Result<()> {
+pub(crate) fn restrict(_file: &File, path: &Path) -> Result<()> {
     use std::{
         io,
         mem::size_of,
