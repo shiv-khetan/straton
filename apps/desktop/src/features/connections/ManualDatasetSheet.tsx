@@ -1,3 +1,4 @@
+import { Checkbox } from '@/components/ui/checkbox';
 import { useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -63,23 +64,21 @@ export function ManualDatasetSheet({
               />
             </Field>
             <label>
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={column.nullable}
-                onChange={(e) =>
+                onCheckedChange={(checked) =>
                   setColumns(
-                    columns.map((c, j) => (j === i ? { ...c, nullable: e.target.checked } : c)),
+                    columns.map((c, j) => (j === i ? { ...c, nullable: checked === true } : c)),
                   )
                 }
               />{' '}
               Nullable
             </label>
             <label>
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={column.pk}
-                onChange={(e) =>
-                  setColumns(columns.map((c, j) => (j === i ? { ...c, pk: e.target.checked } : c)))
+                onCheckedChange={(checked) =>
+                  setColumns(columns.map((c, j) => (j === i ? { ...c, pk: checked === true } : c)))
                 }
               />{' '}
               PK

@@ -33,7 +33,7 @@ export const navigation: { label: NavGroup; items: NavItem[] }[] = [
         members: ['Pipelines', 'Jobs', 'Schedules'],
       },
       { route: 'Models', icon: 'model' },
-      { route: 'Optimizer', icon: 'settings' },
+      { route: 'Optimizer', icon: 'optimizer' },
     ],
   },
   {

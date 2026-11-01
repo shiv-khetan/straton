@@ -30,6 +30,14 @@ export function SourceTable({
   onEdit: (source: Source) => void;
   onAddDataset: (sourceId: string) => void;
 }) {
+  const health = (source: Source) =>
+    source.kind === 'external'
+      ? 'External'
+      : ['parquet', 'models'].includes(source.kind)
+        ? 'Built-in'
+        : sourceHealth(source.id, jobs, runs, datasets);
+  const check = (source: Source) =>
+    void action(() => client.checkSource(source.id), 'Connection check passed');
   return (
     <Tray title="Connected systems">
       <UiTable label="Sources">
@@ -52,15 +60,15 @@ export function SourceTable({
                 <code>{source.kind}</code>
               </TableCell>
               <TableCell>
-                <StatePill
-                  state={
-                    source.kind === 'external'
-                      ? 'External'
-                      : ['parquet', 'models'].includes(source.kind)
-                        ? 'Built-in'
-                        : sourceHealth(source.id, jobs, runs, datasets)
-                  }
-                />
+                <StatePill state={health(source)} />
+                {health(source) === 'Failing' && lastSourceRun(source.id, jobs, runs)?.error && (
+                  <small
+                    className="source-error"
+                    title={lastSourceRun(source.id, jobs, runs)!.error!}
+                  >
+                    {lastSourceRun(source.id, jobs, runs)!.error}
+                  </small>
+                )}
               </TableCell>
               <TableCell className="text-ink-2 tabular-nums">
                 {(() => {
@@ -70,6 +78,11 @@ export function SourceTable({
               </TableCell>
               <TableCell>
                 <div className="actions row-actions justify-end">
+                  {health(source) === 'Failing' && (
+                    <Button variant="outline" disabled={busy} onClick={() => check(source)}>
+                      Check
+                    </Button>
+                  )}
                   {sourceKinds.includes(source.kind) && (
                     <>
                       <Button variant="outline" disabled={busy} onClick={() => onEdit(source)}>

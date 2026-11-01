@@ -1,3 +1,4 @@
+import { Checkbox } from '@/components/ui/checkbox';
 import type { ReactNode } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { X } from 'lucide-react';
@@ -184,7 +185,7 @@ export function SaveQueryForm({
         <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={200} required />
       </label>
       <label className="checkbox-label">
-        <input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} />
+        <Checkbox checked={shared} onCheckedChange={(checked) => setShared(checked === true)} />
         Share with readers
       </label>
       <div className="actions">

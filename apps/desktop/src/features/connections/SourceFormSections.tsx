@@ -1,3 +1,4 @@
+import { Checkbox } from '@/components/ui/checkbox';
 import { invoke } from '@tauri-apps/api/core';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -25,6 +26,11 @@ export const kindLabels: Record<string, string> = {
   mysql: 'MySQL / MariaDB',
   mongodb: 'MongoDB',
   postgres: 'Postgres / Neon',
+  sqlite: 'SQLite',
+  csv: 'CSV files',
+  stripe: 'Stripe',
+  salesforce: 'Salesforce',
+  external: 'External (manual datasets)',
 };
 const fields: Record<string, string[]> = {
   postgres: ['host', 'port', 'database', 'username', 'ca_cert_path', 'options', 'batch_size'],
@@ -82,19 +88,19 @@ export function SqlServerSecurity({
       <fieldset className="checklist">
         <legend>Connection security</legend>
         <label>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={config.encrypt !== false}
-            onChange={(e) => setConfig({ ...config, encrypt: e.target.checked })}
+            onCheckedChange={(checked) => setConfig({ ...config, encrypt: checked === true })}
           />
           Encrypt connection
         </label>
         <label>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={config.trust_server_certificate === true}
             aria-describedby="sqlserver-trust-help"
-            onChange={(e) => setConfig({ ...config, trust_server_certificate: e.target.checked })}
+            onCheckedChange={(checked) =>
+              setConfig({ ...config, trust_server_certificate: checked === true })
+            }
           />
           Trust server certificate
         </label>
@@ -158,13 +164,18 @@ export function DatabaseSsl({
         {kind === 'postgres' ? 'verify-full' : 'verify identity'} to verify the certificate and
         hostname. Preferred mode can fall back to an unencrypted connection.
       </p>
-      {['disable', 'disabled', 'prefer', 'preferred'].includes(sslMode) && (
-        <p role="status" className="message">
-          This mode allows data to travel unencrypted.
-        </p>
-      )}
+      {/* Only warn for remote hosts: an unencrypted loopback connection never leaves the
+          machine, and an empty form should not open with an alarm. */}
+      {['disable', 'disabled', 'prefer', 'preferred'].includes(sslMode) &&
+        typeof config.host === 'string' &&
+        config.host.trim() !== '' &&
+        !['localhost', '127.0.0.1', '::1'].includes(config.host.trim()) && (
+          <p role="status" className="message">
+            This mode allows data to travel unencrypted.
+          </p>
+        )}
       {['require', 'required'].includes(sslMode) && (
-        <p role="status" className="message">
+        <p role="status" className="message message-advice">
           Encryption is required; the server's identity is not verified.
         </p>
       )}
@@ -204,10 +215,9 @@ export function MongoFields({
       <fieldset className="checklist">
         <legend>Connection security</legend>
         <label>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={(config.tls as boolean | undefined) ?? mongoTlsDefault(config)}
-            onChange={(e) => setConfig({ ...config, tls: e.target.checked })}
+            onCheckedChange={(checked) => setConfig({ ...config, tls: checked === true })}
             aria-describedby="mongo-tls-help"
           />
           Encrypt connection (TLS)
@@ -243,11 +253,12 @@ export function AdvisorToggle({
     <fieldset className="checklist">
       <legend>Source advisor</legend>
       <label>
-        <input
-          type="checkbox"
+        <Checkbox
           checked={config.advisor_may_write === true}
           aria-describedby="advisor-write-warning"
-          onChange={(e) => setConfig({ ...config, advisor_may_write: e.target.checked })}
+          onCheckedChange={(checked) =>
+            setConfig({ ...config, advisor_may_write: checked === true })
+          }
         />
         Advisor may write
       </label>
@@ -335,15 +346,15 @@ export function StripeObjects({
         const chosen = (config.objects as string[] | undefined) ?? stripeObjects;
         return (
           <label key={o}>
-            <input
-              type="checkbox"
+            <Checkbox
               checked={chosen.includes(o)}
-              onChange={(e) =>
+              onCheckedChange={(checked) =>
                 setConfig({
                   ...config,
-                  objects: e.target.checked
-                    ? stripeObjects.filter((x) => x === o || chosen.includes(x))
-                    : chosen.filter((x) => x !== o),
+                  objects:
+                    checked === true
+                      ? stripeObjects.filter((x) => x === o || chosen.includes(x))
+                      : chosen.filter((x) => x !== o),
                 })
               }
             />

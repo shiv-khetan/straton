@@ -1,3 +1,4 @@
+import { Checkbox } from '@/components/ui/checkbox';
 import { CronField } from '@/features/schedules/CronField';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -229,11 +230,10 @@ function DefinitionForm({
         )}
       </div>
       <label>
-        <input
-          type="checkbox"
+        <Checkbox
           disabled={!editable || busy}
           checked={draft.optimize}
-          onChange={(e) => setDraft({ ...draft, optimize: e.target.checked })}
+          onCheckedChange={(checked) => setDraft({ ...draft, optimize: checked === true })}
         />{' '}
         Enable Straton optimizer rules
       </label>

@@ -140,5 +140,82 @@ assert.deepEqual(cronFeedback('0 */15 * * * *', t0), {
 assert.equal(cronFeedback('', t0), null);
 assert.equal(cronFeedback('* * *', t0).ok, false);
 assert.equal(cronFeedback('0 0 0 1 1 * 2020', t0).text, 'This schedule never runs again.');
-for (const p of cronPresets) assert.equal(cronFeedback(p.cron, t0).ok, true, p.label);
+for (const p of cronPresets.filter((x) => x.cron))
+  assert.equal(cronFeedback(p.cron, t0).ok, true, p.label);
 console.log('Cron field: presets are valid; feedback gives words and next run, or the reason.');
+
+// The window never scrolls: html/body are locked and the page scroller is a positioning
+// context, so absolutely positioned helpers (sr-only status text) cannot grow the document.
+const globalCss = readFileSync(new URL('../src/styles/global.css', import.meta.url), 'utf8');
+assert.match(globalCss, /html,\s*body\s*\{[^}]*overflow:\s*hidden/);
+assert.match(shell, /\.page-content \{[^}]*relative/);
+console.log('Frame: window is locked; only page content scrolls.');
+
+const { lastJobRun } = await import('../src/features/overview/attention-model.ts');
+const rr = (state, at) => ({ id: state + at, job_id: 'j', state, available_at: at });
+assert.equal(lastJobRun('j', []), null);
+assert.deepEqual(lastJobRun('j', [rr('failed', 3), rr('failed', 2), rr('succeeded', 1)]).streak, 2);
+assert.equal(lastJobRun('j', [rr('succeeded', 3), rr('failed', 2)]).streak, 0);
+assert.equal(lastJobRun('j', [rr('running', 9), rr('succeeded', 3)]).run.state, 'succeeded');
+console.log('Jobs: last run and failure streak per job.');
+
+const { normalizeCron } = await import('../src/features/schedules/cron-model.ts');
+assert.equal(normalizeCron('*/5 * * * *'), '0 */5 * * * *');
+assert.equal(normalizeCron('30 9 * * 1-5'), '0 30 9 * * 2-6', 'Mon-Fri in Unix cron is 2-6 here');
+assert.equal(normalizeCron('0 0 * * 0'), '0 0 0 * * 1', 'Sunday 0 becomes 1');
+assert.equal(normalizeCron('0 0 * * 7'), '0 0 0 * * 1', 'Sunday 7 becomes 1');
+assert.equal(normalizeCron('0 0 * * MON-FRI'), '0 0 0 * * MON-FRI');
+assert.equal(normalizeCron('0 0 * * 5-7'), null, 'ranges wrapping past Sunday are not guessed');
+assert.equal(normalizeCron('0 */5 * * * *'), null, 'six fields are left alone');
+assert.equal(normalizeCron('61 * * * *'), null);
+assert.equal(cronPresets[0].cron, '');
+console.log('Cron: 5-field input converts to the engine dialect; Manual preset clears.');
+
+const { explainSqlError } = await import('../src/features/sql/sql-error.ts');
+const cat = [
+  { schema: 'shop_db', name: 'orders', columns: [{ name: 'amount' }, { name: 'status' }] },
+  { schema: 'shop_db', name: 'customers', columns: [] },
+];
+let v = explainSqlError("Error during planning: table 'datafusion.shop_db.orderz' not found", cat);
+assert.equal(v.title, "Table shop_db.orderz doesn't exist");
+assert.equal(v.hint, 'Did you mean shop_db.orders?');
+assert.ok(!v.detail.includes('datafusion.'));
+v = explainSqlError('Schema error: No field named amout. Valid fields are orders.amount', cat);
+assert.equal(v.title, "Column amout doesn't exist");
+assert.equal(v.hint, 'Did you mean amount?');
+assert.equal(
+  explainSqlError("table 'x.zzzzzz' not found", cat).hint,
+  'Check the Catalog panel for available tables.',
+);
+assert.equal(explainSqlError('something odd').title, 'The query failed');
+console.log('SQL errors: headline, closest-name suggestion, engine prefix removed.');
+
+// Feature code uses the themed Checkbox, never a browser-default one.
+{
+  const { readdirSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const walk = (dir) =>
+    readdirSync(dir).flatMap((f) =>
+      statSync(join(dir, f)).isDirectory() ? walk(join(dir, f)) : [join(dir, f)],
+    );
+  const root = new URL('../src/features', import.meta.url).pathname;
+  const offenders = walk(root).filter(
+    (f) => f.endsWith('.tsx') && readFileSync(f, 'utf8').includes('type="checkbox"'),
+  );
+  assert.deepEqual(offenders, [], 'use components/ui/checkbox');
+  console.log('Controls: no native checkboxes in features.');
+}
+
+const { activityText, entityNames } = await import('../src/features/activity/activity-model.ts');
+assert.equal(activityText('run.running', 'run running'), 'Run started');
+assert.equal(activityText('quality.run', 'quality run: failed'), 'Quality run: failed');
+const names = entityNames({
+  runs: [{ id: 'r1', job_id: 'j1' }],
+  jobs: [{ id: 'j1', name: 'Sync orders' }],
+  sources: [],
+  datasets: [{ id: 'd', name: 'x/orders', display_name: 'Shop DB.orders' }],
+  models: [],
+});
+assert.equal(names.r1, 'Sync orders');
+assert.equal(names.d, 'Shop DB.orders');
+console.log('Activity: readable actions and entity names instead of ids.');

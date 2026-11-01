@@ -138,7 +138,8 @@ export function PageHeader({
         {onRefresh && (
           <Button type="button" variant="ghost" disabled={busy} onClick={onRefresh}>
             <Icon name="refresh" />
-            Refresh
+            {/* Icon-only on narrow windows; the label stays for assistive tech. */}
+            <span className="max-[1023px]:sr-only">Refresh</span>
           </Button>
         )}
       </div>

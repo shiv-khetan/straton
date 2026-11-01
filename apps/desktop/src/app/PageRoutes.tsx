@@ -1,3 +1,4 @@
+import { entityNames } from '@/features/activity/activity-model';
 import { lazy, Suspense } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { api } from '@/lib/api';
@@ -281,7 +282,19 @@ function OverviewPage(p: PageRoutesProps & { client: Api }) {
           {
             route: 'Activity',
             label: routeLabels.Activity,
-            content: <Activity client={client} me={me} />,
+            content: (
+              <Activity
+                client={client}
+                me={me}
+                names={entityNames({
+                  runs: p.data.runs,
+                  jobs: p.data.jobs,
+                  sources: p.data.sources,
+                  datasets: p.datasets,
+                  models: p.data.models,
+                })}
+              />
+            ),
           },
         ]}
       />

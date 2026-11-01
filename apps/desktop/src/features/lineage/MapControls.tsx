@@ -23,7 +23,7 @@ export function MapLegend({
 }) {
   const datasets = map.nodes.filter((d): d is Dataset => d.type === 'dataset');
   return (
-    <Panel position="bottom-left" className="map-legend">
+    <div className="map-legend" role="group" aria-label="Filter by dataset state">
       {legendStates.map((state) => (
         <Button
           variant="ghost"
@@ -35,7 +35,7 @@ export function MapLegend({
           <code>{datasets.filter((d) => datasetState(d, jobs, runs) === state).length}</code>
         </Button>
       ))}
-    </Panel>
+    </div>
   );
 }
 

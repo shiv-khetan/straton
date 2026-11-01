@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Minus, Square, Copy, X, Search, SquareTerminal } from 'lucide-react';
+import { Minus, Square, Copy, X, Search, SquareTerminal, Wifi, WifiOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -159,7 +159,12 @@ export function TitleBar({
         className="ms-auto flex shrink-0 items-center gap-1.5 px-1.5 text-caption text-ink-2"
         title={workspace + ' · ' + live}
       >
-        <span className={'size-1.5 rounded-full ' + (online ? 'bg-success' : 'bg-danger')} />
+        {/* Shape as well as colour: the word is hidden on narrow windows. */}
+        {online ? (
+          <Wifi size={14} className="text-success" aria-hidden="true" />
+        ) : (
+          <WifiOff size={14} className="text-danger" aria-hidden="true" />
+        )}
         <span className="max-[960px]:hidden">{live}</span>
         <span className="max-w-36 truncate font-mono text-ink-3 max-[1180px]:hidden">
           {workspace}

@@ -6,7 +6,6 @@ import {
   CommandList,
   CommandEmpty,
   CommandGroup,
-  CommandShortcut,
 } from '@/components/ui/command';
 import { Icon } from '@/components/workbench/Icon';
 import { rankCommands } from '@/features/console/workbench-model';
@@ -43,53 +42,66 @@ export function CommandPalette({
         value={query}
         onValueChange={setQuery}
       />
-      <CommandList>
+      <CommandList className="max-h-[60vh]">
         <CommandEmpty>No matches. Try a page or entity name.</CommandEmpty>
-        <CommandGroup heading="Workspace">
-          {matches.map((command) => (
-            <CommandItem
-              key={command.id}
-              value={
-                command.id +
-                ' ' +
-                command.label +
-                ' ' +
-                (command.detail ?? '') +
-                ' ' +
-                (command.keywords ?? '')
-              }
-              onSelect={() => {
-                onClose();
-                onSelect(command);
-              }}
-            >
-              <Icon
-                name={
-                  command.kind === 'dataset'
-                    ? 'table'
-                    : command.kind === 'model'
-                      ? 'model'
-                      : command.kind === 'job'
-                        ? 'jobs'
-                        : command.kind === 'source'
-                          ? 'source'
-                          : 'arrow'
+        {groupCommands(matches).map(([heading, items]) => (
+          <CommandGroup key={heading} heading={heading}>
+            {items.map((command) => (
+              <CommandItem
+                key={command.id}
+                value={
+                  command.id +
+                  ' ' +
+                  command.label +
+                  ' ' +
+                  (command.detail ?? '') +
+                  ' ' +
+                  (command.keywords ?? '')
                 }
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate">{command.label}</span>
-                <span className="block truncate text-caption text-muted-foreground">
-                  {command.detail ?? command.kind}
-                </span>
-              </span>
-              <CommandShortcut>↵</CommandShortcut>
-            </CommandItem>
-          ))}
-        </CommandGroup>
+                onSelect={() => {
+                  onClose();
+                  onSelect(command);
+                }}
+              >
+                <Icon name={iconOf(command)} />
+                <span className="min-w-0 flex-1 truncate">{command.label}</span>
+                {command.detail && (
+                  <span className="max-w-[45%] shrink truncate text-caption text-ink-3">
+                    {command.detail}
+                  </span>
+                )}
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        ))}
       </CommandList>
       <footer className="border-t border-line px-4 py-2 text-caption text-ink-3">
         ↑ ↓ to navigate · Enter to open · Esc to close
       </footer>
     </CommandDialog>
   );
+}
+
+const headings: Record<Command['kind'] | 'page', string> = {
+  page: 'Pages',
+  action: 'Actions',
+  dataset: 'Datasets',
+  model: 'Models',
+  job: 'Jobs',
+  source: 'Connections',
+};
+/** Ranked matches grouped by kind; groups appear in the order of their best match. */
+export function groupCommands(matches: Command[]): [string, Command[]][] {
+  const groups = new Map<string, Command[]>();
+  for (const command of matches) {
+    const heading = headings[command.id.startsWith('route:') ? 'page' : command.kind];
+    groups.set(heading, [...(groups.get(heading) ?? []), command]);
+  }
+  return [...groups];
+}
+function iconOf(command: Command) {
+  if (command.id.startsWith('route:')) return 'arrow' as const;
+  return (
+    { dataset: 'table', model: 'model', job: 'jobs', source: 'source', action: 'plus' } as const
+  )[command.kind];
 }

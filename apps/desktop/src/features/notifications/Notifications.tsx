@@ -67,7 +67,11 @@ export function Notifications({
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[420px] max-w-[calc(100vw-24px)] p-0">
+      <PopoverContent
+        align="end"
+        aria-label="Notifications"
+        className="w-[420px] max-w-[calc(100vw-24px)] p-0"
+      >
         <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-panel p-3">
           <h2 className="font-medium">Notifications</h2>
           <Button
@@ -115,7 +119,10 @@ export function Notifications({
           )}
           <ol className="divide-y divide-line">
             {list.data?.map((n) => (
-              <li key={n.id} className={'space-y-2 py-3 ' + (!n.read ? 'bg-primary-soft' : '')}>
+              <li
+                key={n.id}
+                className={'space-y-2 px-3 py-3 ' + (!n.read ? 'bg-primary-soft' : '')}
+              >
                 <div className="flex items-start gap-2">
                   <StatePill state={n.severity === 'warn' ? 'warning' : n.severity} />
                   <p className="min-w-0 flex-1 break-words font-medium">{n.title}</p>
@@ -123,7 +130,7 @@ export function Notifications({
                 </div>
                 {n.body && <p className="break-words text-caption text-ink-2">{n.body}</p>}
                 <div className="flex flex-wrap items-center gap-2">
-                  <time className="me-auto font-mono text-caption text-ink-2">
+                  <time className="me-auto text-caption text-ink-2 tabular-nums">
                     {relativeTime(n.created_at * 1000)}
                   </time>
                   {!n.read && (

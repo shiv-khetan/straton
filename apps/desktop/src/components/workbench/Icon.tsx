@@ -1,4 +1,5 @@
 import {
+  Gauge,
   Workflow,
   Copy,
   ChevronUp,
@@ -85,6 +86,7 @@ const icons = {
   dashboards: PanelsTopLeft,
   quality: ShieldCheck,
   settings: Settings,
+  optimizer: Gauge,
   config: FileCode2,
 };
 export type IconName = keyof typeof icons;

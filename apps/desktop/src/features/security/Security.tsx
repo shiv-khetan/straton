@@ -98,6 +98,13 @@ export default function Security({
       <p className="hint">
         Snapshot encryption covers Parquet data. Database metadata and backups remain plaintext.
       </p>
+      {status && !status.encryption_enabled && (
+        <p className="hint">
+          To encrypt new snapshots, set <code>[encryption] enabled = true</code> (or{' '}
+          <code>STRATON_ENCRYPTION_ENABLED=true</code>) and restart the engine. On Linux also set{' '}
+          <code>STRATON_SECRETS_DIR</code> so the key survives a reboot.
+        </p>
+      )}
       <div className="toolbar">
         <Button
           type="button"

@@ -187,6 +187,8 @@ export function describeCron(expression: string): string | null {
 
 /** Common schedules offered as one-click presets in schedule fields. */
 export const cronPresets: { label: string; cron: string }[] = [
+  { label: 'Manual', cron: '' },
+  { label: 'Every 5 min', cron: '0 */5 * * * *' },
   { label: 'Every 15 min', cron: '0 */15 * * * *' },
   { label: 'Hourly', cron: '0 0 * * * *' },
   { label: 'Daily 02:00', cron: '0 0 2 * * *' },
@@ -204,5 +206,38 @@ export function cronFeedback(expression: string, now = new Date()): CronFeedback
     return { ok: true, text: `${words} · next run ${at}` };
   } catch (e) {
     return { ok: false, text: e instanceof Error ? e.message : 'Invalid schedule.' };
+  }
+}
+
+/**
+ * Convert a standard 5-field cron (minute first, Sunday = 0 or 7) to the engine's dialect
+ * (seconds first, Sunday = 1). Returns null when the input is not a convertible 5-field
+ * expression, so callers leave it untouched.
+ */
+export function normalizeCron(expression: string): string | null {
+  const parts = expression.trim().split(/\s+/);
+  if (parts.length !== 5) return null;
+  const weekday = (token: string) => {
+    if (!/^\d+$/.test(token)) return token;
+    const n = Number(token);
+    if (n > 7) throw Error('weekday out of range');
+    return String((n % 7) + 1);
+  };
+  try {
+    const dow = parts[4]
+      .split(',')
+      .map((item) => {
+        const [base, step] = item.split('/');
+        const range = base.split('-').map(weekday);
+        if (range.length === 2 && /^\d+$/.test(range[0]) && Number(range[0]) > Number(range[1]))
+          throw Error('range wraps past Sunday');
+        return range.join('-') + (step ? '/' + step : '');
+      })
+      .join(',');
+    const result = ['0', ...parts.slice(0, 4), dow].join(' ');
+    nextCron(result);
+    return result;
+  } catch {
+    return null;
   }
 }

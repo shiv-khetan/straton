@@ -1,3 +1,4 @@
+import { Checkbox } from '@/components/ui/checkbox';
 import { useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
@@ -67,16 +68,15 @@ export function UsersTab({
                   <legend className="visually-hidden">Roles for {u.name}</legend>
                   {roles.map((r) => (
                     <label key={r.id}>
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         disabled={busy || u.id === 'admin'}
                         checked={u.role_ids.includes(r.id)}
-                        onChange={(e) =>
+                        onCheckedChange={(checked) =>
                           void work(
                             () =>
                               client.assignRoles(
                                 u.id,
-                                e.target.checked
+                                checked === true
                                   ? [...u.role_ids, r.id]
                                   : u.role_ids.filter((id) => id !== r.id),
                               ),

@@ -327,8 +327,9 @@ function DraftFields({
         />
         <label className="flex items-center gap-2">
           <Checkbox
-            checked={draft.enabled}
-            disabled={readOnly}
+            // Only meaningful with a schedule; the stored value is kept for when one is set.
+            checked={!!draft.cron && draft.enabled}
+            disabled={readOnly || !draft.cron}
             onCheckedChange={(v) => patch({ enabled: v === true })}
           />
           Schedule enabled

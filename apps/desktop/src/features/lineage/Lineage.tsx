@@ -15,6 +15,7 @@ import type {
   Api,
   ColumnRef,
   DataMap,
+  MapSource,
   Dataset,
   EdgeKind,
   EngineEvent,
@@ -30,7 +31,8 @@ import { ColumnInspector } from './ColumnInspector';
 import type { UsageEntity } from './ColumnInspector';
 import { Impact } from './Impact';
 import { MapEmptyState, MapLegend, MapTools } from './MapControls';
-import { edgeTypes, nodeTypes } from './MapNodes';
+import { edgeTypes, nodeTypes, SourceHealthContext } from './MapNodes';
+import { sourceHealth } from '@/features/connections/source-health';
 import { edgeKinds, persist } from './map-model';
 import type { MapNode, MapEdge, TableNode } from './map-model';
 import { AddRelationshipDialog, RemoveRelationshipsDialog } from './RelationshipDialogs';
@@ -165,6 +167,11 @@ function Canvas({
     );
   }, [selectedDataset, selectedEdge, onSelection]);
   const { fitView } = useReactFlow<MapNode, MapEdge>();
+  // The dot grid is decoration; React Flow's Background does not forward ARIA props.
+  useEffect(() => {
+    for (const svg of document.querySelectorAll('.decorative-background'))
+      svg.setAttribute('aria-hidden', 'true');
+  });
   const { arrange, layingOut, layoutError } = useMapLayout(map, engineUrl, setNodes, setEdges);
   const rendered = useVisibleGraph({
     nodes,
@@ -235,6 +242,18 @@ function Canvas({
       selectDataset(focusId);
     }
   }, [focusId, nodes]);
+  // Same health rule as Overview and Connections, so a failing source never reads "Connected".
+  const mapDatasets = map.nodes.filter((n): n is Dataset => n.type === 'dataset');
+  const health = Object.fromEntries(
+    map.nodes
+      .filter((n): n is MapSource => n.type === 'source')
+      .map((n) => [
+        n.id,
+        ['parquet', 'models'].includes(n.kind)
+          ? 'Built-in'
+          : sourceHealth(n.id, jobs, runs, mapDatasets),
+      ]),
+  );
   const selectedJobs = selectedDataset ? datasetJobs(selectedDataset, jobs) : [];
   const selectedRuns = runs.filter((run) => selectedJobs.some((job) => job.id === run.job_id));
   function zoomSearch() {
@@ -297,12 +316,22 @@ function Canvas({
         </div>
       )}
       <div className="map-center">
-        {!fieldFocus && (
-          <p className="hint px-3 py-2">
-            Select a field to trace its sources, transformations and uses. Arrow keys move between
-            fields; Enter traces a field.
-          </p>
-        )}
+        {/* Legend and hint live above the canvas, so no overlay can cover map content. */}
+        <div className="map-legend-row">
+          <MapLegend
+            map={map}
+            jobs={jobs}
+            runs={runs}
+            stateFilter={stateFilter}
+            onStateFilter={setStateFilter}
+          />
+          {!fieldFocus && (
+            <p className="hint">
+              Select a field to trace its sources, transformations and uses. Arrow keys move between
+              fields; Enter traces a field.
+            </p>
+          )}
+        </div>
         <div
           className="map-canvas"
           tabIndex={0}
@@ -320,67 +349,71 @@ function Canvas({
             }
           }}
         >
-          <ReactFlow<MapNode, MapEdge>
-            nodes={rendered.nodes}
-            edges={rendered.edges}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            elevateNodesOnSelect={false}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={connect}
-            nodesConnectable={canManage && !fieldFocus}
-            connectionMode={ConnectionMode.Loose}
-            isValidConnection={(c) =>
-              !!c.sourceHandle &&
-              !!c.targetHandle &&
-              c.sourceHandle.startsWith('out:') !== c.targetHandle.startsWith('out:')
-            }
-            onNodeDragStop={(_, node) => {
-              const next = nodes.map((n) =>
-                n.id === node.id ? { ...n, position: node.position } : n,
-              );
-              persist(engineUrl, next);
-            }}
-            onEdgeMouseEnter={(_, edge) => {
-              setHover(edge.data?.description || '');
-              setHoveredEdge(edge.id);
-            }}
-            onEdgeMouseLeave={() => {
-              setHover('');
-              setHoveredEdge('');
-            }}
-            deleteKeyCode={null}
-            fitView
-            minZoom={0.1}
-            maxZoom={2}
-          >
-            <Background gap={24} size={1} color="var(--grid-dot)" />
-            <MapLegend
-              map={map}
-              jobs={jobs}
-              runs={runs}
-              stateFilter={stateFilter}
-              onStateFilter={setStateFilter}
-            />
-            {minimap && (
-              <MiniMap
-                pannable
-                zoomable
-                nodeColor={(node) =>
-                  node.type === 'source' ? 'var(--line)' : 'var(--primary-300)'
-                }
+          <SourceHealthContext.Provider value={health}>
+            <ReactFlow<MapNode, MapEdge>
+              nodes={rendered.nodes}
+              edges={rendered.edges}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              elevateNodesOnSelect={false}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={connect}
+              nodesConnectable={canManage && !fieldFocus}
+              connectionMode={ConnectionMode.Loose}
+              isValidConnection={(c) =>
+                !!c.sourceHandle &&
+                !!c.targetHandle &&
+                c.sourceHandle.startsWith('out:') !== c.targetHandle.startsWith('out:')
+              }
+              onNodeDragStop={(_, node) => {
+                const next = nodes.map((n) =>
+                  n.id === node.id ? { ...n, position: node.position } : n,
+                );
+                persist(engineUrl, next);
+              }}
+              onEdgeMouseEnter={(_, edge) => {
+                setHover(edge.data?.description || '');
+                setHoveredEdge(edge.id);
+              }}
+              onEdgeMouseLeave={() => {
+                setHover('');
+                setHoveredEdge('');
+              }}
+              deleteKeyCode={null}
+              fitView
+              // Open readable: never fit below 75% (13px labels stay about 10px); Fit to view
+              // and the minimap still show the whole map on demand.
+              fitViewOptions={{ minZoom: 0.75, padding: 0.1 }}
+              minZoom={0.1}
+              maxZoom={2}
+            >
+              <Background
+                gap={24}
+                size={1}
+                color="var(--grid-dot)"
+                className="decorative-background"
               />
-            )}
-            <MapTools
-              onAddRelationship={canManage ? () => setAddingRelationship(true) : undefined}
-              addDisabled={busy || relationshipDatasets.length === 0}
-              layingOut={layingOut}
-              onRelayout={() => void arrange(false)}
-              minimap={minimap}
-              onMinimap={setMinimap}
-            />
-          </ReactFlow>
+
+              {minimap && (
+                <MiniMap
+                  pannable
+                  zoomable
+                  nodeColor={(node) =>
+                    node.type === 'source' ? 'var(--line)' : 'var(--primary-300)'
+                  }
+                />
+              )}
+              <MapTools
+                onAddRelationship={canManage ? () => setAddingRelationship(true) : undefined}
+                addDisabled={busy || relationshipDatasets.length === 0}
+                layingOut={layingOut}
+                onRelayout={() => void arrange(false)}
+                minimap={minimap}
+                onMinimap={setMinimap}
+              />
+            </ReactFlow>
+          </SourceHealthContext.Provider>
         </div>
         {/* Hidden until the title-bar console toggle opens it, as on every other page. */}
         {!consoleCollapsed && (

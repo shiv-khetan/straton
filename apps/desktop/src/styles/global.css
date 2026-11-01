@@ -17,6 +17,13 @@
   [class*='underline'] {
     text-decoration-thickness: from-font;
   }
+  /* Desktop shell: the window never scrolls; only .page-content (and panes) do. Absolutely
+     positioned helpers (sr-only text, popovers) can therefore never grow the document. */
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+  }
   body {
     @apply m-0 text-body;
     line-height: 1.55;

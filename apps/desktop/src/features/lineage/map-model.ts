@@ -294,6 +294,7 @@ export async function layout(map: DataMap): Promise<{ nodes: MapNode[]; edges: M
     nodes.push({
       id: source.id,
       type: 'source',
+      ariaLabel: 'Source ' + source.name,
       position,
       data: {
         label: source.name,
@@ -312,6 +313,7 @@ export async function layout(map: DataMap): Promise<{ nodes: MapNode[]; edges: M
       nodes.push({
         id: dataset.id,
         type: 'table',
+        ariaLabel: `Dataset ${dataset.display_name ?? dataset.name}, ${dataset.columns.length} columns`,
         parentId: source.id,
         extent: 'parent',
         position,

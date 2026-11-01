@@ -25,7 +25,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ResultGrid, TypeIcon } from '@/components/workbench/ResultGrid';
 import { Skeleton } from '@/features/console/ConsoleDrawer';
-import { explorerRequest, filterOps, parseFilter } from './explorer-model';
+import { explorerRequest, filterOpLabels, filterOps, parseFilter } from './explorer-model';
 import { tableReference } from '@/features/sql/sql-model';
 import { relativeTime } from '@/lib/view-model';
 import { Inspector, PageActions } from '@/components/workbench/primitives';
@@ -69,7 +69,9 @@ function FilterBar({
           Operator
           <select value={op} onChange={(e) => setOp(e.target.value as FilterOp)}>
             {filterOps.map((o) => (
-              <option key={o}>{o}</option>
+              <option key={o} value={o}>
+                {filterOpLabels[o]}
+              </option>
             ))}
           </select>
         </label>
@@ -366,7 +368,12 @@ function TableView({
             >
               <ChevronLeft size={16} />
             </Button>
-            <code>Page {pageIndex + 1}</code>
+            <span className="tabular-nums text-caption text-ink-2" aria-live="polite">
+              Page {pageIndex + 1}
+              {data?.total_exact
+                ? ' of ' + Math.max(1, Math.ceil(data.total / pageSize)).toLocaleString()
+                : ''}
+            </span>
             <Button
               variant="outline"
               size="icon-sm"

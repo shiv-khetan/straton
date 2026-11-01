@@ -132,6 +132,11 @@
     border-radius: var(--radius-control);
     @apply text-danger bg-danger-soft;
   }
+  /* Advice rather than a risk: same shape, warning tone. */
+  .message.message-advice {
+    color: var(--warning-ink);
+    @apply bg-warning-soft;
+  }
   .source-group {
     @apply border border-line rounded-tray bg-panel;
   }
@@ -212,12 +217,15 @@
   .dataset-footer .pill {
     @apply p-0 bg-transparent text-ink-2;
   }
-  .map-tools,
-  .map-legend {
+  .map-tools {
     @apply flex items-center gap-0.5 p-1 bg-panel border border-line;
     border-radius: var(--radius-drawer);
     @apply shadow-raised;
     z-index: var(--z-canvas-overlay);
+  }
+  /* Docked legend: flat, part of the page, not elevated over the canvas. */
+  .map-legend {
+    @apply flex items-center gap-0.5 rounded-control border border-line bg-surface p-0.5;
   }
   .map-tools {
     @apply m-3;
@@ -231,11 +239,21 @@
     @apply text-center text-ink-2;
     font: var(--code-sm) var(--font-mono);
   }
-  /* Bottom-left, clear of the top-right tools and the bottom-right minimap. */
+  /* The minimap hides on narrow canvases. */
+  @media (max-width: 1199px) {
+    .react-flow__minimap {
+      display: none;
+    }
+  }
+  .map-legend-row {
+    @apply flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2;
+  }
+  .map-legend-row .hint {
+    @apply m-0 min-w-0 flex-1;
+  }
+  /* A row above the canvas (Lineage.tsx), never an overlay on map content. */
   .map-legend {
-    @apply flex-nowrap whitespace-nowrap;
-    max-width: calc(100% - 260px);
-    @apply overflow-x-auto m-3;
+    @apply flex-nowrap whitespace-nowrap overflow-x-auto;
   }
   .map-legend button {
     border: 1px solid transparent;
@@ -524,7 +542,7 @@
   }
   /* A flat card: hairline frame, heading row on the card edge, white body. */
   .tray {
-    @apply min-w-0 p-0 mb-4 bg-surface border border-line rounded-card overflow-hidden;
+    @apply relative min-w-0 p-0 mb-4 bg-surface border border-line rounded-card overflow-hidden;
   }
   .tray-heading {
     @apply flex items-center justify-between gap-3 border-b border-line;

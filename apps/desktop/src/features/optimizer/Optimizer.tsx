@@ -1,3 +1,4 @@
+import { Checkbox } from '@/components/ui/checkbox';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Api, Dataset, Me } from '@/lib/api';
@@ -115,10 +116,9 @@ export default function Optimizer({
                 </select>
               </Field>
               <label className="optimizer-history">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={history}
-                  onChange={(e) => setHistory(e.target.checked)}
+                  onCheckedChange={(checked) => setHistory(checked === true)}
                 />
                 Include history
               </label>
@@ -140,7 +140,9 @@ export default function Optimizer({
                 {busy ? 'Working…' : 'Refresh recommendations'}
               </Button>
             </div>
-            {!source && <p className="hint">Choose a source to refresh its recommendations.</p>}
+            {!source && !!advisor.data?.sources.length && (
+              <p className="hint">Choose a source to refresh its recommendations.</p>
+            )}
             {selectedSource && !selectedSource.advisor_may_write && (
               <p className="message">
                 Advisor may write is off for {selectedSource.name}. Enable it in Connections before

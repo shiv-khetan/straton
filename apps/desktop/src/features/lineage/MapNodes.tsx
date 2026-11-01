@@ -1,3 +1,4 @@
+import { createContext, useContext } from 'react';
 import { Home } from 'lucide-react';
 import { BaseEdge, Handle, Position } from '@xyflow/react';
 import type { EdgeProps, NodeProps } from '@xyflow/react';
@@ -12,6 +13,9 @@ import {
   TABLE_ROW_HEIGHT,
 } from './map-model';
 import type { GroupNode, MapEdge, TableNode } from './map-model';
+
+/** Source id -> health from the shared rule (features/connections/source-health.ts). */
+export const SourceHealthContext = createContext<Record<string, string>>({});
 
 // Custom React Flow node and edge renderers for the Data Map canvas.
 function Table({ data }: NodeProps<TableNode>) {
@@ -138,12 +142,23 @@ function Table({ data }: NodeProps<TableNode>) {
     </article>
   );
 }
-function SourceGroup({ data }: NodeProps<GroupNode>) {
+function SourceGroup({ id, data }: NodeProps<GroupNode>) {
+  const health = useContext(SourceHealthContext)[id];
   return (
     <div className={'source-label mono-caption' + (data.external ? ' external-label' : '')}>
       <Icon name="source" />
       <span>{data.label}</span>
-      <StatePill state={data.stale ? 'Stale data' : data.external ? 'External' : 'Connected'} />
+      <StatePill
+        state={
+          data.external
+            ? 'External'
+            : health === 'Failing'
+              ? 'Failing'
+              : data.stale
+                ? 'Stale data'
+                : (health ?? 'Connected')
+        }
+      />
     </div>
   );
 }

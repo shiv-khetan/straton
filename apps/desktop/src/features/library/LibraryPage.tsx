@@ -41,7 +41,7 @@ export function LibraryPage({
                 <ArrowUpRight size={16} />
               </Button>
               {kind === 'Recent' && (
-                <time className="font-mono text-caption text-ink-3">
+                <time className="text-caption text-ink-3 tabular-nums">
                   {relativeTime(entry.visitedAt)}
                 </time>
               )}

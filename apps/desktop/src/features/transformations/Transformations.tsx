@@ -15,7 +15,7 @@ import type {
   ModelLineage,
   Run,
 } from '@/lib/api';
-import { Button, EmptyState } from '@/components/workbench/primitives';
+import { EmptyState } from '@/components/workbench/primitives';
 import { normalizeModelLineage } from '@/features/transformations/model-model';
 import { datasetLabel } from '@/lib/view-model';
 import ModelCanvas from '@/features/transformations/ModelCanvas';
@@ -313,21 +313,10 @@ export default function Models({
                 onSelect={inspect}
               />
             ) : (
-              <EmptyState
-                action={
-                  <Button
-                    type="button"
-                    variant="default"
-                    disabled={readOnly}
-                    onClick={() => edit(null)}
-                  >
-                    New model
-                  </Button>
-                }
-              >
+              <EmptyState>
                 {readOnly
                   ? 'Models will load when the engine reconnects.'
-                  : 'Write your first model'}
+                  : 'No models yet. Use New model above to write one from a synced dataset.'}
               </EmptyState>
             ))}
           {!open && error && (
