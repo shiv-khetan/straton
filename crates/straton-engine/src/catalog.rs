@@ -9,6 +9,9 @@ pub async fn connector(pool: &SqlitePool, id: &str) -> Result<Box<dyn straton_co
         .bind(id)
         .fetch_one(pool)
         .await?;
+    let config = serde_json::from_str::<Value>(row.get("config"))?;
+    // Resolve and vet every configured host before any secret is loaded or sent.
+    crate::egress::check(&config).await?;
     let secret = if row.get::<Option<String>, _>("credential_id").is_some() {
         credentials::get(id)?
     } else {
@@ -16,7 +19,7 @@ pub async fn connector(pool: &SqlitePool, id: &str) -> Result<Box<dyn straton_co
     };
     Ok(straton_connectors::build(
         row.get("kind"),
-        &serde_json::from_str::<Value>(row.get("config"))?,
+        &config,
         secret.as_ref().map(|s| s.expose_secret()),
     )?)
 }

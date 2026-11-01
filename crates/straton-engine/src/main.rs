@@ -8,6 +8,7 @@ mod catalog;
 mod column_lineage;
 mod config;
 mod credentials;
+mod egress;
 mod hash_lookup;
 mod keys;
 mod lake_layout;
@@ -53,6 +54,7 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = config::Config::load()?;
+    egress::set_allow_private(config.network.allow_private);
     match cli.command.unwrap_or(Command::Run) {
         Command::Token => {
             println!(

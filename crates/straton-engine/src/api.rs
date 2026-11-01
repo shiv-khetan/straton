@@ -351,6 +351,9 @@ async fn save_source(
     }
     catalog::path_component(&s.id).map_err(|_| bad("invalid source id"))?;
     reject_engine_paths(&a, &s.config)?;
+    crate::egress::check(&s.config)
+        .await
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
     if update && !actor.admin() {
         // A scoped source admin may rename or tune a source, but must not repoint it:
         // a new host/path would send the stored secret elsewhere or read engine files.

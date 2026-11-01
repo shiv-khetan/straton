@@ -14,6 +14,7 @@ pub struct Config {
     pub backup: Backup,
     pub sql: Sql,
     pub encryption: Encryption,
+    pub network: Network,
 }
 #[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -43,6 +44,7 @@ impl Default for Config {
             backup: Backup::default(),
             sql: Sql::default(),
             encryption: Encryption::default(),
+            network: Network::default(),
         }
     }
 }
@@ -65,6 +67,7 @@ impl Config {
                 "STRATON_BACKUP_DIR" => c.backup.dir = value.into(),
                 "STRATON_BACKUP_KEEP" => c.backup.keep = value.parse()?,
                 "STRATON_ENCRYPTION_ENABLED" => c.encryption.enabled = value.parse()?,
+                "STRATON_NETWORK_ALLOW_PRIVATE" => c.network.allow_private = value.parse()?,
                 "STRATON_SQL_ENABLED" => c.sql.enabled = value.parse()?,
                 "STRATON_SQL_BIND" => c.sql.bind = value.parse()?,
                 "STRATON_SQL_QUERY_TIMEOUT_SECS" => c.sql.query_timeout_secs = value.parse()?,
@@ -143,5 +146,21 @@ pub struct Encryption {
 impl Default for Encryption {
     fn default() -> Self {
         Self { enabled: true }
+    }
+}
+
+/// Outbound connector policy; see `egress.rs`.
+#[derive(Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Network {
+    /// Allow connectors to reach loopback and private ranges. Link-local and
+    /// cloud-metadata addresses are always refused.
+    pub allow_private: bool,
+}
+impl Default for Network {
+    fn default() -> Self {
+        Self {
+            allow_private: true,
+        }
     }
 }
