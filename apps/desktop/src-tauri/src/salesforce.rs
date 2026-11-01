@@ -102,6 +102,19 @@ pub async fn salesforce_authorize(login_url: String, client_id: String) -> Resul
     })
 }
 
+/// Constant-time comparison of the OAuth `state` parameter.
+fn state_matches(received: Option<&str>, expected: &str) -> bool {
+    let Some(received) = received else {
+        return false;
+    };
+    received.len() == expected.len()
+        && received
+            .bytes()
+            .zip(expected.bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
+}
+
 /// Serve the loopback redirect until the browser delivers `/OauthRedirect`.
 async fn receive(listener: &TcpListener, state: &str) -> Result<String, String> {
     loop {
@@ -110,7 +123,12 @@ async fn receive(listener: &TcpListener, state: &str) -> Result<String, String> 
             .await
             .map_err(|_| "Sign-in callback failed")?;
         let mut buf = vec![0u8; 8192];
-        let n = socket.read(&mut buf).await.unwrap_or(0);
+        // A local client that connects and never sends must not stall the sign-in.
+        let n = timeout(Duration::from_secs(5), socket.read(&mut buf))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or(0);
         let request = String::from_utf8_lossy(&buf[..n]);
         let path = request
             .lines()
@@ -129,9 +147,18 @@ async fn receive(listener: &TcpListener, state: &str) -> Result<String, String> 
         let query: HashMap<String, String> = Url::parse(&format!("http://localhost{path}"))
             .map(|u| u.query_pairs().into_owned().collect())
             .unwrap_or_default();
-        let result = if query.get("state").map(String::as_str) != Some(state) {
-            Err("Sign-in response did not match this request; try again".to_owned())
-        } else if let Some(error) = query.get("error") {
+        if !state_matches(query.get("state").map(String::as_str), state) {
+            // Any local process or web page can hit the loopback port. A request without
+            // this flow's state is not the browser callback: reject it and keep waiting
+            // instead of letting it abort (or race) the real sign-in.
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+            continue;
+        }
+        let result = if let Some(error) = query.get("error") {
             Err(format!("Salesforce sign-in was not completed ({error})"))
         } else {
             query
@@ -187,6 +214,10 @@ mod tests {
         );
         assert!(https("http://login.salesforce.com").is_err());
         assert!(https("https://login.salesforce.com").is_ok());
+        assert!(state_matches(Some("abc"), "abc"));
+        assert!(!state_matches(Some("abd"), "abc"));
+        assert!(!state_matches(Some("ab"), "abc"));
+        assert!(!state_matches(None, "abc"));
     }
 
     #[tokio::test]
@@ -210,9 +241,37 @@ mod tests {
         assert_eq!(receive(&listener, "s1").await.unwrap(), "abc");
         client.await.unwrap();
 
+        // A forged callback with the wrong state is ignored; the real one still completes.
+        let client = tokio::spawn(async move {
+            hit(port, "/OauthRedirect?code=evil&state=other").await;
+            hit(port, "/OauthRedirect?error=access_denied").await;
+            hit(port, "/OauthRedirect?code=good&state=s1").await;
+        });
+        assert_eq!(receive(&listener, "s1").await.unwrap(), "good");
+        client.await.unwrap();
+
+        // The provider's error is surfaced when it carries the right state.
         let client =
-            tokio::spawn(async move { hit(port, "/OauthRedirect?code=abc&state=other").await });
+            tokio::spawn(
+                async move { hit(port, "/OauthRedirect?error=access_denied&state=s1").await },
+            );
         assert!(receive(&listener, "s1").await.is_err());
+        client.await.unwrap();
+
+        // A silent connection does not block the real callback forever.
+        let client = tokio::spawn(async move {
+            let _idle = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            hit(port, "/OauthRedirect?code=late&state=s1").await;
+        });
+        assert_eq!(
+            timeout(Duration::from_secs(15), receive(&listener, "s1"))
+                .await
+                .unwrap()
+                .unwrap(),
+            "late"
+        );
         client.await.unwrap();
     }
 }

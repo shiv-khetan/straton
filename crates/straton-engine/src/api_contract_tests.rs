@@ -241,6 +241,7 @@ async fn json_extractors_reject_missing_fields_and_wrong_types() {
         ("POST", "/v1/saved-queries"),
         ("POST", "/v1/explorer/rows"),
         ("POST", "/v1/explorer/export"),
+        ("POST", "/v1/explorer/profile"),
         ("PUT", "/v1/users/admin/roles"),
     ] {
         for body in [json!({}), json!([])] {
@@ -436,6 +437,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/v1/explorer/tree"),
     ("POST", "/v1/explorer/rows"),
     ("POST", "/v1/explorer/export"),
+    ("POST", "/v1/explorer/profile"),
     ("GET", "/v1/lineage/impact"),
     ("GET", "/v1/lineage/columns"),
     ("GET", "/v1/models"),

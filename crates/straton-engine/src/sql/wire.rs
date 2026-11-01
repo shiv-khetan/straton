@@ -33,6 +33,8 @@ use tokio::{
     task::{JoinHandle, JoinSet},
 };
 
+/// Concurrent pgwire clients, authenticated or not; excess connections are closed.
+const MAX_CLIENTS: usize = 256;
 pub struct Server {
     stop: watch::Sender<bool>,
     pub task: JoinHandle<anyhow::Result<()>>,
@@ -76,7 +78,21 @@ impl Server {
                 tokio::select! {
                     _ = stopped.changed() => break,
                     result = listener.accept() => {
-                        let (socket, _) = result?;
+                        // Accept errors (EMFILE, ECONNABORTED, ...) are transient: they must
+                        // not end the listener and take the SQL endpoint down for good.
+                        let socket = match result {
+                            Ok((socket, _)) => socket,
+                            Err(e) => {
+                                tracing::warn!(error=%e, "SQL endpoint accept failed");
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                continue;
+                            }
+                        };
+                        if clients.len() >= MAX_CLIENTS {
+                            tracing::warn!("SQL endpoint connection limit reached");
+                            drop(socket);
+                            continue;
+                        }
                         let tls = tls.clone();
                         let backend = backend.clone();
                         clients.spawn(async move {
