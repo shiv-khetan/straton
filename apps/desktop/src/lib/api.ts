@@ -61,6 +61,26 @@ export interface ExplorerTree {
     schemas: { name: string; tables: Dataset[] }[];
   }[];
 }
+/** Effective engine configuration (admin only; contains no secrets). */
+export interface EngineSettings {
+  version: string;
+  bind: string;
+  tls: boolean;
+  data_dir: string;
+  max_concurrent_runs: number;
+  max_attempts: number;
+  backup: { cron: string; dir: string; keep: number };
+  sql: {
+    enabled: boolean;
+    bind: string;
+    query_timeout_secs: number;
+    max_rows: number;
+    memory_limit_mb: number;
+  };
+  encryption: { enabled: boolean };
+  network: { allow_private: boolean };
+  secret_store: 'file' | 'os-keychain' | 'kernel-keyring';
+}
 export interface ColumnProfile {
   name: string;
   type: string;
@@ -803,6 +823,7 @@ export function api(connection: Connection) {
       ),
     cancelRun: (id: string) => request<void>('/v1/runs/' + idPath(id) + '/cancel', 'POST'),
     backups: () => request<string[]>('/v1/backups'),
+    engineSettings: () => request<EngineSettings>('/v1/admin/settings'),
     backup: () => request<{ file: string }>('/v1/backups', 'POST'),
   };
 }

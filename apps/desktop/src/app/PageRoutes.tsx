@@ -23,6 +23,7 @@ import type { Route } from '@/stores/route-history';
 import type { LibraryEntry } from '@/stores/library';
 import { LibraryPage } from '@/features/library/LibraryPage';
 import { LaterPage } from '@/features/library/LaterPage';
+import Settings from '@/features/settings/Settings';
 import { CombinedPage } from './CombinedPage';
 import type { CombinedSection } from './CombinedPage';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -104,6 +105,9 @@ export function PageRoutes(p: PageRoutesProps) {
       {data.error && <Feedback message={data.error} error onClose={() => {}} />}
       {loading && page !== 'Connect' && <Skeleton label="Loading engine workspace…" />}
       {laterRoutes.includes(page) && <LaterPage name={p.pageLabel} />}
+      {page === 'Settings' && canPage(me, 'Settings') && (
+        <Settings client={client} me={me} connection={p.connection} />
+      )}
       {(page === 'Favorites' || page === 'Recent') && (
         <CombinedPage
           page={page}

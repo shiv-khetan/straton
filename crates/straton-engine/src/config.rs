@@ -15,6 +15,7 @@ pub struct Config {
     pub sql: Sql,
     pub encryption: Encryption,
     pub network: Network,
+    pub secrets: Secrets,
 }
 #[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -45,6 +46,7 @@ impl Default for Config {
             sql: Sql::default(),
             encryption: Encryption::default(),
             network: Network::default(),
+            secrets: Secrets::default(),
         }
     }
 }
@@ -68,6 +70,7 @@ impl Config {
                 "STRATON_BACKUP_KEEP" => c.backup.keep = value.parse()?,
                 "STRATON_ENCRYPTION_ENABLED" => c.encryption.enabled = value.parse()?,
                 "STRATON_NETWORK_ALLOW_PRIVATE" => c.network.allow_private = value.parse()?,
+                "STRATON_SECRETS_DIR" => c.secrets.dir = Some(value.into()),
                 "STRATON_SQL_ENABLED" => c.sql.enabled = value.parse()?,
                 "STRATON_SQL_BIND" => c.sql.bind = value.parse()?,
                 "STRATON_SQL_QUERY_TIMEOUT_SECS" => c.sql.query_timeout_secs = value.parse()?,
@@ -163,4 +166,13 @@ impl Default for Network {
             allow_private: true,
         }
     }
+}
+
+/// Where connector secrets and the KEK live; see `credentials.rs`.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Secrets {
+    /// Owner-only secret files in this directory instead of the OS keychain. Required for a
+    /// Linux engine that must survive a reboot: the kernel keyring is in-memory only.
+    pub dir: Option<std::path::PathBuf>,
 }

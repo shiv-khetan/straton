@@ -99,7 +99,15 @@ async fn run(config: config::Config) -> Result<()> {
         .init();
     let pool = store::open(&config.data_dir).await?;
     lake_layout::recover_all(&config.data_dir)?;
-    keys::initialize(&pool).await?;
+    if let Some(dir) = &config.secrets.dir {
+        credentials::use_directory(dir)?;
+    }
+    if credentials::store_kind() == "kernel-keyring" {
+        tracing::warn!(
+            "secrets and the KEK are in the Linux kernel keyring, which is lost on reboot; set [secrets] dir (STRATON_SECRETS_DIR) to keep them"
+        );
+    }
+    keys::startup(&pool, config.encryption.enabled).await?;
     access::bootstrap(&pool, secrecy::ExposeSecret::expose_secret(token.as_ref())).await?;
     let (events, _) = tokio::sync::broadcast::channel(256);
     notify::verify_audit(&pool, &events).await?;

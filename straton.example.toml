@@ -29,3 +29,9 @@ enabled = true
 # Link-local and cloud instance-metadata addresses are always refused.
 # Set false to also refuse private ranges; STRATON_NETWORK_ALLOW_PRIVATE overrides.
 allow_private = true
+
+[secrets]
+# Store connector secrets and the KEK as owner-only files instead of the OS keychain.
+# REQUIRED on Linux servers: the kernel keyring used by default is lost on reboot.
+# Keep it outside data_dir and back it up separately (it unlocks encrypted snapshots).
+# dir = "/var/lib/straton/secrets"   # or STRATON_SECRETS_DIR

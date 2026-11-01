@@ -484,6 +484,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("PUT", "/v1/saved-queries/{id}"),
     ("DELETE", "/v1/saved-queries/{id}"),
     ("GET", "/v1/admin/keys"),
+    ("GET", "/v1/admin/settings"),
     ("POST", "/v1/admin/keys/rotate-kek"),
     ("POST", "/v1/admin/keys/rotate/{target}"),
     ("GET", "/v1/audit/verify"),

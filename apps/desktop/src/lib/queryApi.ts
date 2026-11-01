@@ -1,7 +1,10 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import type { Api } from './api';
 import { queryKeys } from './queryKeys.ts';
-const reads: Partial<Record<keyof Api, QueryKey>> = {
+// Every client method is exactly one of: a cached read, a transient call, or a mutation that
+// invalidates engine queries afterwards (tests/ui-shell.test.mjs enforces this). A read left
+// unclassified would be treated as a mutation and invalidate the query awaiting it forever.
+export const reads: Partial<Record<keyof Api, QueryKey>> = {
   pipelines: queryKeys.pipelines,
   pipeline: queryKeys.pipelines,
   pipelineRuns: queryKeys.pipelines,
@@ -40,6 +43,7 @@ const reads: Partial<Record<keyof Api, QueryKey>> = {
   models: queryKeys.models,
   modelLineage: queryKeys.models,
   backups: queryKeys.backups,
+  engineSettings: queryKeys.settings,
   keys: queryKeys.keys,
   roles: queryKeys.roles,
   users: queryKeys.access,
@@ -47,7 +51,7 @@ const reads: Partial<Record<keyof Api, QueryKey>> = {
   policies: queryKeys.access,
   tokens: queryKeys.access,
 };
-const transient = new Set<keyof Api>([
+export const transient = new Set<keyof Api>([
   'validatePipeline',
   'previewChart',
   'explorerRows',
@@ -59,6 +63,66 @@ const transient = new Set<keyof Api>([
   'explainModel',
   'validatePolicy',
   'validateModel',
+  // Profiles depend on the current filters and must not invalidate the rows they describe.
+  'explorerProfile',
+]);
+/** Calls that change engine state; every engine query is invalidated after them. */
+export const mutations = new Set<keyof Api>([
+  'createPipeline',
+  'updatePipeline',
+  'deletePipeline',
+  'runPipeline',
+  'cancelPipelineRun',
+  'createQualityCheck',
+  'updateQualityCheck',
+  'deleteQualityCheck',
+  'runQualityCheck',
+  'createChart',
+  'updateChart',
+  'deleteChart',
+  'createDashboard',
+  'updateDashboard',
+  'deleteDashboard',
+  'readNotifications',
+  'rotateKek',
+  'rotateDatasetKey',
+  'createModel',
+  'updateModel',
+  'deleteModel',
+  'runModel',
+  'createUser',
+  'updateUser',
+  'assignRoles',
+  'issueToken',
+  'revokeToken',
+  'createRole',
+  'deleteRole',
+  'createGrant',
+  'deleteGrant',
+  'rowFilter',
+  'mask',
+  'createSavedQuery',
+  'updateSavedQuery',
+  'deleteSavedQuery',
+  'refreshAdvisor',
+  'applyAdvice',
+  'rollbackAdvice',
+  'dismissAdvice',
+  'relayoutDataset',
+  'createSource',
+  'updateSource',
+  'deleteSource',
+  'checkSource',
+  'discoverSource',
+  'createDataset',
+  'createRelationship',
+  'deleteRelationship',
+  'createJob',
+  'updateJob',
+  'deleteJob',
+  'runJob',
+  'cancelRun',
+  'backup',
 ]);
 export function queryApi(client: Api, cache: QueryClient): Api {
   return new Proxy(client, {

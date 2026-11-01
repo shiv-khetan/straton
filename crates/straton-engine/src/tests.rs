@@ -6470,3 +6470,45 @@ async fn responses_carry_security_headers_including_errors() {
     drop(a);
     f.close().await;
 }
+
+#[tokio::test]
+async fn admin_settings_report_effective_config_without_secret_paths() {
+    let mut f = Fixture::new().await;
+    f.config.tls_cert = Some("/secret/cert.pem".into());
+    f.config.tls_key = Some("/secret/key.pem".into());
+    f.config.network.allow_private = false;
+    let a = app(&f);
+    let (s, v) = request(&a, "GET", "/v1/admin/settings", json!(null)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["tls"], true);
+    assert_eq!(v["network"]["allow_private"], false);
+    assert_eq!(v["sql"]["max_rows"], f.config.sql.max_rows);
+    assert_eq!(v["backup"]["keep"], 2);
+    let text = v.to_string();
+    for secret in ["/secret/", "cert.pem", "key.pem", "token", "good-token"] {
+        assert!(!text.contains(secret), "settings leak {secret}: {text}");
+    }
+    drop(a);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn startup_without_encryption_never_needs_the_keychain() {
+    let f = Fixture::new().await;
+    let kek = crate::keys::account(&f.pool, false);
+    // Encryption off on a fresh engine: no KEK is created, nothing is recorded.
+    crate::keys::startup(&f.pool, false).await.unwrap();
+    assert!(crate::credentials::get(&kek).unwrap().is_none());
+    let version: i64 = sqlx::query_scalar("SELECT kek_version FROM security_state WHERE id=1")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(version, 0);
+    // Data was encrypted earlier and the KEK is now gone (e.g. a reboot cleared the Linux
+    // kernel keyring): the engine still starts; only encrypted reads are denied.
+    crate::keys::startup(&f.pool, true).await.unwrap();
+    crate::credentials::delete(&kek).unwrap();
+    crate::keys::startup(&f.pool, false).await.unwrap();
+    assert!(crate::keys::startup(&f.pool, true).await.is_err());
+    f.close().await;
+}

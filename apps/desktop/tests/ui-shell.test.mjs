@@ -14,9 +14,22 @@ for (const size of [...tokens.matchAll(/^\s*--text-([a-z0-9-]+):/gm)].map((m) =>
     assert.ok(fontSizeTokens.includes(size), 'register --text-' + size + ' with tailwind-merge');
 
 // One health rule shared by Overview and Connections.
-const jobs = [{ id: 'j1', source_id: 's1' }, { id: 'j2', source_id: 's2' }];
-const run = (job_id, state, available_at) => ({ id: job_id + available_at, job_id, state, available_at });
-const runs = [run('j1', 'failed', 1), run('j1', 'succeeded', 2), run('j2', 'failed', 3), run('j1', 'running', 9)];
+const jobs = [
+  { id: 'j1', source_id: 's1' },
+  { id: 'j2', source_id: 's2' },
+];
+const run = (job_id, state, available_at) => ({
+  id: job_id + available_at,
+  job_id,
+  state,
+  available_at,
+});
+const runs = [
+  run('j1', 'failed', 1),
+  run('j1', 'succeeded', 2),
+  run('j2', 'failed', 3),
+  run('j1', 'running', 9),
+];
 assert.equal(lastSourceRun('s1', jobs, runs).available_at, 2, 'running runs are not finished');
 assert.equal(sourceHealth('s1', jobs, runs, []), 'Healthy');
 assert.equal(sourceHealth('s2', jobs, runs, []), 'Failing');
@@ -33,4 +46,37 @@ assert.match(shell, /\.page-tabs \{[^}]*bg-surface/, 'tab bar shares the header 
 // Monaco themes must resolve light-dark() tokens through the DOM, not a raw canvas fillStyle.
 const monaco = readFileSync(new URL('../src/features/sql/monaco.ts', import.meta.url), 'utf8');
 assert.match(monaco, /getComputedStyle\(probe\)\.color/);
-console.log('UI shell: class merging keeps colours, shared source health, stable header row, editor theme tokens.');
+import { canPage } from '../src/features/access/access-model.ts';
+// Settings opens for any signed-in user (desktop preferences); engine settings stay admin-only.
+assert.equal(canPage(null, 'Settings'), false);
+const reader = {
+  user: { id: 'u', name: 'u' },
+  roles: [],
+  privileges: { admin: false, read: false, sync_admin: false, grants: [] },
+};
+assert.equal(canPage(reader, 'Settings'), true);
+const settings = readFileSync(
+  new URL('../src/features/settings/Settings.tsx', import.meta.url),
+  'utf8',
+);
+assert.match(
+  settings,
+  /enabled: !!client && admin/,
+  'engine settings are only requested by admins',
+);
+console.log(
+  'UI shell: class merging keeps colours, shared source health, stable header row, editor theme tokens.',
+);
+
+// Every API client method is classified exactly once for the query cache.
+const { api } = await import('../src/lib/api.ts');
+const { reads, transient, mutations } = await import('../src/lib/queryApi.ts');
+const methods = Object.keys(api({ url: 'http://127.0.0.1:1', token: 't' }));
+for (const method of methods) {
+  const kinds = [method in reads, transient.has(method), mutations.has(method)].filter(Boolean);
+  assert.equal(kinds.length, 1, method + ' must be exactly one of reads, transient, mutations');
+}
+for (const listed of [...Object.keys(reads), ...transient, ...mutations])
+  assert.ok(methods.includes(listed), listed + ' is not an API client method');
+assert.ok('engineSettings' in reads && transient.has('explorerProfile'));
+console.log('Query cache: every client method is a read, transient call or mutation.');
