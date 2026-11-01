@@ -23,3 +23,9 @@ memory_limit_mb = 1024
 [encryption]
 enabled = true
 # STRATON_ENCRYPTION_ENABLED=false makes new runs plaintext; encrypted reads still need their key.
+
+[network]
+# Connectors may reach loopback/private addresses (typical for self-hosted sources).
+# Link-local and cloud instance-metadata addresses are always refused.
+# Set false to also refuse private ranges; STRATON_NETWORK_ALLOW_PRIVATE overrides.
+allow_private = true
