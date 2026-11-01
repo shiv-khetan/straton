@@ -184,3 +184,25 @@ export function describeCron(expression: string): string | null {
     return null;
   }
 }
+
+/** Common schedules offered as one-click presets in schedule fields. */
+export const cronPresets: { label: string; cron: string }[] = [
+  { label: 'Every 15 min', cron: '0 */15 * * * *' },
+  { label: 'Hourly', cron: '0 0 * * * *' },
+  { label: 'Daily 02:00', cron: '0 0 2 * * *' },
+  { label: 'Weekdays 09:00', cron: '0 0 9 * * MON-FRI' },
+];
+export type CronFeedback = { ok: true; text: string } | { ok: false; text: string } | null;
+/** Live feedback for a schedule input: words plus the next run, or why it is invalid. */
+export function cronFeedback(expression: string, now = new Date()): CronFeedback {
+  if (!expression.trim()) return null;
+  try {
+    const next = nextCron(expression, now);
+    const words = describeCron(expression) ?? 'Custom schedule';
+    if (!next) return { ok: false, text: 'This schedule never runs again.' };
+    const at = next.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+    return { ok: true, text: `${words} · next run ${at}` };
+  } catch (e) {
+    return { ok: false, text: e instanceof Error ? e.message : 'Invalid schedule.' };
+  }
+}

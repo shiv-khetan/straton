@@ -130,3 +130,15 @@ assert.deepEqual(
   ],
 );
 console.log('Needs attention: one entry per still-failing job, with its failure streak.');
+
+const { cronFeedback, cronPresets } = await import('../src/features/schedules/cron-model.ts');
+const t0 = new Date(Date.UTC(2026, 10, 1, 10, 7, 30));
+assert.deepEqual(cronFeedback('0 */15 * * * *', t0), {
+  ok: true,
+  text: 'Every 15 minutes · next run 2026-11-01 10:15 UTC',
+});
+assert.equal(cronFeedback('', t0), null);
+assert.equal(cronFeedback('* * *', t0).ok, false);
+assert.equal(cronFeedback('0 0 0 1 1 * 2020', t0).text, 'This schedule never runs again.');
+for (const p of cronPresets) assert.equal(cronFeedback(p.cron, t0).ok, true, p.label);
+console.log('Cron field: presets are valid; feedback gives words and next run, or the reason.');

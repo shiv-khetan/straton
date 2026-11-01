@@ -91,6 +91,20 @@
   .page-content:not(.workbench-page) [data-slot='table-container']:not(.tray *, .card *) {
     @apply rounded-card border border-line bg-surface;
   }
+  /* Bulk actions for selected table rows. */
+  .bulk-bar {
+    @apply mb-3 flex flex-wrap items-center gap-2 rounded-card border border-line bg-primary-soft px-3 py-2 text-body;
+  }
+  .bulk-bar > [role='status'] {
+    @apply me-auto font-medium tabular-nums;
+  }
+  /* Schedule input: presets and live feedback under the field. */
+  .cron-field .cron-presets {
+    @apply flex flex-wrap gap-1;
+  }
+  .cron-field .cron-feedback {
+    @apply m-0 text-caption tabular-nums;
+  }
   /* Settings: label/value rows inside trays. */
   /* One row per setting (overrides the global two-column dl grid). */
   .settings-list {
@@ -169,7 +183,8 @@
   [data-slot='table-row']:focus-within {
     @apply bg-surface-2;
   }
-  [data-slot='table-cell'] button {
+  /* Compact row buttons; checkboxes (Radix renders a button) keep their 16px box. */
+  [data-slot='table-cell'] button:not([data-slot='checkbox']) {
     @apply min-h-6 px-1.5 py-0.5 text-caption;
   }
   [data-slot='table-cell'] .actions {

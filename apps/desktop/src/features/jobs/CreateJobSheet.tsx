@@ -1,3 +1,4 @@
+import { CronField } from '@/features/schedules/CronField';
 import { useEffect, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -229,18 +230,8 @@ export function CreateJobSheet({
               )}
             </>
           )}
-          <Field label="Cron (UTC, seconds first)">
-            <Input
-              value={cron}
-              onChange={(e) => setCron(e.target.value)}
-              aria-describedby="cron-help"
-            />
-          </Field>
+          <CronField value={cron} onChange={setCron} />
         </div>
-        <p id="cron-help" className="hint">
-          Six fields: second minute hour day month weekday. “0 */5 * * * *” runs every five minutes.
-          Leave blank for manual runs.
-        </p>
         <Button
           variant="default"
           disabled={
