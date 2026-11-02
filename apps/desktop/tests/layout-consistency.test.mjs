@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Guards the shared page anatomy (src/components/workbench/page-layout.tsx): pages build their
 // top of page from PageTabs, SectionHeader, PageIntro and PageToolbar instead of local markup.
-const root = new URL('../src/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const root = fileURLToPath(new URL('../src/', import.meta.url));
 const files = (dir) =>
   readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);

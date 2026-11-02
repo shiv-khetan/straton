@@ -194,11 +194,12 @@ console.log('SQL errors: headline, closest-name suggestion, engine prefix remove
 {
   const { readdirSync, statSync } = await import('node:fs');
   const { join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
   const walk = (dir) =>
     readdirSync(dir).flatMap((f) =>
       statSync(join(dir, f)).isDirectory() ? walk(join(dir, f)) : [join(dir, f)],
     );
-  const root = new URL('../src/features', import.meta.url).pathname;
+  const root = fileURLToPath(new URL('../src/features', import.meta.url));
   const offenders = walk(root).filter(
     (f) => f.endsWith('.tsx') && readFileSync(f, 'utf8').includes('type="checkbox"'),
   );
