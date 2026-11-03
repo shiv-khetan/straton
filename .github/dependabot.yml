@@ -7,6 +7,8 @@ updates:
     groups:
       cargo:
         update-types: [minor, patch]
+      cargo-major:
+        update-types: [major]
   - package-ecosystem: cargo
     directory: /apps/desktop/src-tauri
     schedule:
@@ -14,6 +16,8 @@ updates:
     groups:
       tauri-shell:
         update-types: [minor, patch]
+      tauri-shell-major:
+        update-types: [major]
   - package-ecosystem: npm
     directory: /apps/desktop
     schedule:
@@ -21,11 +25,19 @@ updates:
     groups:
       npm:
         update-types: [minor, patch]
+      npm-major:
+        update-types: [major]
   - package-ecosystem: pip
     directory: /docs
     schedule:
       interval: monthly
+    groups:
+      docs:
+        patterns: ['*']
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
