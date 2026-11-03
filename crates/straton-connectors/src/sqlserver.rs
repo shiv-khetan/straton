@@ -402,7 +402,9 @@ fn decode_hex(s: &str) -> Result<Vec<u8>> {
         return Err(invalid("invalid SQL Server binary value"));
     }
     s.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|p| {
             let h = (p[0] as char)
                 .to_digit(16)
