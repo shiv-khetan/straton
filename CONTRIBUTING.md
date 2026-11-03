@@ -83,4 +83,4 @@ npm run build
 4. Fill in the pull request template, including how you tested.
 5. A maintainer reviews; CI must be green before merge.
 
-By contributing you agree that your contribution is licensed under the [MIT License](https://github.com/shiv-khetan/straton/blob/main/LICENSE).
+By contributing you agree that your contribution is licensed under the [Apache License 2.0](https://github.com/shiv-khetan/straton/blob/main/LICENSE).

@@ -6,7 +6,7 @@ wire protocol, with users, roles, row filters and column masks enforced inside t
 
 [![CI](https://github.com/shiv-khetan/straton/actions/workflows/ci.yml/badge.svg)](https://github.com/shiv-khetan/straton/actions/workflows/ci.yml)
 [![Docs](https://github.com/shiv-khetan/straton/actions/workflows/docs.yml/badge.svg)](https://shiv-khetan.github.io/straton/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 **[Documentation](https://shiv-khetan.github.io/straton/)** ·
 [Getting started](https://shiv-khetan.github.io/straton/getting-started/) ·
@@ -65,4 +65,4 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the
 
 ## License
 
-[MIT](LICENSE) © The Straton contributors
+[Apache License 2.0](LICENSE) © The Straton contributors

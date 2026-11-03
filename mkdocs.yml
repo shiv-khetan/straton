@@ -4,7 +4,7 @@ site_url: https://shiv-khetan.github.io/straton/
 repo_url: https://github.com/shiv-khetan/straton
 repo_name: straton
 edit_uri: edit/main/docs/
-copyright: Copyright &copy; 2026 The Straton contributors · MIT License
+copyright: Copyright &copy; 2026 The Straton contributors · Apache License 2.0
 
 docs_dir: docs
 exclude_docs: |
