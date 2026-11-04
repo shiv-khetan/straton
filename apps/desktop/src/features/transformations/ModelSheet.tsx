@@ -7,6 +7,7 @@ import type { Model, ModelExplain, ModelInput, ModelLineage } from '@/lib/api';
 import { Button, Sheet, Tabs } from '@/components/workbench/primitives';
 import { ExplainPlan, Skeleton } from '@/features/console/ConsoleDrawer';
 import type { AsyncState } from './ModelPanels';
+import { ExpectationsEditor } from './ExpectationsEditor';
 
 // Side sheet for creating or editing one model: definition form, lineage and explain tabs.
 export function ModelSheet({
@@ -192,7 +193,10 @@ function DefinitionForm({
               setDraft({
                 ...draft,
                 materialization,
-                ...(materialization === 'view' ? { trigger: 'manual', cron: null } : {}),
+                // Views have no runs, so no expectations to check.
+                ...(materialization === 'view'
+                  ? { trigger: 'manual', cron: null, expectations: [] }
+                  : {}),
               });
             }}
           >
@@ -237,6 +241,17 @@ function DefinitionForm({
         />{' '}
         Enable Straton optimizer rules
       </label>
+      {draft.materialization === 'table' ? (
+        <ExpectationsEditor
+          expectations={draft.expectations ?? []}
+          results={selected?.expectation_results}
+          editable={editable}
+          busy={busy}
+          onChange={(expectations) => setDraft({ ...draft, expectations })}
+        />
+      ) : (
+        <p className="hint">Expectations apply to table models, which publish checked snapshots.</p>
+      )}
       {editable && (
         <div className="actions model-actions">
           <Button type="button" variant="ghost" disabled={busy} onClick={validate}>

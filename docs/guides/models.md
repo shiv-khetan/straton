@@ -22,6 +22,34 @@ Every save validates a single read-only SELECT as the **model owner**, using onl
 
 Table runs execute as the owner, so their row filters and masks constrain the output. Reading that output separately requires a grant on the Models source or dataset, and its own output policies apply. **Views are planned with the querying user's input views, never the owner's session**, so granting a view cannot widen input access. Views also require a Models grant.
 
+## Expectations
+
+Table models can carry expectations, the data-quality rules Databricks calls DLT
+expectations. Each has a name, a rule (a boolean SQL predicate over the model's output columns)
+and an action for rows where the rule is not true (`NULL` counts as not true):
+
+| Action | Effect |
+| --- | --- |
+| `warn` | Count the rows; publish them anyway. |
+| `drop` | Remove the rows before the snapshot is published. |
+| `fail` | Stop the run on the first violating batch. Nothing is published, so the previous snapshot stays current; the run fails with the rule's name. |
+
+```json
+"expectations": [
+  {"name": "has_email", "predicate": "email LIKE '%@%'", "action": "warn"},
+  {"name": "eu_only", "predicate": "country IN ('DE','FR','NL')", "action": "drop"},
+  {"name": "positive_amount", "predicate": "amount > 0", "action": "fail"}
+]
+```
+
+Rules follow the row-filter grammar: the output's own columns, literals, operators and
+deterministic functions; no subqueries or other tables. Saving and `POST /v1/models/validate`
+check every rule against the planned output. Every rule sees every row (a `warn` rule also counts
+rows that a `drop` rule removes). Each checked run stores per-rule counts, returned as
+`expectation_results` on the model (readers whose row filter hides part of the output see
+pass/fail without counts), and writes a `model.expectations` audit row. In the desktop app, the
+model sheet lists the rules with their last result.
+
 The `cancel_compensating_arithmetic` logical **OptimizerRule** runs after DataFusion's standard rules simplify views. It can combine deterministic view projection chains when a cancellation fires. It preserves semantics after type coercion, so an AnalyzerRule is not appropriate. A view `SELECT id + 1 AS y FROM app_db.users` followed by `SELECT y - 1 FROM models.v` can collapse to `id`. DataFusion 55.2 Int64 add/sub wraps modulo 2^64 (including MAX + 1 and MIN - 1); cancellation and constant-chain folding use the same wrapping semantics. Casts preserve result type and nullability. Floats and volatile expressions are excluded. Decimal128 arithmetic uses checked operations: cancelling a chain can remove an overflow error, so decimals are conservatively skipped (a regression test covers this). Other integer widths remain unchanged pending separate proofs.
 
 ```powershell

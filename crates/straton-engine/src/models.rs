@@ -29,10 +29,23 @@ pub struct Input {
     pub cron: Option<String>,
     #[serde(default = "enabled")]
     pub optimize: bool,
+    /// Data expectations checked while a table model materializes.
+    #[serde(default)]
+    pub expectations: Vec<Expectation>,
 }
 fn enabled() -> bool {
     true
 }
+/// A boolean predicate over the model's output. A row passes only when it is TRUE (NULL
+/// fails). `warn` records violations, `drop` removes violating rows, `fail` stops the run.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Expectation {
+    pub name: String,
+    pub predicate: String,
+    pub action: String,
+}
+pub const MAX_EXPECTATIONS: usize = 32;
 pub fn validate_input(m: &Input) -> Result<()> {
     ensure!(
         !m.name.is_empty()
@@ -65,6 +78,52 @@ pub fn validate_input(m: &Input) -> Result<()> {
         ensure!(m.cron.is_none(), "cron is only valid with the cron trigger");
     }
     select(&m.sql)?;
+    ensure!(
+        m.expectations.is_empty() || m.materialization == "table",
+        "expectations apply to table models, which publish a checked snapshot"
+    );
+    ensure!(
+        m.expectations.len() <= MAX_EXPECTATIONS,
+        "at most {MAX_EXPECTATIONS} expectations"
+    );
+    let mut names = BTreeSet::new();
+    for e in &m.expectations {
+        ensure!(
+            !e.name.is_empty()
+                && e.name.len() <= 64
+                && e.name
+                    .bytes()
+                    .all(|b| b == b'_' || b.is_ascii_lowercase() || b.is_ascii_digit()),
+            "expectation names are lowercase identifiers (up to 64)"
+        );
+        ensure!(names.insert(&e.name), "expectation names must be unique");
+        ensure!(
+            ["warn", "drop", "fail"].contains(&e.action.as_str()),
+            "expectation action must be warn, drop or fail"
+        );
+        ensure!(
+            !e.predicate.trim().is_empty() && e.predicate.len() <= 2000,
+            "expectation {} needs a predicate (up to 2000 characters)",
+            e.name
+        );
+    }
+    Ok(())
+}
+/// Check each expectation's predicate against the model's output schema: one boolean
+/// expression over its columns, deterministic, no subqueries (the row-filter rules).
+pub async fn check_expectations(output: &DataFrame, expectations: &[Expectation]) -> Result<()> {
+    if expectations.is_empty() {
+        return Ok(());
+    }
+    let ctx = SessionContext::new();
+    let frame = ctx.read_table(Arc::new(EmptyTable::new(Arc::new(
+        output.schema().as_arrow().clone(),
+    ))))?;
+    for e in expectations {
+        crate::policies::validate(&frame, &e.predicate)
+            .await
+            .map_err(|err| anyhow::anyhow!("expectation {}: {err}", e.name))?;
+    }
     Ok(())
 }
 pub fn select(text: &str) -> Result<()> {

@@ -87,3 +87,15 @@ for (const input of [{}, {back: {}}, {back: null}, {back: {upstream: null}}]) {
 }
 assert.equal(modelGraph(models, {shift: {upstream: [customers, customers]}}).edges.length, 1);
 console.log('Real API lineage, catalog enrichment, missing arrays, and non-overlapping model layout passed.');
+// Expectation outcomes: pass, warn, drop and fail, with counts hidden when filtered.
+import { expectationNameValid, expectationOutcome } from '../src/features/transformations/model-model.ts';
+assert.deepEqual(expectationOutcome(undefined), { state: 'pending', label: 'Not run', detail: '' });
+const base = { run_id: 'r', name: 'n', action: 'warn', passed: true, failed_rows: 0, total_rows: 4 };
+assert.equal(expectationOutcome(base).label, 'Passed');
+assert.deepEqual(expectationOutcome({ ...base, passed: false, failed_rows: 1 }), { state: 'warning', label: 'Warned', detail: '1 of 4 rows' });
+assert.equal(expectationOutcome({ ...base, action: 'drop', passed: false, failed_rows: 2 }).label, 'Dropped');
+assert.deepEqual(expectationOutcome({ ...base, action: 'fail', passed: false, failed_rows: null, total_rows: null }), { state: 'failed', label: 'Failed run', detail: '' });
+assert.equal(expectationOutcome({ ...base, passed: false, failed_rows: 1, total_rows: 1 }).detail, '1 of 1 row');
+for (const ok of ['rule_1', 'positive_amount', 'x']) assert.equal(expectationNameValid(ok), true, ok);
+for (const bad of ['', 'Has Caps', 'with-dash', 'x'.repeat(65)]) assert.equal(expectationNameValid(bad), false, bad);
+console.log('Model expectations: outcomes, hidden counts and naming passed.');

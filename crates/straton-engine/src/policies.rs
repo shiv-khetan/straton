@@ -124,7 +124,7 @@ pub async fn validate(frame: &DataFrame, text: &str) -> Result<Expr> {
         };
         if !allowed {
             return Err(datafusion::error::DataFusionError::Plan(
-                "policy permits only local columns and deterministic scalar expressions".into(),
+                "only this table's columns and deterministic scalar expressions are allowed".into(),
             ));
         }
         Ok(TreeNodeRecursion::Continue)

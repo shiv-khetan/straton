@@ -139,6 +139,13 @@ export interface SqlExplain {
   physical: string;
 }
 
+export type ExpectationAction = 'warn' | 'drop' | 'fail';
+/** A row passes when `predicate` is true; table models check these while they materialize. */
+export interface ModelExpectation {
+  name: string;
+  predicate: string;
+  action: ExpectationAction;
+}
 export interface ModelInput {
   name: string;
   sql: string;
@@ -146,6 +153,16 @@ export interface ModelInput {
   trigger: 'manual' | 'cron' | 'upstream';
   cron: string | null;
   optimize: boolean;
+  expectations?: ModelExpectation[];
+}
+/** Counts are null when the reader's row filter hides part of the output. */
+export interface ExpectationResult {
+  run_id: string;
+  name: string;
+  action: ExpectationAction;
+  passed: boolean;
+  failed_rows: number | null;
+  total_rows: number | null;
 }
 export interface Model extends ModelInput {
   id: string;
@@ -155,6 +172,7 @@ export interface Model extends ModelInput {
   row_count: number | null;
   last_run: number | null;
   last_run_status: string | null;
+  expectation_results?: ExpectationResult[];
 }
 export interface ModelExplain {
   logical_before: string;

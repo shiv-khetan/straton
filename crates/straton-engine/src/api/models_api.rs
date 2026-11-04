@@ -11,16 +11,32 @@ pub(super) fn routes() -> Router<App> {
         .route("/v1/models/{id}/lineage", get(lineage))
 }
 fn json_model(r: &sqlx::sqlite::SqliteRow) -> Value {
-    json!({"id":r.get::<String,_>("id"),"name":r.get::<String,_>("name"),"sql":r.get::<String,_>("sql"),"materialization":r.get::<String,_>("materialization"),"trigger":r.get::<String,_>("trigger"),"cron":r.get::<Option<String>,_>("cron"),"owner_id":r.get::<String,_>("owner_id"),"optimize":r.get::<bool,_>("optimize"),"created_at":r.get::<i64,_>("created_at"),"updated_at":r.get::<i64,_>("updated_at"),"status":r.get::<String,_>("status"),"error":r.get::<Option<String>,_>("error"),"last_run":r.get::<Option<i64>,_>("last_run"),"last_run_status":r.get::<Option<String>,_>("last_run_status"),"row_count":r.get::<Option<i64>,_>("row_count")})
+    json!({"id":r.get::<String,_>("id"),"name":r.get::<String,_>("name"),"sql":r.get::<String,_>("sql"),"materialization":r.get::<String,_>("materialization"),"trigger":r.get::<String,_>("trigger"),"cron":r.get::<Option<String>,_>("cron"),"owner_id":r.get::<String,_>("owner_id"),"optimize":r.get::<bool,_>("optimize"),"created_at":r.get::<i64,_>("created_at"),"updated_at":r.get::<i64,_>("updated_at"),"status":r.get::<String,_>("status"),"error":r.get::<Option<String>,_>("error"),"last_run":r.get::<Option<i64>,_>("last_run"),"last_run_status":r.get::<Option<String>,_>("last_run_status"),"row_count":r.get::<Option<i64>,_>("row_count"),"expectations":serde_json::from_str::<Value>(r.get("expectations")).unwrap_or(json!([]))})
 }
 async fn protected_json(a: &App, p: &Principal, r: &sqlx::sqlite::SqliteRow) -> ApiResult<Value> {
     let mut value = json_model(r);
     let frame = crate::policies::schema_frame(&a.pool, r.get("dataset_id")).await?;
     let policy =
         crate::policies::effective(&a.pool, p, models::SOURCE, r.get("dataset_id"), &frame).await?;
-    if policy.is_none_or(|policy| policy.filtered) {
+    let filtered = policy.is_none_or(|policy| policy.filtered);
+    if filtered {
         value["row_count"] = Value::Null;
     }
+    // Results of the latest run that checked expectations. Counts describe the owner's view
+    // of the output, so readers whose policy filters rows see pass/fail only.
+    let results = sqlx::query("SELECT run_id,name,action,failed_rows,total_rows FROM model_expectation_results WHERE run_id=(SELECT r.id FROM runs r JOIN jobs j ON j.id=r.job_id WHERE j.model_id=? AND EXISTS(SELECT 1 FROM model_expectation_results e WHERE e.run_id=r.id) ORDER BY r.created_at DESC,r.rowid DESC LIMIT 1) ORDER BY name")
+        .bind(r.get::<&str, _>("id"))
+        .fetch_all(&a.pool)
+        .await?;
+    value["expectation_results"] = json!(
+        results
+            .iter()
+            .map(|e| {
+                let failed: i64 = e.get("failed_rows");
+                json!({"run_id":e.get::<String,_>("run_id"),"name":e.get::<String,_>("name"),"action":e.get::<String,_>("action"),"passed":failed == 0,"failed_rows":(!filtered).then_some(failed),"total_rows":(!filtered).then(|| e.get::<i64,_>("total_rows"))})
+            })
+            .collect::<Vec<_>>()
+    );
     Ok(value)
 }
 const SELECT: &str = "SELECT m.*, d.id AS dataset_id,d.row_count,(SELECT r.updated_at FROM runs r JOIN jobs j ON j.id=r.job_id WHERE j.model_id=m.id ORDER BY r.created_at DESC,r.rowid DESC LIMIT 1) AS last_run,(SELECT r.state FROM runs r JOIN jobs j ON j.id=r.job_id WHERE j.model_id=m.id ORDER BY r.created_at DESC,r.rowid DESC LIMIT 1) AS last_run_status FROM models m JOIN datasets d ON d.source_id='straton-models' AND d.name=m.name";
@@ -84,6 +100,10 @@ async fn save(a: App, p: Principal, id: String, m: Input, update: bool) -> ApiRe
     let (frame, deps) = models::plan(&a.sql.for_principal(owner.clone()), &m.sql)
         .await
         .map_err(|e| bad(&e.to_string()))?;
+    models::check_expectations(&frame, &m.expectations)
+        .await
+        .map_err(|e| bad(&e.to_string()))?;
+    let expectations = serde_json::to_string(&m.expectations).map_err(anyhow::Error::from)?;
     models::check_cycle(&a.pool, &id, &m.name, &deps)
         .await
         .map_err(|e| bad(&e.to_string()))?;
@@ -106,9 +126,9 @@ async fn save(a: App, p: Principal, id: String, m: Input, update: bool) -> ApiRe
             .fetch_one(&mut *tx)
             .await?;
         sqlx::query("UPDATE datasets SET name=?,row_count=CASE WHEN name!=? THEN NULL ELSE row_count END,last_synced_at=CASE WHEN name!=? THEN NULL ELSE last_synced_at END WHERE source_id='straton-models' AND name=?").bind(&m.name).bind(&m.name).bind(&m.name).bind(old).execute(&mut *tx).await?;
-        sqlx::query("UPDATE models SET name=?,sql=?,materialization=?,trigger=?,cron=?,optimize=?,updated_at=?,status='ready',error=NULL WHERE id=?").bind(&m.name).bind(&m.sql).bind(&m.materialization).bind(&m.trigger).bind(&m.cron).bind(m.optimize).bind(store::now()).bind(&id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE models SET name=?,sql=?,materialization=?,trigger=?,cron=?,optimize=?,updated_at=?,status='ready',error=NULL,expectations=? WHERE id=?").bind(&m.name).bind(&m.sql).bind(&m.materialization).bind(&m.trigger).bind(&m.cron).bind(m.optimize).bind(store::now()).bind(&expectations).bind(&id).execute(&mut *tx).await?;
     } else {
-        sqlx::query("INSERT INTO models(id,name,sql,materialization,trigger,cron,owner_id,optimize,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(&id).bind(&m.name).bind(&m.sql).bind(&m.materialization).bind(&m.trigger).bind(&m.cron).bind(&owner.user.id).bind(m.optimize).bind(store::now()).bind(store::now()).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO models(id,name,sql,materialization,trigger,cron,owner_id,optimize,created_at,updated_at,expectations) VALUES(?,?,?,?,?,?,?,?,?,?,?)").bind(&id).bind(&m.name).bind(&m.sql).bind(&m.materialization).bind(&m.trigger).bind(&m.cron).bind(&owner.user.id).bind(m.optimize).bind(store::now()).bind(store::now()).bind(&expectations).execute(&mut *tx).await?;
     }
     models::catalog_model(&mut tx, &id, &m.name, frame.schema().as_arrow(), &deps).await?;
     sqlx::query("INSERT INTO jobs(id,name,source_id,dataset,cron,enabled,last_scheduled,model_id) VALUES(?,?,'straton-models',?,?,?,?,?) ON CONFLICT(model_id) WHERE model_id IS NOT NULL DO UPDATE SET name=excluded.name,dataset=excluded.dataset,cron=excluded.cron,enabled=excluded.enabled,last_scheduled=CASE WHEN jobs.cron IS NOT excluded.cron THEN excluded.last_scheduled ELSE jobs.last_scheduled END")
@@ -155,6 +175,9 @@ async fn validate(
     models::validate_input(&m).map_err(|e| bad(&e.to_string()))?;
     let _snapshot = crate::sql::SNAPSHOTS.read().await;
     let (frame, _) = models::plan(&a.sql.for_principal(p), &m.sql)
+        .await
+        .map_err(|e| bad(&e.to_string()))?;
+    models::check_expectations(&frame, &m.expectations)
         .await
         .map_err(|e| bad(&e.to_string()))?;
     Ok(Json(

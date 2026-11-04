@@ -603,13 +603,23 @@ async fn model_run(
         let workload = frame.logical_plan().clone();
         let (frame, _) = crate::optimizer::optimize(frame, m.get("optimize"))?;
         let schema = frame.schema().as_arrow().clone();
-        let mut stream = sql.stream_observed(frame, &workload).await?;
+        let mut checks = Expectations::new(frame, m.get("expectations"))?;
+        let mut stream = sql.stream_observed(checks.frame.clone(), &workload).await?;
         let mut number = 0;
         while let Some(batch) = stream.next().await {
             if cancelled(pool, id).await? {
                 return Ok::<_, anyhow::Error>(None);
             }
-            let batch = batch?;
+            let batch = match checks.apply(batch?) {
+                Ok(batch) => batch,
+                Err(failure) => {
+                    checks.record(pool, id, model).await?;
+                    return Err(failure);
+                }
+            };
+            if batch.num_rows() == 0 {
+                continue;
+            }
             straton_connectors::write_parquet(
                 &staging.join(format!("part-{number:06}.parquet")),
                 &batch,
@@ -617,6 +627,7 @@ async fn model_run(
             )?;
             number += 1;
         }
+        checks.record(pool, id, model).await?;
         // Persist the schema even for zero rows, so crash recovery can publish an empty result.
         if number == 0 {
             straton_connectors::write_parquet(
@@ -652,4 +663,112 @@ pub(crate) async fn write_key(
     let target: String = sqlx::query_scalar("SELECT d.id FROM runs r JOIN jobs j ON j.id=r.job_id JOIN datasets d ON d.source_id=j.source_id AND d.name=j.dataset WHERE r.id=?")
         .bind(run).fetch_one(pool).await?;
     keys::for_write(pool, staging, &target, enabled).await
+}
+
+/// Expectations on one model run: helper columns `__straton_expect_N` (predicate IS TRUE)
+/// are added to the plan, counted per batch, used to drop rows, then projected away.
+struct Expectations {
+    frame: datafusion::dataframe::DataFrame,
+    rules: Vec<crate::models::Expectation>,
+    width: usize,
+    failed: Vec<i64>,
+    total: i64,
+}
+impl Expectations {
+    fn new(frame: datafusion::dataframe::DataFrame, stored: &str) -> Result<Self> {
+        use datafusion::logical_expr::Expr;
+        let rules: Vec<crate::models::Expectation> = serde_json::from_str(stored)?;
+        let width = frame.schema().fields().len();
+        let frame = if rules.is_empty() {
+            frame
+        } else {
+            let mut columns: Vec<Expr> = frame
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .collect();
+            for (i, rule) in rules.iter().enumerate() {
+                let predicate = frame.parse_sql_expr(&rule.predicate)?;
+                columns
+                    .push(Expr::IsTrue(Box::new(predicate)).alias(format!("__straton_expect_{i}")));
+            }
+            frame.select(columns)?
+        };
+        Ok(Self {
+            frame,
+            failed: vec![0; rules.len()],
+            rules,
+            width,
+            total: 0,
+        })
+    }
+    /// Count violations, drop rows for `drop` rules, and stop at the first `fail` violation.
+    fn apply(
+        &mut self,
+        batch: datafusion::arrow::record_batch::RecordBatch,
+    ) -> Result<datafusion::arrow::record_batch::RecordBatch> {
+        use datafusion::arrow::{array::AsArray, compute};
+        if self.rules.is_empty() {
+            return Ok(batch);
+        }
+        self.total += batch.num_rows() as i64;
+        let mut keep: Option<datafusion::arrow::array::BooleanArray> = None;
+        for (i, rule) in self.rules.iter().enumerate() {
+            let passed = batch.column(self.width + i).as_boolean();
+            let failed = (passed.len() - passed.true_count()) as i64;
+            self.failed[i] += failed;
+            if rule.action == "fail" && failed > 0 {
+                anyhow::bail!(
+                    "expectation {} failed: {failed} row(s) violate {}",
+                    rule.name,
+                    rule.predicate
+                );
+            }
+            if rule.action == "drop" {
+                keep = Some(match keep {
+                    Some(k) => compute::and(&k, passed)?,
+                    None => passed.clone(),
+                });
+            }
+        }
+        let batch = batch.project(&(0..self.width).collect::<Vec<_>>())?;
+        Ok(match keep {
+            Some(keep) => compute::filter_record_batch(&batch, &keep)?,
+            None => batch,
+        })
+    }
+    async fn record(&self, pool: &SqlitePool, run: &str, model: &str) -> Result<()> {
+        if self.rules.is_empty() {
+            return Ok(());
+        }
+        let mut tx = pool.begin().await?;
+        for (rule, failed) in self.rules.iter().zip(&self.failed) {
+            sqlx::query("INSERT OR REPLACE INTO model_expectation_results(run_id,model_id,name,action,failed_rows,total_rows) VALUES(?,?,?,?,?,?)")
+                .bind(run)
+                .bind(model)
+                .bind(&rule.name)
+                .bind(&rule.action)
+                .bind(failed)
+                .bind(self.total)
+                .execute(&mut *tx)
+                .await?;
+        }
+        let violated: Vec<_> = self
+            .rules
+            .iter()
+            .zip(&self.failed)
+            .filter(|(_, f)| **f > 0)
+            .map(|(r, f)| json!({"name": r.name, "action": r.action, "failed_rows": f}))
+            .collect();
+        store::audit(
+            &mut tx,
+            "model.expectations",
+            model,
+            &json!({"run_id": run, "total_rows": self.total, "violations": violated}).to_string(),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
 }

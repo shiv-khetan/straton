@@ -7,6 +7,8 @@ All notable changes are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Model expectations (DLT-style): `warn`, `drop` and `fail` rules on table models, checked
+  while the model materializes, with per-run results in the API and the model sheet.
 - Tag-based masking: tag columns (`pii`, `finance.salary`) and set one mask per role per tag,
   applied to every tagged column in every dataset; column masks still win. API under
   `/v1/datasets/{id}/columns/{column}/tags/{tag}`, `/v1/tags` and `/v1/tag-masks`; managed in

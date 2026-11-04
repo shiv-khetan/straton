@@ -33,6 +33,7 @@ const initial: ModelInput = {
   trigger: 'manual',
   cron: null,
   optimize: true,
+  expectations: [],
 };
 const idle = { pending: false, error: '', data: null };
 export default function Models({
@@ -186,8 +187,9 @@ export default function Models({
           trigger: model.trigger,
           cron: model.cron,
           optimize: model.optimize,
+          expectations: model.expectations ?? [],
         }
-      : { ...initial };
+      : { ...initial, expectations: [] };
     setDraft(next);
     setBaseline(next);
     setTab('Definition');

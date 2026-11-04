@@ -7034,3 +7034,150 @@ async fn tag_masks_apply_to_every_tagged_column_and_column_masks_override_them()
     }
     f.close().await;
 }
+
+#[tokio::test]
+async fn model_expectations_warn_drop_and_fail_before_publication() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let model = |expectations: serde_json::Value| {
+        let mut m = model_input(
+            "checked_users",
+            "SELECT id, name FROM app_db.users",
+            "table",
+            "manual",
+        );
+        m["expectations"] = expectations;
+        m
+    };
+    let rules = json!([
+        {"name":"name_present","predicate":"name IS NOT NULL","action":"warn"},
+        {"name":"skip_first","predicate":"id > 1","action":"drop"},
+        {"name":"short_names","predicate":"character_length(name) <= 3","action":"warn"}
+    ]);
+    let (s, created) = request(&a, "POST", "/v1/models", model(rules.clone())).await;
+    assert_eq!(s, StatusCode::CREATED, "{created}");
+    assert_eq!(created["expectations"], rules);
+    let id = created["id"].as_str().unwrap().to_owned();
+    execute_model(&f, &a, &id).await;
+    // drop removed Alice before publishing; warnings counted every row, dropped ones too.
+    let (_, out) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT id, name FROM models.checked_users ORDER BY id"}),
+    )
+    .await;
+    assert_eq!(out["rows"], json!([[2, "Bob"]]), "{out}");
+    let (_, m) = request(&a, "GET", &format!("/v1/models/{id}"), json!(null)).await;
+    let results: std::collections::BTreeMap<String, serde_json::Value> = m["expectation_results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["name"].as_str().unwrap().to_owned(), r.clone()))
+        .collect();
+    assert_eq!(results.len(), 3, "{m}");
+    assert_eq!(results["name_present"]["passed"], true);
+    assert_eq!(results["skip_first"]["failed_rows"], 1);
+    assert_eq!(results["skip_first"]["total_rows"], 2);
+    assert_eq!(results["short_names"]["failed_rows"], 1);
+    assert_eq!(results["short_names"]["passed"], false);
+
+    // A fail rule stops the run: nothing is published, the error names the rule.
+    let (s, v) = request(
+        &a,
+        "PUT",
+        &format!("/v1/models/{id}"),
+        model(json!([{"name":"only_first","predicate":"id < 2","action":"fail"}])),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, r) = request(&a, "POST", &format!("/v1/models/{id}/run"), json!(null)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{r}");
+    let run = r["id"].as_str().unwrap().to_owned();
+    runner::state(&f.pool, &f.events, &run, "running", None)
+        .await
+        .unwrap();
+    let (pool, backups, events, worker) = (
+        f.pool.clone(),
+        backup::Backups::new(f.config.clone()),
+        f.events.clone(),
+        run.clone(),
+    );
+    runner::supervise(f.pool.clone(), f.events.clone(), run.clone(), async move {
+        runner::execute(&pool, &backups, &worker, &events).await
+    })
+    .await
+    .unwrap();
+    assert_eq!(f.state(&run).await, "failed");
+    let error: String = sqlx::query_scalar("SELECT error FROM runs WHERE id=?")
+        .bind(&run)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert!(error.contains("expectation only_first failed"), "{error}");
+    let (_, out) = request(
+        &a,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT id FROM models.checked_users ORDER BY id"}),
+    )
+    .await;
+    assert_eq!(out["rows"], json!([[2]]), "previous snapshot stays current");
+    let (_, m) = request(&a, "GET", &format!("/v1/models/{id}"), json!(null)).await;
+    assert_eq!(m["expectation_results"][0]["name"], "only_first");
+    assert_eq!(m["expectation_results"][0]["passed"], false);
+    assert!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_log WHERE action='model.expectations'"
+        )
+        .fetch_one(&f.pool)
+        .await
+        .unwrap()
+            >= 2
+    );
+
+    // Validation: table models only, one boolean local predicate, unique names, known actions.
+    for (input, expected) in [
+        (
+            {
+                let mut m = model(json!([{"name":"x","predicate":"id > 0","action":"warn"}]));
+                m["name"] = json!("checked_view");
+                m["materialization"] = json!("view");
+                m
+            },
+            "table models",
+        ),
+        (
+            model(json!([{"name":"x","predicate":"nope > 0","action":"warn"}])),
+            "expectation x",
+        ),
+        (
+            model(json!([{"name":"x","predicate":"id IN (SELECT 1)","action":"warn"}])),
+            "expectation x",
+        ),
+        (
+            model(json!([{"name":"x","predicate":"id","action":"warn"}])),
+            "boolean",
+        ),
+        (
+            model(json!([
+                {"name":"x","predicate":"id > 0","action":"warn"},
+                {"name":"x","predicate":"id > 1","action":"warn"}
+            ])),
+            "unique",
+        ),
+        (
+            model(json!([{"name":"x","predicate":"id > 0","action":"quarantine"}])),
+            "warn, drop or fail",
+        ),
+    ] {
+        let (s, v) = request(&a, "POST", "/v1/models/validate", input).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        assert!(
+            v["error"].as_str().unwrap().contains(expected),
+            "{expected}: {v}"
+        );
+    }
+    f.close().await;
+}
