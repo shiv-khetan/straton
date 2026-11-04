@@ -35,3 +35,10 @@ allow_private = true
 # REQUIRED on Linux servers: the kernel keyring used by default is lost on reboot.
 # Keep it outside data_dir and back it up separately (it unlocks encrypted snapshots).
 # dir = "/var/lib/straton/secrets"   # or STRATON_SECRETS_DIR
+
+[lineage]
+# Send OpenLineage run events (START/COMPLETE/FAIL/ABORT) for syncs and model runs, for
+# Marquez, DataHub, OpenMetadata or Unity Catalog. Off when unset. HTTPS, or HTTP on loopback.
+# openlineage_url = "http://127.0.0.1:5000/api/v1/lineage"   # or STRATON_LINEAGE_OPENLINEAGE_URL
+namespace = "straton"                                        # or STRATON_LINEAGE_NAMESPACE
+# A bearer API key, if the collector needs one, comes only from STRATON_OPENLINEAGE_API_KEY.

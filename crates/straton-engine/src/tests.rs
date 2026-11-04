@@ -6767,3 +6767,98 @@ async fn review_repeated_failed_credentials_are_counted_audited_and_alerted_once
     assert_eq!(s, StatusCode::FORBIDDEN);
     f.close().await;
 }
+
+#[tokio::test]
+async fn openlineage_reports_sync_and_model_runs_with_inputs_outputs_and_schemas() {
+    let received = Arc::new(tokio::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+    let sink = received.clone();
+    let collector = axum::Router::new().route(
+        "/api/v1/lineage",
+        axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+            let sink = sink.clone();
+            async move {
+                sink.lock().await.push(body);
+                StatusCode::CREATED
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/api/v1/lineage", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, collector).await.unwrap() });
+    let f = sql_fixture().await;
+    let a = app(&f);
+    let lineage = crate::config::Lineage {
+        openlineage_url: Some(url),
+        namespace: "acme".into(),
+    };
+    let _tasks = crate::openlineage::spawn(f.pool.clone(), &f.events, &lineage)
+        .unwrap()
+        .unwrap();
+    let wait_for = |n: usize| {
+        let received = received.clone();
+        async move {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while received.lock().await.len() < n && Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            received.lock().await.clone()
+        }
+    };
+    let run = sql_sync(&f).await;
+    let events = wait_for(2).await;
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(events[0]["eventType"], "START");
+    assert_eq!(events[1]["eventType"], "COMPLETE");
+    for e in &events {
+        assert_eq!(e["run"]["runId"], run.as_str());
+        assert_eq!(e["job"]["namespace"], "acme");
+        assert_eq!(e["job"]["name"], "sync.app_db.users");
+        assert_eq!(e["job"]["facets"]["jobType"]["jobType"], "SYNC");
+        assert_eq!(e["producer"], env!("CARGO_PKG_REPOSITORY"));
+    }
+    let complete = &events[1];
+    assert_eq!(complete["outputs"][0]["namespace"], "acme");
+    assert_eq!(complete["outputs"][0]["name"], "app_db.users");
+    let fields: Vec<_> = complete["outputs"][0]["facets"]["schema"]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(fields, ["id", "name"]);
+    assert_eq!(complete["inputs"][0]["namespace"], "file");
+    assert!(
+        complete["inputs"][0]["name"]
+            .as_str()
+            .unwrap()
+            .ends_with("sql-input.db/users")
+    );
+
+    // A model run reports the lake tables it reads and the table it writes, with its SQL.
+    let model = create_model(
+        &a,
+        "active_users",
+        "SELECT id, name FROM app_db.users WHERE id > 0",
+        "table",
+        "manual",
+    )
+    .await;
+    let model_run = execute_model(&f, &a, &model).await;
+    let events = wait_for(4).await;
+    assert_eq!(events.len(), 4, "{events:?}");
+    let done = &events[3];
+    assert_eq!(done["eventType"], "COMPLETE");
+    assert_eq!(done["run"]["runId"], model_run.as_str());
+    assert_eq!(done["job"]["name"], "model.active_users");
+    assert_eq!(done["job"]["facets"]["jobType"]["jobType"], "MODEL");
+    assert!(
+        done["job"]["facets"]["sql"]["query"]
+            .as_str()
+            .unwrap()
+            .contains("FROM app_db.users")
+    );
+    assert_eq!(done["inputs"][0]["namespace"], "acme");
+    assert_eq!(done["inputs"][0]["name"], "app_db.users");
+    assert_eq!(done["outputs"][0]["name"], "models.active_users");
+    f.close().await;
+}

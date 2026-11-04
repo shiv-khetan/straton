@@ -92,6 +92,7 @@ nav:
   - Operations:
       - Configuration: operations/configuration.md
       - Deployment: operations/deployment.md
+      - OpenLineage export: operations/openlineage.md
   - Security:
       - Security policy: security/index.md
       - Encryption, audit and supply chain: security/encryption.md

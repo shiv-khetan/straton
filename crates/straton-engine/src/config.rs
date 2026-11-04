@@ -16,6 +16,7 @@ pub struct Config {
     pub encryption: Encryption,
     pub network: Network,
     pub secrets: Secrets,
+    pub lineage: Lineage,
 }
 #[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -47,6 +48,7 @@ impl Default for Config {
             encryption: Encryption::default(),
             network: Network::default(),
             secrets: Secrets::default(),
+            lineage: Lineage::default(),
         }
     }
 }
@@ -76,6 +78,12 @@ impl Config {
                 "STRATON_SQL_QUERY_TIMEOUT_SECS" => c.sql.query_timeout_secs = value.parse()?,
                 "STRATON_SQL_MAX_ROWS" => c.sql.max_rows = value.parse()?,
                 "STRATON_SQL_MEMORY_LIMIT_MB" => c.sql.memory_limit_mb = value.parse()?,
+                "STRATON_LINEAGE_OPENLINEAGE_URL" => {
+                    c.lineage.openlineage_url = Some(value).filter(|v| !v.is_empty())
+                }
+                "STRATON_LINEAGE_NAMESPACE" => c.lineage.namespace = value,
+                // Read by openlineage.rs at startup; a secret never lives in Config.
+                "STRATON_OPENLINEAGE_API_KEY" => {}
                 _ => anyhow::bail!("unknown environment setting {key}"),
             }
         }
@@ -116,6 +124,13 @@ impl Config {
             .cron
             .parse::<cron::Schedule>()
             .context("backup.cron")?;
+        if let Some(url) = &self.lineage.openlineage_url {
+            crate::openlineage::endpoint(url).context("lineage.openlineage_url")?;
+        }
+        ensure!(
+            !self.lineage.namespace.trim().is_empty() && self.lineage.namespace.len() <= 200,
+            "lineage.namespace must be 1 to 200 characters"
+        );
         Ok(())
     }
 }
@@ -175,4 +190,23 @@ pub struct Secrets {
     /// Owner-only secret files in this directory instead of the OS keychain. Required for a
     /// Linux engine that must survive a reboot: the kernel keyring is in-memory only.
     pub dir: Option<std::path::PathBuf>,
+}
+
+/// OpenLineage emission; see `openlineage.rs`. Off unless `openlineage_url` is set.
+#[derive(Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Lineage {
+    /// HTTP endpoint that accepts OpenLineage run events, e.g. Marquez's
+    /// `http://marquez:5000/api/v1/lineage`. HTTPS, or HTTP to a loopback address.
+    pub openlineage_url: Option<String>,
+    /// Namespace for Straton's jobs and lake tables.
+    pub namespace: String,
+}
+impl Default for Lineage {
+    fn default() -> Self {
+        Self {
+            openlineage_url: None,
+            namespace: "straton".into(),
+        }
+    }
 }

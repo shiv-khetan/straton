@@ -15,6 +15,7 @@ mod keys;
 mod lake_layout;
 mod models;
 mod notify;
+mod openlineage;
 mod optimizer;
 mod pipeline;
 mod policies;
@@ -129,6 +130,7 @@ async fn run(config: config::Config) -> Result<()> {
     access::bootstrap(&pool, secrecy::ExposeSecret::expose_secret(token.as_ref())).await?;
     let (events, _) = tokio::sync::broadcast::channel(256);
     auth_failures::init(events.clone());
+    let _lineage = openlineage::spawn(pool.clone(), &events, &config.lineage)?;
     notify::verify_audit(&pool, &events).await?;
     let backups = backup::Backups::new(config.clone());
     scheduler::seed_backup(&pool, &config.backup.cron).await?;

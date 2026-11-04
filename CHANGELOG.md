@@ -7,6 +7,8 @@ All notable changes are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- OpenLineage export (`[lineage] openlineage_url`): `START`, `COMPLETE`, `FAIL` and `ABORT`
+  events for syncs and model runs, with input and output datasets and schema facets.
 - Documentation site (MkDocs Material) published to GitHub Pages, with an API reference
   generated from the engine's route contract test.
 - Open-source project files: license, contributing guide, code of conduct, issue and pull
