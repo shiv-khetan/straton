@@ -100,6 +100,13 @@ export interface ColumnProfile {
   approx_distinct: number | null;
   min: SqlCell;
   max: SqlCell;
+  /** Equal-width bins between min and max (numeric columns); the last includes max. */
+  histogram?: HistogramBin[] | null;
+}
+export interface HistogramBin {
+  lo: number;
+  hi: number;
+  count: number;
 }
 export interface TableProfile {
   schema: string;
@@ -440,14 +447,23 @@ export interface PipelineRunDetail extends PipelineRun {
   nodes: PipelineRunNode[];
 }
 export type QualityKind =
-  'not_null' | 'unique' | 'range' | 'freshness' | 'row_count' | 'custom_sql';
+  'not_null' | 'unique' | 'range' | 'freshness' | 'row_count' | 'custom_sql' | 'drift';
 export interface QualityInput {
   name: string;
   dataset_id: string | null;
   model_id: string | null;
   kind: QualityKind;
   column_name: string | null;
-  config: { min?: SqlCell; max?: SqlCell; max_age_seconds?: number; sql?: string };
+  config: {
+    min?: SqlCell;
+    max?: SqlCell;
+    max_age_seconds?: number;
+    sql?: string;
+    /** drift: relative row-count change, null-ratio increase, relative distinct change. */
+    max_row_change?: number;
+    max_null_increase?: number;
+    max_distinct_change?: number;
+  };
   severity: 'error' | 'warn';
   cron: string | null;
   enabled: boolean;

@@ -25,3 +25,18 @@ for (const [key,action] of shortcuts) {const parts=key.split('+');assert.equal(s
 assert.equal(shortcutAction({key:'Enter',ctrlKey:false,shiftKey:false}),null);assert.equal(shortcutAction({key:'s',ctrlKey:true,shiftKey:true}),null);
 assert.equal(formatBytes(0),'0 B');assert.equal(formatBytes(1024),'1 KiB');assert.equal(formatBytes(1048576),'1 MiB');assert.equal(formatBytes(-1),'—');
 console.log('Core: Explorer mapping/filters/widths, tab reducers, history cap/dedupe, shortcuts and storage passed.');
+// Profile histograms: bin labels and the spoken summary (the chart's text fallback).
+import { binLabel, histogramSummary } from '../src/features/explorer/explorer-model.ts';
+const bins = [
+  { lo: 0, hi: 50, count: 1 },
+  { lo: 50, hi: 100, count: 3 },
+  { lo: 100, hi: 150, count: 0 },
+];
+assert.equal(binLabel(bins[1]), '50 – 100');
+assert.equal(binLabel({ lo: 0.125, hi: 0.25, count: 1 }), '0.13 – 0.25');
+assert.equal(
+  histogramSummary('amount', bins),
+  'Distribution of amount: 4 values from 0 to 150; most fall in 50 – 100 (75%).',
+);
+assert.equal(histogramSummary('amount', []), 'No values to chart for amount.');
+console.log('Profile histograms: bin labels and summaries passed.');

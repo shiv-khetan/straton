@@ -3,7 +3,7 @@ use datafusion::{
     arrow::{csv::WriterBuilder, datatypes::DataType},
     common::{Column, ScalarValue, TableReference},
     dataframe::DataFrame,
-    functions_aggregate::expr_fn::{approx_distinct, count, max, min},
+    functions_aggregate::expr_fn::count,
     logical_expr::{Expr, expr::Like},
     parquet::arrow::ArrowWriter,
     prelude::{col, lit},
@@ -21,8 +21,6 @@ pub(super) fn routes() -> Router<App> {
 }
 /// Hard ceiling for one export: the file is buffered in memory before it is sent.
 const MAX_EXPORT_ROWS: usize = 1_000_000;
-/// Profiles cover at most this many columns so one request stays one bounded aggregate.
-const MAX_PROFILE_COLUMNS: usize = 128;
 #[derive(Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct Sort {
@@ -349,29 +347,9 @@ async fn export(
     })?
 }
 
-fn orderable(ty: &DataType) -> bool {
-    ty.is_numeric()
-        || is_text(ty)
-        || matches!(
-            ty,
-            DataType::Boolean
-                | DataType::Date32
-                | DataType::Date64
-                | DataType::Timestamp(..)
-                | DataType::Time32(_)
-                | DataType::Time64(_)
-        )
-}
-fn distinct_countable(ty: &DataType) -> bool {
-    ty.is_integer()
-        || is_text(ty)
-        || matches!(
-            ty,
-            DataType::Date32 | DataType::Date64 | DataType::Timestamp(..)
-        )
-}
-/// Column profile (row count, nulls, approximate distinct values, min/max) for the
-/// policy-filtered view of one table: the same masking and row filters as /rows apply.
+/// Column profile (row count, nulls, approximate distinct values, min/max, numeric
+/// histograms) for the policy-filtered view of one table: the same masking and row filters
+/// as /rows apply.
 async fn profile(
     State(a): State<App>,
     Extension(p): Extension<Principal>,
@@ -387,65 +365,40 @@ async fn profile(
             "profile accepts schema, table, columns, filters and search only",
         ));
     }
-    tokio::time::timeout(Duration::from_secs_f64(a.sql.config.query_timeout_secs), async {
-        let _pin = crate::sql::SNAPSHOTS.read().await;
-        let frame = frame(&a, &p, &q).await?;
-        let fields: Vec<_> = frame
-            .schema()
-            .fields()
-            .iter()
-            .filter(|f| q.columns.as_ref().is_none_or(|c| c.contains(f.name())))
-            .map(|f| (f.name().clone(), f.data_type().clone()))
-            .collect();
-        if fields.len() > MAX_PROFILE_COLUMNS {
-            return Err(bad("select at most 128 columns to profile"));
-        }
-        // One aggregate pass: [rows, then per column: non-null, distinct?, min?, max?].
-        let mut aggs = vec![count(lit(1)).alias("__rows")];
-        for (i, (name, ty)) in fields.iter().enumerate() {
-            let c = || col(Column::from_name(name));
-            aggs.push(count(c()).alias(format!("__nn{i}")));
-            if distinct_countable(ty) {
-                aggs.push(approx_distinct(c()).alias(format!("__nd{i}")));
+    tokio::time::timeout(
+        Duration::from_secs_f64(a.sql.config.query_timeout_secs),
+        async {
+            let _pin = crate::sql::SNAPSHOTS.read().await;
+            let frame = frame(&a, &p, &q).await?;
+            let fields: Vec<_> = frame
+                .schema()
+                .fields()
+                .iter()
+                .filter(|f| q.columns.as_ref().is_none_or(|c| c.contains(f.name())))
+                .map(|f| (f.name().clone(), f.data_type().clone()))
+                .collect();
+            if fields.len() > crate::profile::MAX_COLUMNS {
+                return Err(bad("select at most 128 columns to profile"));
             }
-            if orderable(ty) {
-                aggs.push(min(c()).alias(format!("__min{i}")));
-                aggs.push(max(c()).alias(format!("__max{i}")));
-            }
-        }
-        let batches = frame.aggregate(vec![], aggs).map_err(df)?.collect().await.map_err(df)?;
-        let batch = batches.first().ok_or_else(|| anyhow::anyhow!("empty profile result"))?;
-        let get = |name: &str| -> ApiResult<Value> {
-            match batch.schema().index_of(name) {
-                Ok(i) => Ok(crate::sql::cell(batch.column(i).as_ref(), 0)?),
-                Err(_) => Ok(Value::Null),
-            }
-        };
-        let rows = get("__rows")?.as_u64().unwrap_or(0);
-        let columns = fields
-            .iter()
-            .enumerate()
-            .map(|(i, (name, ty))| {
-                let non_null = get(&format!("__nn{i}"))?.as_u64().unwrap_or(0);
-                Ok(json!({
-                    "name": name,
-                    "type": match ty {
-                        DataType::Utf8View => "Utf8".to_owned(),
-                        DataType::BinaryView => "Binary".to_owned(),
-                        other => other.to_string(),
+            let (rows, columns) = crate::profile::profile(frame, &fields, true)
+                .await
+                .map_err(
+                    |e| match e.downcast::<datafusion::error::DataFusionError>() {
+                        Ok(e) => df(e),
+                        Err(e) => ApiError::from(e),
                     },
-                    "non_null": non_null,
-                    "nulls": rows.saturating_sub(non_null),
-                    "null_ratio": if rows == 0 { 0.0 } else { (rows - non_null.min(rows)) as f64 / rows as f64 },
-                    "approx_distinct": get(&format!("__nd{i}"))?,
-                    "min": get(&format!("__min{i}"))?,
-                    "max": get(&format!("__max{i}"))?,
-                }))
-            })
-            .collect::<ApiResult<Vec<_>>>()?;
-        audit(&a, &q, "explorer.profile").await?;
-        Ok(Json(json!({"schema": q.schema, "table": q.table, "rows": rows, "columns": columns})))
-    })
+                )?;
+            audit(&a, &q, "explorer.profile").await?;
+            Ok(Json(
+                json!({"schema": q.schema, "table": q.table, "rows": rows, "columns": columns}),
+            ))
+        },
+    )
     .await
-    .map_err(|_| ApiError(StatusCode::REQUEST_TIMEOUT, "explorer profile timed out".into()))?
+    .map_err(|_| {
+        ApiError(
+            StatusCode::REQUEST_TIMEOUT,
+            "explorer profile timed out".into(),
+        )
+    })?
 }

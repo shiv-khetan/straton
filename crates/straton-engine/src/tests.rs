@@ -7181,3 +7181,227 @@ async fn model_expectations_warn_drop_and_fail_before_publication() {
     }
     f.close().await;
 }
+
+#[tokio::test]
+async fn profile_histograms_and_drift_checks_with_redacted_counts_for_filtered_readers() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    // Numeric columns get equal-width bins covering every non-null value; text columns none.
+    let (s, profile) = request(
+        &a,
+        "POST",
+        "/v1/explorer/profile",
+        json!({"schema":"app_db","table":"users"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{profile}");
+    let id = &profile["columns"][0];
+    assert_eq!(id["name"], "id");
+    let bins = id["histogram"].as_array().unwrap();
+    assert_eq!(bins.len(), crate::profile::BINS);
+    assert_eq!(
+        bins.iter()
+            .map(|b| b["count"].as_i64().unwrap())
+            .sum::<i64>(),
+        2
+    );
+    assert_eq!(bins[0]["lo"], 1.0);
+    assert_eq!(bins.last().unwrap()["hi"], 2.0);
+    assert_eq!(
+        bins.last().unwrap()["count"],
+        1,
+        "last bin includes the maximum"
+    );
+    assert!(profile["columns"][1]["histogram"].is_null());
+
+    // Drift: the first run records a baseline; after a resync with more rows and new nulls,
+    // the next run fails and says what changed.
+    let check = create_check(
+        &a,
+        json!({"name":"Users drift","dataset_id":did,"kind":"drift","config":{"max_row_change":0.5,"max_null_increase":0.1},"severity":"warn"}),
+    )
+    .await;
+    let run = |a: axum::Router, check: String| async move {
+        let (s, v) = request(
+            &a,
+            "POST",
+            &format!("/v1/quality/checks/{check}/run"),
+            json!(null),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        v
+    };
+    let first = run(a.clone(), check.clone()).await;
+    assert_eq!(first["status"], "passed", "{first}");
+    assert_eq!(first["message"], "Baseline profile recorded");
+    let same = run(a.clone(), check.clone()).await;
+    assert_eq!(same["message"], "No drift since the last run");
+    let input = sqlx::sqlite::SqlitePoolOptions::new()
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new().filename(f.dir.join("sql-input.db")),
+        )
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO users VALUES(3,'Carol'),(4,NULL),(5,NULL)")
+        .execute(&input)
+        .await
+        .unwrap();
+    input.close().await;
+    sql_sync(&f).await;
+    let drifted = run(a.clone(), check.clone()).await;
+    assert_eq!(drifted["status"], "failed", "{drifted}");
+    let message = drifted["message"].as_str().unwrap();
+    assert!(message.contains("rows 2 → 5"), "{message}");
+    assert!(message.contains("name nulls 0% → 40%"), "{message}");
+    assert_eq!(drifted["observed"], 2.0);
+    for bad in [
+        json!({}),
+        json!({"max_row_change":0}),
+        json!({"max_null_increase":2}),
+    ] {
+        let (s, v) = request(
+            &a,
+            "POST",
+            "/v1/quality/checks",
+            json!({"name":"Bad","dataset_id":did,"kind":"drift","config":bad,"severity":"warn"}),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    }
+
+    // Results count rows with the owner's access: a reader whose row filter hides rows sees
+    // pass/fail only, while an unfiltered reader sees the counts.
+    let counted = create_check(
+        &a,
+        json!({"name":"Users count","dataset_id":did,"kind":"row_count","config":{"min":1},"severity":"warn"}),
+    )
+    .await;
+    run(a.clone(), counted.clone()).await;
+    let filtered = access_role(&a, "filtered").await;
+    access_grant(&a, &filtered, "dataset", &did, "read").await;
+    let (s, e) = request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/row-filters/{filtered}"),
+        json!({"predicate":"id = 1"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{e}");
+    let (_, filtered_token) = access_user(&a, "filtered reader", &[&filtered]).await;
+    let open = access_role(&a, "open").await;
+    access_grant(&a, &open, "dataset", &did, "read").await;
+    let (_, open_token) = access_user(&a, "open reader", &[&open]).await;
+    for path in [
+        format!("/v1/quality/checks/{counted}/runs"),
+        "/v1/quality/runs".to_owned(),
+    ] {
+        let (_, runs) = request_as(&a, &filtered_token, "GET", &path, json!(null)).await;
+        let runs = runs.as_array().unwrap();
+        assert!(!runs.is_empty(), "{path}");
+        for r in runs {
+            assert!(r["observed"].is_null(), "{path}: {r}");
+            assert!(
+                !r["message"].as_str().unwrap().contains("rows"),
+                "{path}: {r}"
+            );
+        }
+        let (_, runs) = request_as(&a, &open_token, "GET", &path, json!(null)).await;
+        assert!(
+            runs.as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["observed"] == 5.0),
+            "{path}: {runs}"
+        );
+    }
+    f.close().await;
+}
+
+#[tokio::test]
+async fn migration_allowing_drift_checks_keeps_existing_checks_runs_and_profiles() {
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    let dir = std::env::temp_dir().join(format!("straton-migrate-{}", store::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(dir.join("state.db"))
+                .create_if_missing(true)
+                .foreign_keys(true),
+        )
+        .await
+        .unwrap();
+    let all = sqlx::migrate!();
+    let before = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            all.migrations
+                .iter()
+                .filter(|m| m.version < 20)
+                .cloned()
+                .collect(),
+        ),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    before.run(&pool).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO users(id,name,created_at) VALUES('u','U',1);
+         INSERT INTO sources(id,name,kind) VALUES('s','S','noop');
+         INSERT INTO datasets(id,source_id,name) VALUES('ds','s','t');
+         INSERT INTO quality_checks(id,name,kind,config,severity,last_scheduled,owner_id,created_at,updated_at) VALUES('c','Check','custom_sql','{\"sql\":\"SELECT 1 WHERE false\"}','warn',1,'u',1,1);
+         INSERT INTO quality_runs(id,check_id,status,observed,failing_rows,message,started_at,finished_at) VALUES('r','c','passed',0,0,'Check passed',1,2);
+         INSERT INTO quality_profiles(check_id,created_at,profile) VALUES('c',1,'{}');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    all.run(&pool).await.unwrap();
+    for (table, expected) in [
+        ("quality_checks", 1),
+        ("quality_runs", 1),
+        ("quality_profiles", 1),
+    ] {
+        let n: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, expected, "{table}");
+    }
+    // The new kind is accepted, the old constraints still hold, foreign keys still cascade.
+    let drift = "INSERT INTO quality_checks(id,name,kind,config,severity,last_scheduled,owner_id,created_at,updated_at,dataset_id) VALUES(?,'Drift','drift','{}','warn',1,'u',1,1,?)";
+    sqlx::query(drift)
+        .bind("d")
+        .bind("ds")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(drift)
+        .bind("no-target")
+        .bind(None::<String>)
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    sqlx::query("INSERT INTO quality_checks(id,name,kind,config,severity,last_scheduled,owner_id,created_at,updated_at,dataset_id) VALUES('x','X','shuffle','{}','warn',1,'u',1,1,'ds')")
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    let violations: Vec<sqlx::sqlite::SqliteRow> = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert!(violations.is_empty());
+    sqlx::query("DELETE FROM quality_checks WHERE id='c'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM quality_runs")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(runs, 0, "delete still cascades to runs");
+    pool.close().await;
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -20,6 +20,35 @@ async fn visible(a: &App, p: &Principal, r: &sqlx::sqlite::SqliteRow) -> ApiResu
             && r.get::<&str, _>("owner_id") == p.user.id)
         || quality::readable(&a.pool, p, r.get("dataset_id"), r.get("model_id")).await?)
 }
+/// Checks run with their owner's access, so results can count rows a reader's row filter
+/// hides. Other readers see counts and messages only when their own policy on the target is
+/// unfiltered; otherwise just pass/fail.
+async fn counts_visible(a: &App, p: &Principal, r: &sqlx::sqlite::SqliteRow) -> ApiResult<bool> {
+    if p.admin() || r.get::<&str, _>("owner_id") == p.user.id {
+        return Ok(true);
+    }
+    let Some(id) = quality::dataset(&a.pool, r.get("dataset_id"), r.get("model_id")).await? else {
+        return Ok(false);
+    };
+    let source: String = sqlx::query_scalar("SELECT source_id FROM datasets WHERE id=?")
+        .bind(&id)
+        .fetch_one(&a.pool)
+        .await?;
+    let frame = crate::policies::schema_frame(&a.pool, &id).await?;
+    Ok(crate::policies::effective(&a.pool, p, &source, &id, &frame)
+        .await?
+        .is_some_and(|policy| !policy.filtered))
+}
+fn redacted(mut run: Value) -> Value {
+    run["observed"] = Value::Null;
+    run["failing_rows"] = Value::Null;
+    run["message"] = json!(match run["status"].as_str() {
+        Some("passed") => "Check passed",
+        Some("failed") => "Check failed",
+        _ => "Check could not be evaluated",
+    });
+    run
+}
 async fn row(a: &App, p: &Principal, id: &str, write: bool) -> ApiResult<sqlx::sqlite::SqliteRow> {
     let r = sqlx::query("SELECT * FROM quality_checks WHERE id=?")
         .bind(id)
@@ -155,8 +184,9 @@ async fn history(
     Path(id): Path<String>,
     Query(q): Query<Limit>,
 ) -> ApiResult<Json<Value>> {
-    row(&a, &p, &id, false).await?;
-    Ok(Json(json!(sqlx::query("SELECT * FROM quality_runs WHERE check_id=? ORDER BY started_at DESC,rowid DESC LIMIT ?").bind(id).bind(q.limit.unwrap_or(50).clamp(1,200)).fetch_all(&a.pool).await?.iter().map(quality::run_value).collect::<Vec<_>>())))
+    let check = row(&a, &p, &id, false).await?;
+    let visible = counts_visible(&a, &p, &check).await?;
+    Ok(Json(json!(sqlx::query("SELECT * FROM quality_runs WHERE check_id=? ORDER BY started_at DESC,rowid DESC LIMIT ?").bind(id).bind(q.limit.unwrap_or(50).clamp(1,200)).fetch_all(&a.pool).await?.iter().map(quality::run_value).map(|r| if visible { r } else { redacted(r) }).collect::<Vec<_>>())))
 }
 async fn recent(
     State(a): State<App>,
@@ -167,12 +197,16 @@ async fn recent(
         .fetch_all(&a.pool)
         .await?;
     let mut ids = vec![];
+    let mut hidden = std::collections::BTreeSet::new();
     for r in checks {
         if visible(&a, &p, &r).await? {
             ids.push(r.get::<String, _>("id"));
+            if !counts_visible(&a, &p, &r).await? {
+                hidden.insert(r.get::<String, _>("id"));
+            }
         }
     }
-    Ok(Json(json!(sqlx::query("SELECT * FROM quality_runs WHERE check_id IN(SELECT value FROM json_each(?)) ORDER BY started_at DESC,rowid DESC LIMIT ?").bind(json!(ids).to_string()).bind(q.limit.unwrap_or(50).clamp(1,200)).fetch_all(&a.pool).await?.iter().map(quality::run_value).collect::<Vec<_>>())))
+    Ok(Json(json!(sqlx::query("SELECT * FROM quality_runs WHERE check_id IN(SELECT value FROM json_each(?)) ORDER BY started_at DESC,rowid DESC LIMIT ?").bind(json!(ids).to_string()).bind(q.limit.unwrap_or(50).clamp(1,200)).fetch_all(&a.pool).await?.iter().map(quality::run_value).map(|r| if r["check_id"].as_str().is_some_and(|c| hidden.contains(c)) { redacted(r) } else { r }).collect::<Vec<_>>())))
 }
 async fn summary(
     State(a): State<App>,

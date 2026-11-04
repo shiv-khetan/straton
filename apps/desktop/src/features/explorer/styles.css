@@ -184,6 +184,24 @@
   .profile-range {
     @apply truncate text-caption text-ink-3 tabular-nums;
   }
+  /* Inline histogram: one bar per bin on the panel surface, 2px gaps between bars, anchored
+     to a 1px baseline. The whole bin column is the hover target. */
+  .profile-histogram {
+    @apply mt-1 flex h-7 items-end gap-0.5 border-b border-line;
+  }
+  .profile-bin {
+    @apply flex h-full min-w-0 flex-1 items-end;
+  }
+  .profile-bar {
+    @apply w-full rounded-t-xs bg-chart-1;
+    min-height: 2px;
+  }
+  .profile-bar[data-empty] {
+    min-height: 0;
+  }
+  .profile-bin:hover .profile-bar {
+    @apply opacity-80;
+  }
   .metadata-column {
     display: flex;
     gap: 8px;

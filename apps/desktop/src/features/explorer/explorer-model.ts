@@ -1,4 +1,10 @@
-import type { ExplorerRequest, ExplorerFilter, FilterOp, SqlCell } from '../../lib/api.ts';
+import type {
+  HistogramBin,
+  ExplorerRequest,
+  ExplorerFilter,
+  FilterOp,
+  SqlCell,
+} from '../../lib/api.ts';
 export const filterOps: FilterOp[] = [
   'eq',
   'ne',
@@ -72,4 +78,34 @@ export function parseWidths(value: unknown): Record<string, number> {
 }
 export function widthKey(scope: string, table: string) {
   return 'straton:columns:' + JSON.stringify([scope, table]);
+}
+
+const short = (n: number) =>
+  Math.abs(n) >= 1000 || Number.isInteger(n)
+    ? Math.round(n).toLocaleString()
+    : n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+/** Bin label, e.g. "17 – 33". */
+export function binLabel(bin: HistogramBin): string {
+  return short(bin.lo) + ' – ' + short(bin.hi);
+}
+/** Spoken and fallback summary of a histogram: range, count and the fullest bin. */
+export function histogramSummary(column: string, bins: HistogramBin[]): string {
+  const total = bins.reduce((sum, b) => sum + b.count, 0);
+  if (bins.length === 0 || total === 0) return 'No values to chart for ' + column + '.';
+  const peak = bins.reduce((best, b) => (b.count > best.count ? b : best), bins[0]);
+  return (
+    'Distribution of ' +
+    column +
+    ': ' +
+    total.toLocaleString() +
+    ' values from ' +
+    short(bins[0].lo) +
+    ' to ' +
+    short(bins[bins.length - 1].hi) +
+    '; most fall in ' +
+    binLabel(peak) +
+    ' (' +
+    Math.round((peak.count / total) * 100) +
+    '%).'
+  );
 }

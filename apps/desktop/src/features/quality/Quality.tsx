@@ -49,8 +49,18 @@ const kinds: QualityKind[] = [
   'freshness',
   'row_count',
   'custom_sql',
+  'drift',
 ];
 const label = (kind: string) => kind.replaceAll('_', ' ');
+type DriftKey = 'max_row_change' | 'max_null_increase' | 'max_distinct_change';
+const driftKeys: DriftKey[] = ['max_row_change', 'max_null_increase', 'max_distinct_change'];
+const driftFields: { key: DriftKey; label: string }[] = [
+  { key: 'max_row_change', label: 'Row count change (%)' },
+  { key: 'max_null_increase', label: 'Null rise (points)' },
+  { key: 'max_distinct_change', label: 'Distinct change (%)' },
+];
+// Fractions are stored; the form shows percentages without floating-point noise.
+const round = (n: number) => Math.round(n * 1e6) / 1e6;
 const fresh = (): QualityInput => ({
   name: '',
   dataset_id: null,
@@ -464,7 +474,9 @@ function CheckEditor({
       ? 'Choose a dataset or model.'
       : ['not_null', 'unique', 'range'].includes(draft.kind) && !draft.column_name
         ? 'Choose a column.'
-        : '';
+        : draft.kind === 'drift' && !driftKeys.some((k) => draft.config[k] !== undefined)
+          ? 'Set at least one drift threshold.'
+          : '';
   return (
     <Dialog
       open
@@ -502,7 +514,12 @@ function CheckEditor({
             onChange={(v) => {
               patch({
                 kind: v as QualityKind,
-                config: v === 'freshness' ? { max_age_seconds: 3600 } : {},
+                config:
+                  v === 'freshness'
+                    ? { max_age_seconds: 3600 }
+                    : v === 'drift'
+                      ? { max_row_change: 0.5, max_null_increase: 0.1 }
+                      : {},
                 column_name: null,
               });
               setMin('');
@@ -569,6 +586,31 @@ function CheckEditor({
                 onChange={(e) => patch({ config: { max_age_seconds: Number(e.target.value) } })}
               />
             </Field>
+          )}
+          {draft.kind === 'drift' && (
+            <fieldset className="grid gap-3 sm:grid-cols-3">
+              <legend className="mb-1 text-caption text-ink-2">
+                Fails when a change since the last run exceeds a threshold. Leave a field empty to
+                ignore it. The first run records a baseline.
+              </legend>
+              {driftFields.map(({ key, label: text }) => (
+                <Field key={key} label={text}>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={key === 'max_null_increase' ? 100 : 10000}
+                    step="any"
+                    value={draft.config[key] === undefined ? '' : round(draft.config[key] * 100)}
+                    onChange={(e) => {
+                      const config = { ...draft.config };
+                      if (e.target.value === '') delete config[key];
+                      else config[key] = Number(e.target.value) / 100;
+                      patch({ config });
+                    }}
+                  />
+                </Field>
+              ))}
+            </fieldset>
           )}
           {draft.kind === 'custom_sql' && (
             <Field label="Read-only SQL (passes when it returns zero rows)">

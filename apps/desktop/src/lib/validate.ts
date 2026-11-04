@@ -105,6 +105,10 @@ export const tableProfileShape = object({
       approx_distinct: nullable(number),
       min: cell,
       max: cell,
+      histogram: (v: unknown, at: string) =>
+        v === undefined || v === null
+          ? null
+          : arrayOf(object({ lo: number, hi: number, count: number }))(v, at),
     }),
   ),
 });

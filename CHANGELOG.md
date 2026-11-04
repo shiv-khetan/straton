@@ -7,6 +7,10 @@ All notable changes are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Profile histograms: Explorer's column profile draws a twelve-bin histogram for numeric
+  columns (`histogram` in `POST /v1/explorer/profile`).
+- `drift` quality checks: profile a table on each run and fail when its row count, null
+  shares or distinct counts move past thresholds, or columns appear or disappear.
 - Model expectations (DLT-style): `warn`, `drop` and `fail` rules on table models, checked
   while the model materializes, with per-run results in the API and the model sheet.
 - Tag-based masking: tag columns (`pii`, `finance.salary`) and set one mask per role per tag,
@@ -26,6 +30,8 @@ All notable changes are recorded here. The format follows
 - Bulk job actions, schedule field with presets and live feedback, readable SQL errors.
 
 ### Security
+- Quality-check results (observed values, failing rows, drift details) are computed with the
+  owner's access; readers whose row filter hides rows now see pass/fail only.
 - Quality-check SQL is validated as the caller: planner errors could list the columns of
   tables the caller cannot read.
 - Chart previews, chart data and drill-downs write the same `sql.query` audit row as the SQL

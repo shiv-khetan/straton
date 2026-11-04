@@ -14,7 +14,15 @@ import {
   PanelLeft,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Api, Dataset, ExplorerFilter, FilterOp, ProfileRequest, SqlCell } from '@/lib/api';
+import type {
+  Api,
+  Dataset,
+  ExplorerFilter,
+  FilterOp,
+  HistogramBin,
+  ProfileRequest,
+  SqlCell,
+} from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -25,7 +33,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ResultGrid, TypeIcon } from '@/components/workbench/ResultGrid';
 import { Skeleton } from '@/features/console/ConsoleDrawer';
-import { explorerRequest, filterOpLabels, filterOps, parseFilter } from './explorer-model';
+import {
+  binLabel,
+  explorerRequest,
+  filterOpLabels,
+  filterOps,
+  histogramSummary,
+  parseFilter,
+} from './explorer-model';
 import { tableReference } from '@/features/sql/sql-model';
 import { relativeTime } from '@/lib/view-model';
 import { Inspector, PageActions } from '@/components/workbench/primitives';
@@ -115,6 +130,27 @@ function FilterBar({
 }
 const formatCell = (value: SqlCell) =>
   value === null ? '—' : typeof value === 'number' ? value.toLocaleString() : String(value);
+/** Inline distribution of one numeric column: one bar per bin, hover shows its range. */
+function ProfileHistogram({ column, bins }: { column: string; bins: HistogramBin[] }) {
+  const peak = Math.max(...bins.map((b) => b.count), 1);
+  return (
+    <div className="profile-histogram" role="img" aria-label={histogramSummary(column, bins)}>
+      {bins.map((b, i) => (
+        <span
+          key={i}
+          className="profile-bin"
+          title={binLabel(b) + ': ' + b.count.toLocaleString() + (b.count === 1 ? ' row' : ' rows')}
+        >
+          <span
+            className="profile-bar"
+            data-empty={b.count === 0 ? '' : undefined}
+            style={{ height: (b.count / peak) * 100 + '%' }}
+          />
+        </span>
+      ))}
+    </div>
+  );
+}
 /** On-demand column profile for the rows currently in view (same filters and policies). */
 function ProfilePanel({
   client,
@@ -165,6 +201,9 @@ function ProfilePanel({
                   >
                     {formatCell(c.min)} – {formatCell(c.max)}
                   </span>
+                )}
+                {c.histogram && c.histogram.length > 1 && (
+                  <ProfileHistogram column={c.name} bins={c.histogram} />
                 )}
               </li>
             ))}

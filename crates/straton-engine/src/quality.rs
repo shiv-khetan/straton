@@ -107,7 +107,8 @@ pub async fn validate(sql: &Sql, caller: &Principal, q: &Input) -> Result<()> {
             "range",
             "freshness",
             "row_count",
-            "custom_sql"
+            "custom_sql",
+            "drift"
         ]
         .contains(&q.kind.as_str()),
         "unknown check kind"
@@ -170,6 +171,26 @@ pub async fn validate(sql: &Sql, caller: &Principal, q: &Input) -> Result<()> {
             ensure!(min <= max, "min must not exceed max")
         }
     }
+    if q.kind == "drift" {
+        let mut any = false;
+        for (key, limit) in [
+            ("max_row_change", 100.0),
+            ("max_null_increase", 1.0),
+            ("max_distinct_change", 100.0),
+        ] {
+            if let Some(v) = q.config.get(key) {
+                ensure!(
+                    v.as_f64().is_some_and(|v| v > 0.0 && v <= limit),
+                    "{key} must be a fraction above 0 (at most {limit})"
+                );
+                any = true;
+            }
+        }
+        ensure!(
+            any,
+            "set max_row_change, max_null_increase or max_distinct_change"
+        );
+    }
     if q.kind == "freshness" {
         ensure!(
             q.config["max_age_seconds"]
@@ -213,8 +234,21 @@ async fn number(sql: &Sql, frame: DataFrame) -> Result<i64> {
 async fn rows(sql: &Sql, frame: DataFrame) -> Result<i64> {
     number(sql, frame.aggregate(vec![], vec![count(lit(1))])?).await
 }
+/// One evaluation: pass/fail, the observed value, failing rows, and an optional message.
+type Outcome = (bool, Option<f64>, Option<i64>, Option<String>);
 // Checks evaluate as their owner, so counts never reveal rows or columns the owner's policies hide.
-async fn evaluate(
+async fn evaluate(sql: &Sql, owner: &Principal, check: &str, q: &Input) -> Result<Outcome> {
+    if q.kind == "drift" {
+        let _snapshot = crate::sql::SNAPSHOTS.read().await;
+        let id = dataset(&sql.pool, q.dataset_id.as_deref(), q.model_id.as_deref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("unknown target"))?;
+        return drift(sql, owner, check, &id, &q.config).await;
+    }
+    let (passed, observed, failing) = evaluate_counts(sql, owner, q).await?;
+    Ok((passed, observed, failing, None))
+}
+async fn evaluate_counts(
     sql: &Sql,
     owner: &Principal,
     q: &Input,
@@ -294,6 +328,133 @@ async fn evaluate(
     };
     Ok((n == 0, Some(n as f64), Some(n)))
 }
+/// Profile the target as the owner, store it, and compare it with this check's previous
+/// profile. The first run records a baseline and passes.
+async fn drift(
+    sql: &Sql,
+    owner: &Principal,
+    check: &str,
+    dataset: &str,
+    config: &Value,
+) -> Result<Outcome> {
+    let frame = target(sql, owner, dataset).await?;
+    let fields: Vec<_> = frame
+        .schema()
+        .fields()
+        .iter()
+        .take(crate::profile::MAX_COLUMNS)
+        .map(|f| (f.name().clone(), f.data_type().clone()))
+        .collect();
+    let (rows, columns) = crate::profile::profile(frame, &fields, false).await?;
+    let current = json!({
+        "rows": rows,
+        "columns": columns.iter().map(|c| json!({"name": c["name"], "null_ratio": c["null_ratio"], "approx_distinct": c["approx_distinct"]})).collect::<Vec<_>>(),
+    });
+    let previous: Option<String> = sqlx::query_scalar(
+        "SELECT profile FROM quality_profiles WHERE check_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+    )
+    .bind(check)
+    .fetch_optional(&sql.pool)
+    .await?;
+    let mut tx = sql.pool.begin().await?;
+    sqlx::query("INSERT INTO quality_profiles(check_id,created_at,profile) VALUES(?,?,?)")
+        .bind(check)
+        .bind(store::now())
+        .bind(current.to_string())
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM quality_profiles WHERE check_id=?1 AND rowid NOT IN (SELECT rowid FROM quality_profiles WHERE check_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 30)")
+        .bind(check)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    let Some(previous) = previous.and_then(|p| serde_json::from_str::<Value>(&p).ok()) else {
+        return Ok((
+            true,
+            Some(0.0),
+            None,
+            Some("Baseline profile recorded".into()),
+        ));
+    };
+    let findings = compare_profiles(&previous, &current, config);
+    let message = if findings.is_empty() {
+        "No drift since the last run".to_owned()
+    } else {
+        let mut text = findings
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+        if findings.len() > 5 {
+            text.push_str(&format!("; {} more", findings.len() - 5));
+        }
+        text
+    };
+    Ok((
+        findings.is_empty(),
+        Some(findings.len() as f64),
+        None,
+        Some(message),
+    ))
+}
+/// Human-readable drift findings between two stored profiles under `config`'s thresholds:
+/// relative row-count change, absolute null-ratio increase, relative distinct-count change,
+/// and added or removed columns.
+pub fn compare_profiles(previous: &Value, current: &Value, config: &Value) -> Vec<String> {
+    let pct = |v: f64| format!("{:.0}%", v * 100.0);
+    let mut out = vec![];
+    let (before, after) = (
+        previous["rows"].as_f64().unwrap_or(0.0),
+        current["rows"].as_f64().unwrap_or(0.0),
+    );
+    if let Some(limit) = config["max_row_change"].as_f64() {
+        let change = if before == 0.0 {
+            if after == 0.0 { 0.0 } else { f64::INFINITY }
+        } else {
+            (after - before).abs() / before
+        };
+        if change > limit {
+            out.push(format!("rows {before} → {after}"));
+        }
+    }
+    let columns =
+        |p: &Value| -> Vec<Value> { p["columns"].as_array().cloned().unwrap_or_default() };
+    let (old, new) = (columns(previous), columns(current));
+    for c in &new {
+        let name = c["name"].as_str().unwrap_or_default();
+        let Some(o) = old.iter().find(|o| o["name"] == c["name"]) else {
+            out.push(format!("column {name} added"));
+            continue;
+        };
+        if let (Some(limit), Some(a), Some(b)) = (
+            config["max_null_increase"].as_f64(),
+            o["null_ratio"].as_f64(),
+            c["null_ratio"].as_f64(),
+        ) && b - a > limit
+        {
+            out.push(format!("{name} nulls {} → {}", pct(a), pct(b)));
+        }
+        if let (Some(limit), Some(a), Some(b)) = (
+            config["max_distinct_change"].as_f64(),
+            o["approx_distinct"].as_f64(),
+            c["approx_distinct"].as_f64(),
+        ) && a > 0.0
+            && (b - a).abs() / a > limit
+        {
+            out.push(format!("{name} distinct {a} → {b}"));
+        }
+    }
+    for o in &old {
+        if !new.iter().any(|c| c["name"] == o["name"]) {
+            out.push(format!(
+                "column {} removed",
+                o["name"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+    out
+}
 pub fn value(r: &sqlx::sqlite::SqliteRow) -> Value {
     json!({"id":r.get::<String,_>("id"),"name":r.get::<String,_>("name"),"dataset_id":r.get::<Option<String>,_>("dataset_id"),"model_id":r.get::<Option<String>,_>("model_id"),"kind":r.get::<String,_>("kind"),"column_name":r.get::<Option<String>,_>("column_name"),"config":serde_json::from_str::<Value>(r.get("config")).unwrap_or(json!({})),"severity":r.get::<String,_>("severity"),"cron":r.get::<Option<String>,_>("cron"),"enabled":r.get::<bool,_>("enabled"),"last_scheduled":r.get::<i64,_>("last_scheduled"),"owner_id":r.get::<String,_>("owner_id"),"created_at":r.get::<i64,_>("created_at"),"updated_at":r.get::<i64,_>("updated_at")})
 }
@@ -324,24 +485,31 @@ pub async fn run(sql: &Sql, events: &Events, check: &str, pipeline: Option<&str>
         Ok(owner) => {
             tokio::time::timeout(
                 Duration::from_secs_f64(sql.config.query_timeout_secs),
-                evaluate(sql, owner, &q),
+                evaluate(sql, owner, check, &q),
             )
             .await
         }
         Err(_) => Ok(Err(anyhow::anyhow!("check owner is disabled or missing"))),
     };
     let (status, observed, failing, message) = match result {
-        Ok(Ok((passed, observed, failing))) => (
+        Ok(Ok((passed, observed, failing, message))) => (
             if passed { "passed" } else { "failed" },
             observed,
             failing,
-            if passed {
-                "Check passed"
-            } else {
-                "Check failed"
-            },
+            message.unwrap_or_else(|| {
+                if passed {
+                    "Check passed".into()
+                } else {
+                    "Check failed".into()
+                }
+            }),
         ),
-        _ => ("error", None, None, "Check could not be evaluated"),
+        _ => (
+            "error",
+            None,
+            None,
+            "Check could not be evaluated".to_owned(),
+        ),
     };
     let id = store::id();
     let mut tx = sql.pool.begin().await?;

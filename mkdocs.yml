@@ -87,6 +87,7 @@ nav:
       - Incremental sync: guides/incremental-sync.md
       - SQL endpoint: guides/sql.md
       - SQL models: guides/models.md
+      - Data quality: guides/data-quality.md
       - Access control: guides/access-control.md
       - Desktop app: guides/desktop.md
   - Operations:

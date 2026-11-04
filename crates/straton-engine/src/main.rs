@@ -19,6 +19,7 @@ mod openlineage;
 mod optimizer;
 mod pipeline;
 mod policies;
+mod profile;
 mod quality;
 mod query_stats;
 mod runner;
