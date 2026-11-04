@@ -17,4 +17,28 @@
     padding: 12px 0;
     @apply border-b border-line;
   }
+  .access-tags {
+    @apply flex flex-wrap items-center gap-1;
+  }
+  .access-tag {
+    @apply gap-1 pe-0.5;
+  }
+  .access-tag button {
+    @apply grid size-5 place-items-center rounded-xs border-0 bg-transparent p-0 text-primary hover:bg-surface focus-visible:bg-surface;
+  }
+  .access-tag button svg {
+    @apply size-3;
+  }
+  /* Role x column matrices scroll inside their table on narrow windows instead of
+     squeezing each select below its label (DESIGN.md: tables, never the page). */
+  .access-matrix select {
+    @apply min-w-36;
+  }
+  /* A mask inherited from a tag reads as a default, not a choice made here. */
+  .access-matrix select[data-inherited] {
+    @apply text-ink-2 italic;
+  }
+  .access-tag-form {
+    @apply flex items-center gap-1.5;
+  }
 }

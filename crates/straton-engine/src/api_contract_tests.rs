@@ -20,7 +20,8 @@ async fn every_v1_method_requires_auth_before_extracting_inputs() {
             .replace("{column}", "id")
             .replace("{target}", "missing")
             .replace("{token}", "missing")
-            .replace("{query_id}", "missing");
+            .replace("{query_id}", "missing")
+            .replace("{tag}", "pii");
         for token in [None, Some("invalid-token")] {
             let mut req = Request::builder()
                 .method(*method)
@@ -424,6 +425,11 @@ const ROUTES: &[(&str, &str)] = &[
     ("PUT", "/v1/datasets/{id}/masks/{role}/{column}"),
     ("DELETE", "/v1/datasets/{id}/masks/{role}/{column}"),
     ("POST", "/v1/policies/validate"),
+    ("PUT", "/v1/datasets/{id}/columns/{column}/tags/{tag}"),
+    ("DELETE", "/v1/datasets/{id}/columns/{column}/tags/{tag}"),
+    ("GET", "/v1/tags"),
+    ("PUT", "/v1/tag-masks/{tag}/{role}"),
+    ("DELETE", "/v1/tag-masks/{tag}/{role}"),
     ("GET", "/v1/activity"),
     ("GET", "/v1/charts"),
     ("POST", "/v1/charts"),

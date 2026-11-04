@@ -7,6 +7,10 @@ All notable changes are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Tag-based masking: tag columns (`pii`, `finance.salary`) and set one mask per role per tag,
+  applied to every tagged column in every dataset; column masks still win. API under
+  `/v1/datasets/{id}/columns/{column}/tags/{tag}`, `/v1/tags` and `/v1/tag-masks`; managed in
+  Team & Permissions → Policies.
 - OpenLineage export (`[lineage] openlineage_url`): `START`, `COMPLETE`, `FAIL` and `ABORT`
   events for syncs and model runs, with input and output datasets and schema facets.
 - Documentation site (MkDocs Material) published to GitHub Pages, with an API reference

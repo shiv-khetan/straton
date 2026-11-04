@@ -506,7 +506,7 @@ async fn catalog_api_secrets_manual_rules() {
         .unwrap();
     assert_eq!(
         dataset["columns"][0],
-        json!({"name":"id","type":"Int64","nullable":false,"pk":true,"masked":false,"mask_kind":null})
+        json!({"name":"id","type":"Int64","nullable":false,"pk":true,"tags":[],"masked":false,"mask_kind":null})
     );
     let(status,r)=request(&app,"POST","/v1/relationships",json!({"kind":"manual","from_dataset":ids[0],"from_cols":["id"],"to_dataset":ids[1],"to_cols":["id"],"confidence":null})).await;
     assert_eq!(status, StatusCode::CREATED);
@@ -6860,5 +6860,177 @@ async fn openlineage_reports_sync_and_model_runs_with_inputs_outputs_and_schemas
     assert_eq!(done["inputs"][0]["namespace"], "acme");
     assert_eq!(done["inputs"][0]["name"], "app_db.users");
     assert_eq!(done["outputs"][0]["name"], "models.active_users");
+    f.close().await;
+}
+
+#[tokio::test]
+async fn tag_masks_apply_to_every_tagged_column_and_column_masks_override_them() {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+    let reader = access_role(&a, "analyst").await;
+    access_grant(&a, &reader, "dataset", &did, "read").await;
+    let (_, token) = access_user(&a, "analyst", &[&reader]).await;
+    let names = || async {
+        let (s, v) = request_as(
+            &a,
+            &token,
+            "POST",
+            "/v1/sql",
+            json!({"query":"SELECT id, name FROM app_db.users ORDER BY id"}),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        v["rows"].clone()
+    };
+    // A tag mask without tagged columns changes nothing.
+    let (s, v) = request(
+        &a,
+        "PUT",
+        &format!("/v1/tag-masks/PII/{reader}"),
+        json!({"kind":"redact"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(names().await, json!([[1, "Alice"], [2, "Bob"]]));
+    // Tagging the column applies the tag's mask; tag names are case-insensitive.
+    let (s, v) = request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/columns/name/tags/pii"),
+        json!(null),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(names().await, json!([[1, "***"], [2, "***"]]));
+    // Explorer and the map see the same policy.
+    let (_, rows) = request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/explorer/rows",
+        json!({"schema":"app_db","table":"users"}),
+    )
+    .await;
+    assert_eq!(rows["rows"][0][1], "***", "{rows}");
+    let (_, map) = request_as(&a, &token, "GET", "/v1/datamap", json!(null)).await;
+    let users = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == did.as_str())
+        .unwrap();
+    let name = users["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "name")
+        .unwrap();
+    assert_eq!(name["tags"], json!(["pii"]));
+    assert_eq!(name["mask_kind"], "redact");
+    // The strictest tag mask wins; a mask on the column itself overrides tag masks.
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/tag-masks/secret/{reader}"),
+        json!({"kind":"null"}),
+    )
+    .await;
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/columns/name/tags/secret"),
+        json!(null),
+    )
+    .await;
+    assert_eq!(names().await, json!([[1, null], [2, null]]));
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/masks/{reader}/name"),
+        json!({"kind":"last4"}),
+    )
+    .await;
+    assert_eq!(names().await, json!([[1, "****lice"], [2, "****"]]));
+    request(
+        &a,
+        "DELETE",
+        &format!("/v1/datasets/{did}/masks/{reader}/name"),
+        json!(null),
+    )
+    .await;
+    let (_, policies) = request(
+        &a,
+        "GET",
+        &format!("/v1/datasets/{did}/policies"),
+        json!(null),
+    )
+    .await;
+    assert_eq!(policies["tags"].as_array().unwrap().len(), 2, "{policies}");
+    assert_eq!(
+        policies["tag_masks"].as_array().unwrap().len(),
+        2,
+        "{policies}"
+    );
+    let (_, tags) = request(&a, "GET", "/v1/tags", json!(null)).await;
+    assert_eq!(tags[0]["tag"], "pii");
+    assert_eq!(tags[0]["columns"], 1);
+    assert_eq!(tags[0]["masks"][0]["kind"], "redact");
+    // Removing the tags unmasks the column.
+    for tag in ["pii", "secret"] {
+        let (s, _) = request(
+            &a,
+            "DELETE",
+            &format!("/v1/datasets/{did}/columns/name/tags/{tag}"),
+            json!(null),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NO_CONTENT);
+    }
+    assert_eq!(names().await, json!([[1, "Alice"], [2, "Bob"]]));
+    // A dataset admin may tag their columns but not define tag masks, which span datasets.
+    let owner = access_role(&a, "owner").await;
+    access_grant(&a, &owner, "dataset", &did, "admin").await;
+    let (_, owner_token) = access_user(&a, "owner", &[&owner]).await;
+    let (s, _) = request_as(
+        &a,
+        &owner_token,
+        "PUT",
+        &format!("/v1/datasets/{did}/columns/name/tags/pii"),
+        json!(null),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = request_as(
+        &a,
+        &owner_token,
+        "PUT",
+        &format!("/v1/tag-masks/pii/{owner}"),
+        json!({"kind":"null"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    for (path, body) in [
+        (
+            format!("/v1/datasets/{did}/columns/nope/tags/pii"),
+            json!(null),
+        ),
+        (
+            format!("/v1/datasets/{did}/columns/name/tags/has%20space"),
+            json!(null),
+        ),
+        (
+            format!("/v1/tag-masks/pii/{reader}"),
+            json!({"kind":"shuffle"}),
+        ),
+        (
+            "/v1/tag-masks/pii/no-such-role".to_owned(),
+            json!({"kind":"null"}),
+        ),
+    ] {
+        let (s, v) = request(&a, "PUT", &path, body).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{path}: {v}");
+    }
     f.close().await;
 }

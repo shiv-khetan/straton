@@ -1327,10 +1327,21 @@ async fn filtered_map(pool: &SqlitePool, p: &Principal, overview: bool) -> anyho
         if !p.admin() {
             n["definition"] = Value::Null;
         }
+        let tags =
+            sqlx::query("SELECT \"column\",tag FROM column_tags WHERE dataset_id=? ORDER BY tag")
+                .bind(&id)
+                .fetch_all(pool)
+                .await?;
         for c in n["columns"].as_array_mut().unwrap() {
             let name = c["name"].as_str().unwrap().to_owned();
+            c["tags"] = json!(
+                tags.iter()
+                    .filter(|t| t.get::<&str, _>("column") == name)
+                    .map(|t| t.get::<String, _>("tag"))
+                    .collect::<Vec<_>>()
+            );
             let kind = if overview {
-                sqlx::query_scalar::<_,String>("SELECT kind FROM column_masks WHERE dataset_id=? AND \"column\"=? ORDER BY kind LIMIT 1").bind(&id).bind(&name).fetch_optional(pool).await?
+                sqlx::query_scalar::<_,String>("SELECT kind FROM (SELECT kind FROM column_masks WHERE dataset_id=?1 AND \"column\"=?2 UNION ALL SELECT m.kind FROM column_tags t JOIN tag_masks m ON m.tag=t.tag WHERE t.dataset_id=?1 AND t.\"column\"=?2) ORDER BY kind LIMIT 1").bind(&id).bind(&name).fetch_optional(pool).await?
             } else {
                 policy.masks.get(&name).cloned()
             };

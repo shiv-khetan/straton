@@ -229,10 +229,21 @@ export interface TokenInfo {
 export interface Policies {
   row_filters: { role_id: string; predicate: string }[];
   masks: { role_id: string; column: string; kind: MaskKind }[];
+  /** Tags on this dataset's columns, and the masks roles have on those tags. */
+  tags?: { column: string; tag: string }[];
+  tag_masks?: { tag: string; role_id: string; kind: MaskKind }[];
+}
+/** One tag in use or with masks, from GET /v1/tags (global admins). */
+export interface TagSummary {
+  tag: string;
+  columns: number;
+  datasets: number;
+  masks: { role_id: string; kind: MaskKind }[];
 }
 export interface Column {
   masked?: boolean;
   mask_kind?: MaskKind | null;
+  tags?: string[];
   name: string;
   type: string;
   nullable: boolean;
@@ -747,6 +758,18 @@ export function api(connection: Connection) {
     mask: (dataset: string, role: string, column: string, kind: MaskKind | null) =>
       request<void>(
         '/v1/datasets/' + idPath(dataset) + '/masks/' + idPath(role) + '/' + idPath(column),
+        kind === null ? 'DELETE' : 'PUT',
+        kind === null ? undefined : { kind },
+      ),
+    tags: () => request<TagSummary[]>('/v1/tags'),
+    tagColumn: (dataset: string, column: string, tag: string, tagged: boolean) =>
+      request<void>(
+        '/v1/datasets/' + idPath(dataset) + '/columns/' + idPath(column) + '/tags/' + idPath(tag),
+        tagged ? 'PUT' : 'DELETE',
+      ),
+    tagMask: (tag: string, role: string, kind: MaskKind | null) =>
+      request<void>(
+        '/v1/tag-masks/' + idPath(tag) + '/' + idPath(role),
         kind === null ? 'DELETE' : 'PUT',
         kind === null ? undefined : { kind },
       ),

@@ -38,7 +38,26 @@ Invoke-RestMethod "$base/v1/datasets/$($dataset.id)/policies" -Headers $headers
 
 Predicates allow only local columns, literals, comparisons, boolean and arithmetic operators, IN lists, LIKE, IS NULL, BETWEEN, CAST, and deterministic scalar functions. Subqueries, aggregates, window functions, volatile or time-dependent functions, variables, and other-table references are refused. Original predicate text is stored and revalidated against the query’s snapshot schema. An invalid stored predicate denies that role access to the dataset and records `policy.invalid`; it never grants unfiltered access.
 
-Only read-granting roles participate in policies. Their row filters combine with **OR**; a read-granting role without a filter allows all rows. A column is masked only when **every** read-granting role masks it. If all mask it, the strictest kind wins: **null > redact > hash > last4**. `null` preserves the column type; `redact` produces `***`; `hash` produces SHA-256 hex of the value cast to UTF-8; `last4` prefixes its last four characters with `****`. Non-null masks produce UTF-8 columns. The built-in admin role grants global read access and initially has no filters or masks, so it is unrestricted by default. Policies attached to that role follow the same combination rules, including fail-closed validation. Local lake aliases require their own applicable grants; granting a source table does not expose a second raw alias.
+Only read-granting roles participate in policies. Their row filters combine with **OR**; a read-granting role without a filter allows all rows. A column is masked only when **every** read-granting role masks it. If all mask it, the strictest kind wins: **null > redact > hash > last4**. `null` preserves the column type; `redact` produces `***`; `hash` produces a keyed HMAC-SHA256 (hex) of the value cast to UTF-8, under a key the engine keeps in `state.db` and never exposes, so equal values still match but nobody can reverse a masked value by hashing guesses; `last4` prefixes its last four characters with `****` (values of four characters or fewer show only `****`). Non-null masks produce UTF-8 columns. The built-in admin role grants global read access and initially has no filters or masks, so it is unrestricted by default. Policies attached to that role follow the same combination rules, including fail-closed validation. Local lake aliases require their own applicable grants; granting a source table does not expose a second raw alias.
+
+## Tag-based masking
+
+Tag columns once and mask them everywhere. A tag is a short label such as `pii` or
+`finance.salary` (letters, digits, `_ - . :`, case-insensitive). Dataset administrators tag
+columns; global administrators decide, per role, how every column with a tag is masked:
+
+```powershell
+# Tag a column (dataset admin), then mask the tag for a role (global admin).
+AccessApi "datasets/$($dataset.id)/columns/email/tags/pii" $null "Put"
+AccessApi "tag-masks/pii/$($role.id)" @{ kind="hash" } "Put"
+# GET /v1/tags lists tags with their column counts and masks; DELETE the same URLs to undo.
+```
+
+For each role, a mask set on the column itself wins over its tags; among several tags the
+strictest mask applies. The result then combines across roles exactly like column masks above.
+In **Admin → Team & Permissions → Policies**, tags appear as chips per column, inherited masks
+read "From pii: hash", and the **Tag masks** tray sets one mask per role per tag. The Lineage
+map shows each column's tags.
 
 Each SQL session registers only authorized views: current Parquet scan → row filter → mask projection. Raw tables are never registered. REST SQL previews, table listings and pgwire use the same enforcement. Datamap nodes and edges touching unreadable datasets are hidden; empty sources are hidden for non-administrators, and filtered datasets do not expose raw row counts. Non-admin event streams send refresh notifications without global run details. Administrative mutations and manual run requests record the real user ID in `audit_log.principal_id`; SQL audit details also identify that user. Tokens and token hashes never appear in audit details.
 

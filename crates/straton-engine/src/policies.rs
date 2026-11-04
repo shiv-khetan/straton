@@ -171,6 +171,12 @@ pub async fn effective(
         .bind(dataset)
         .fetch_all(pool)
         .await?;
+    let tag_masks = sqlx::query(
+        r#"SELECT t."column",m.role_id,m.kind FROM column_tags t JOIN tag_masks m ON m.tag=t.tag WHERE t.dataset_id=?"#,
+    )
+    .bind(dataset)
+    .fetch_all(pool)
+    .await?;
     let mut roles = Vec::new();
     let mut filter = None;
     let mut unrestricted = false;
@@ -210,16 +216,25 @@ pub async fn effective(
     if roles.is_empty() {
         return Ok(None);
     }
-    // Most permissive role wins; when all mask, use null > redact > hash > last4.
+    // Per role, a mask on the column wins over masks from its tags (the strictest tag mask
+    // applies). Across roles the most permissive wins; when all mask, use
+    // null > redact > hash > last4.
     let mut resolved = BTreeMap::new();
     for f in frame.schema().fields() {
         let mut kinds = Vec::new();
         for role in &roles {
-            if let Some(m) = masks.iter().find(|m| {
+            let applies = |m: &&sqlx::sqlite::SqliteRow| {
                 m.get::<&str, _>("role_id") == role.id && m.get::<&str, _>("column") == f.name()
-            }) {
-                kinds.push(m.get::<String, _>("kind"));
-            }
+            };
+            let kind = match masks.iter().find(applies) {
+                Some(m) => Some(m.get::<String, _>("kind")),
+                None => tag_masks
+                    .iter()
+                    .filter(applies)
+                    .map(|m| m.get::<String, _>("kind"))
+                    .max_by_key(|k| strictness(k)),
+            };
+            kinds.extend(kind);
         }
         if kinds.len() == roles.len() {
             let kind = kinds.into_iter().max_by_key(|s| strictness(s)).unwrap();

@@ -50,6 +50,7 @@ export const reads: Partial<Record<keyof Api, QueryKey>> = {
   grants: queryKeys.access,
   policies: queryKeys.access,
   tokens: queryKeys.access,
+  tags: queryKeys.access,
 };
 export const transient = new Set<keyof Api>([
   'validatePipeline',
@@ -101,6 +102,8 @@ export const mutations = new Set<keyof Api>([
   'deleteGrant',
   'rowFilter',
   'mask',
+  'tagColumn',
+  'tagMask',
   'createSavedQuery',
   'updateSavedQuery',
   'deleteSavedQuery',

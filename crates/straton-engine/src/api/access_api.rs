@@ -30,6 +30,15 @@ pub(super) fn routes() -> Router<App> {
             put(mask).delete(delete_mask),
         )
         .route("/v1/policies/validate", post(validate))
+        .route(
+            "/v1/datasets/{id}/columns/{column}/tags/{tag}",
+            put(tag_column).delete(untag_column),
+        )
+        .route("/v1/tags", get(tags))
+        .route(
+            "/v1/tag-masks/{tag}/{role}",
+            put(tag_mask).delete(delete_tag_mask),
+        )
 }
 fn user_json(r: &sqlx::sqlite::SqliteRow) -> Value {
     json!({"id":r.get::<String,_>("id"),"name":r.get::<String,_>("name"),"disabled":r.get::<bool,_>("disabled"),"created_at":r.get::<i64,_>("created_at")})
@@ -426,9 +435,19 @@ async fn policies(
     .bind(&id)
     .fetch_all(&a.pool)
     .await?;
-    let masks=sqlx::query("SELECT role_id,\"column\",kind FROM column_masks WHERE dataset_id=? ORDER BY role_id,\"column\"").bind(id).fetch_all(&a.pool).await?;
+    let masks=sqlx::query("SELECT role_id,\"column\",kind FROM column_masks WHERE dataset_id=? ORDER BY role_id,\"column\"").bind(&id).fetch_all(&a.pool).await?;
+    let tags = sqlx::query(
+        "SELECT \"column\",tag FROM column_tags WHERE dataset_id=? ORDER BY \"column\",tag",
+    )
+    .bind(&id)
+    .fetch_all(&a.pool)
+    .await?;
+    let tag_masks = sqlx::query("SELECT tag,role_id,kind FROM tag_masks WHERE tag IN (SELECT tag FROM column_tags WHERE dataset_id=?) ORDER BY tag,role_id")
+        .bind(&id)
+        .fetch_all(&a.pool)
+        .await?;
     Ok(Json(
-        json!({"row_filters":filters.iter().map(|r|json!({"role_id":r.get::<String,_>("role_id"),"predicate":r.get::<String,_>("predicate")})).collect::<Vec<_>>(),"masks":masks.iter().map(|r|json!({"role_id":r.get::<String,_>("role_id"),"column":r.get::<String,_>("column"),"kind":r.get::<String,_>("kind")})).collect::<Vec<_>>()}),
+        json!({"row_filters":filters.iter().map(|r|json!({"role_id":r.get::<String,_>("role_id"),"predicate":r.get::<String,_>("predicate")})).collect::<Vec<_>>(),"masks":masks.iter().map(|r|json!({"role_id":r.get::<String,_>("role_id"),"column":r.get::<String,_>("column"),"kind":r.get::<String,_>("kind")})).collect::<Vec<_>>(),"tags":tags.iter().map(|r|json!({"column":r.get::<String,_>("column"),"tag":r.get::<String,_>("tag")})).collect::<Vec<_>>(),"tag_masks":tag_masks.iter().map(|r|json!({"tag":r.get::<String,_>("tag"),"role_id":r.get::<String,_>("role_id"),"kind":r.get::<String,_>("kind")})).collect::<Vec<_>>()}),
     ))
 }
 #[derive(Deserialize)]
@@ -568,4 +587,157 @@ async fn validate(
         Ok(()) => json!({"ok":true}),
         Err(e) => json!({"ok":false,"error":e.to_string()}),
     }))
+}
+
+/// Tags are short lowercase labels such as `pii` or `finance.salary`.
+fn tag_name(raw: &str) -> ApiResult<String> {
+    let tag = raw.trim().to_ascii_lowercase();
+    if tag.is_empty()
+        || tag.len() > 64
+        || !tag
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-.:".contains(&b))
+    {
+        return Err(bad(
+            "tags are 1 to 64 letters, digits, '_', '-', '.' or ':'",
+        ));
+    }
+    Ok(tag)
+}
+async fn tag_column(
+    State(a): State<App>,
+    Extension(actor): Extension<Principal>,
+    Path((id, column, tag)): Path<(String, String, String)>,
+) -> ApiResult<Json<Value>> {
+    require_dataset_admin(&a.pool, &actor, &id).await?;
+    let tag = tag_name(&tag)?;
+    let mut tx = a.pool.begin().await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM columns WHERE dataset_id=? AND name=?)")
+            .bind(&id)
+            .bind(&column)
+            .fetch_one(&mut *tx)
+            .await?;
+    if !exists {
+        return Err(bad("unknown column"));
+    }
+    sqlx::query("INSERT OR IGNORE INTO column_tags(dataset_id,\"column\",tag) VALUES(?,?,?)")
+        .bind(&id)
+        .bind(&column)
+        .bind(&tag)
+        .execute(&mut *tx)
+        .await?;
+    store::audit(
+        &mut tx,
+        "policy.tag_added",
+        &id,
+        &json!({"column":column,"tag":tag}).to_string(),
+    )
+    .await?;
+    tx.commit().await?;
+    changed(&a);
+    Ok(Json(json!({"ok":true})))
+}
+async fn untag_column(
+    State(a): State<App>,
+    Extension(actor): Extension<Principal>,
+    Path((id, column, tag)): Path<(String, String, String)>,
+) -> ApiResult<StatusCode> {
+    require_dataset_admin(&a.pool, &actor, &id).await?;
+    let tag = tag_name(&tag)?;
+    let mut tx = a.pool.begin().await?;
+    sqlx::query("DELETE FROM column_tags WHERE dataset_id=? AND \"column\"=? AND tag=?")
+        .bind(&id)
+        .bind(&column)
+        .bind(&tag)
+        .execute(&mut *tx)
+        .await?;
+    store::audit(
+        &mut tx,
+        "policy.tag_removed",
+        &id,
+        &json!({"column":column,"tag":tag}).to_string(),
+    )
+    .await?;
+    tx.commit().await?;
+    changed(&a);
+    Ok(StatusCode::NO_CONTENT)
+}
+/// Every tag in use or with a mask, with how many columns carry it. Global admin only.
+async fn tags(State(a): State<App>) -> ApiResult<Json<Value>> {
+    let rows = sqlx::query("SELECT tag,count(*) AS columns,count(DISTINCT dataset_id) AS datasets FROM column_tags GROUP BY tag UNION ALL SELECT tag,0,0 FROM tag_masks WHERE tag NOT IN (SELECT tag FROM column_tags) GROUP BY tag ORDER BY tag")
+        .fetch_all(&a.pool)
+        .await?;
+    let masks = sqlx::query("SELECT tag,role_id,kind FROM tag_masks ORDER BY tag,role_id")
+        .fetch_all(&a.pool)
+        .await?;
+    Ok(Json(json!(
+        rows.iter()
+            .map(|r| {
+                let tag: String = r.get("tag");
+                json!({
+                    "tag": tag,
+                    "columns": r.get::<i64, _>("columns"),
+                    "datasets": r.get::<i64, _>("datasets"),
+                    "masks": masks.iter().filter(|m| m.get::<&str, _>("tag") == tag).map(|m| json!({"role_id":m.get::<String,_>("role_id"),"kind":m.get::<String,_>("kind")})).collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>()
+    )))
+}
+async fn tag_mask(
+    State(a): State<App>,
+    Path((tag, role)): Path<(String, String)>,
+    Json(input): Json<MaskInput>,
+) -> ApiResult<Json<Value>> {
+    let tag = tag_name(&tag)?;
+    if !["null", "redact", "hash", "last4"].contains(&input.kind.as_str()) {
+        return Err(bad("invalid mask kind"));
+    }
+    let mut tx = a.pool.begin().await?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roles WHERE id=?)")
+        .bind(&role)
+        .fetch_one(&mut *tx)
+        .await?;
+    if !exists {
+        return Err(bad("unknown role"));
+    }
+    sqlx::query("INSERT INTO tag_masks(tag,role_id,kind) VALUES(?,?,?) ON CONFLICT(tag,role_id) DO UPDATE SET kind=excluded.kind")
+        .bind(&tag)
+        .bind(&role)
+        .bind(&input.kind)
+        .execute(&mut *tx)
+        .await?;
+    store::audit(
+        &mut tx,
+        "policy.tag_mask_updated",
+        &tag,
+        &json!({"role_id":role,"kind":input.kind}).to_string(),
+    )
+    .await?;
+    tx.commit().await?;
+    changed(&a);
+    Ok(Json(json!({"ok":true})))
+}
+async fn delete_tag_mask(
+    State(a): State<App>,
+    Path((tag, role)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let tag = tag_name(&tag)?;
+    let mut tx = a.pool.begin().await?;
+    sqlx::query("DELETE FROM tag_masks WHERE tag=? AND role_id=?")
+        .bind(&tag)
+        .bind(&role)
+        .execute(&mut *tx)
+        .await?;
+    store::audit(
+        &mut tx,
+        "policy.tag_mask_deleted",
+        &tag,
+        &json!({"role_id":role}).to_string(),
+    )
+    .await?;
+    tx.commit().await?;
+    changed(&a);
+    Ok(StatusCode::NO_CONTENT)
 }

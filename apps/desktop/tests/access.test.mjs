@@ -31,3 +31,29 @@ assert.deepEqual(setMask(replaced,'r1','id',null),[initial[1]]);
 assert.equal(setMask(replaced,'r1','name','last4').length,3);
 assert.equal(setMask(replaced,'r1','id','hash').length,2);
 console.log('Privilege gating, target inheritance, and immutable mask matrix state passed.');
+// Tag-based masks: the strictest tag mask applies, matching the engine.
+import { normalizeTag, setTag, tagMaskFor, tagProblem } from '../src/features/access/access-model.ts';
+const tagged = {
+  row_filters: [],
+  masks: [],
+  tags: [{ column: 'email', tag: 'pii' }, { column: 'email', tag: 'secret' }, { column: 'id', tag: 'key' }],
+  tag_masks: [
+    { tag: 'pii', role_id: 'r', kind: 'hash' },
+    { tag: 'secret', role_id: 'r', kind: 'null' },
+    { tag: 'pii', role_id: 'other', kind: 'last4' },
+  ],
+};
+assert.equal(tagMaskFor(tagged, 'r', 'email'), 'null');
+assert.equal(tagMaskFor(tagged, 'other', 'email'), 'last4');
+assert.equal(tagMaskFor(tagged, 'r', 'id'), null);
+assert.equal(tagMaskFor({ row_filters: [], masks: [] }, 'r', 'email'), null);
+assert.equal(normalizeTag('  PII '), 'pii');
+assert.equal(normalizeTag('finance.salary:eu'), 'finance.salary:eu');
+for (const bad of ['', 'has space', 'x'.repeat(65), 'émoji']) assert.equal(normalizeTag(bad), null, bad);
+assert.deepEqual(setTag(tagged.tags, 'id', 'key', false), tagged.tags.slice(0, 2));
+assert.deepEqual(setTag([], 'id', 'pii', true), [{ column: 'id', tag: 'pii' }]);
+assert.equal(tagProblem('', false), '');
+assert.match(tagProblem('has space', false), /no spaces/);
+assert.equal(tagProblem('pii', true), 'Already tagged.');
+assert.equal(tagProblem('pii', false), '');
+console.log('Tag masks: strictest tag, per-role, normalisation, edits and field help passed.');
