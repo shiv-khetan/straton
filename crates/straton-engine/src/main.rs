@@ -3,6 +3,7 @@ mod advisor;
 mod api;
 #[cfg(test)]
 mod api_contract_tests;
+mod auth_failures;
 mod backup;
 mod catalog;
 mod column_lineage;
@@ -50,8 +51,20 @@ enum Command {
     VerifyAudit,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Owner-only by default for everything the engine creates: state.db and its WAL, logs,
+    // snapshots, key sidecars and backups. Set before the runtime starts any thread.
+    #[cfg(unix)]
+    // SAFETY: umask only replaces the process file-mode mask and cannot fail.
+    unsafe {
+        libc::umask(0o077);
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(engine())
+}
+async fn engine() -> Result<()> {
     let cli = Cli::parse();
     let config = config::Config::load()?;
     egress::set_allow_private(config.network.allow_private);
@@ -97,6 +110,11 @@ async fn run(config: config::Config) -> Result<()> {
                 .with_writer(file),
         )
         .init();
+    for dir in [&config.data_dir, &config.backup.dir] {
+        if let Some(mode) = security::shared_mode(dir) {
+            tracing::warn!(dir=%dir.display(), mode=format!("{mode:o}"), "engine directory is readable by other users; run chmod 700 on it");
+        }
+    }
     let pool = store::open(&config.data_dir).await?;
     lake_layout::recover_all(&config.data_dir)?;
     if let Some(dir) = &config.secrets.dir {
@@ -110,6 +128,7 @@ async fn run(config: config::Config) -> Result<()> {
     keys::startup(&pool, config.encryption.enabled).await?;
     access::bootstrap(&pool, secrecy::ExposeSecret::expose_secret(token.as_ref())).await?;
     let (events, _) = tokio::sync::broadcast::channel(256);
+    auth_failures::init(events.clone());
     notify::verify_audit(&pool, &events).await?;
     let backups = backup::Backups::new(config.clone());
     scheduler::seed_backup(&pool, &config.backup.cron).await?;
@@ -144,12 +163,12 @@ async fn run(config: config::Config) -> Result<()> {
         if let Some(tls) = tls {
             axum_server::bind_rustls(address, tls)
                 .handle(server_handle)
-                .serve(router.into_make_service())
+                .serve(router.into_make_service_with_connect_info::<std::net::SocketAddr>())
                 .await
         } else {
             axum_server::bind(address)
                 .handle(server_handle)
-                .serve(router.into_make_service())
+                .serve(router.into_make_service_with_connect_info::<std::net::SocketAddr>())
                 .await
         }
     });

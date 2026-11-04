@@ -63,17 +63,11 @@ async fn save(a: App, p: Principal, id: String, q: Input, update: bool) -> ApiRe
         return Err(forbidden());
     }
     let _snapshot = crate::sql::SNAPSHOTS.read().await;
-    quality::validate(&a.sql, &q)
+    // Validation plans custom SQL as the caller, so planner errors (which can list a table's
+    // columns) only ever describe tables the caller may read.
+    quality::validate(&a.sql, &p, &q)
         .await
         .map_err(|e| bad(&e.to_string()))?;
-    if q.kind == "custom_sql" {
-        crate::models::plan(
-            &a.sql.for_principal(p.clone()),
-            q.config["sql"].as_str().unwrap(),
-        )
-        .await
-        .map_err(|e| bad(&e.to_string()))?;
-    }
     let mut tx = a.pool.begin().await?;
     let query = if update {
         "UPDATE quality_checks SET name=?2,dataset_id=?3,model_id=?4,kind=?5,column_name=?6,config=?7,severity=?8,cron=?9,enabled=?10,last_scheduled=CASE WHEN cron IS NOT ?9 THEN ?12 ELSE last_scheduled END,updated_at=?12 WHERE id=?1"

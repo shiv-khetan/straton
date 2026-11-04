@@ -282,8 +282,38 @@ pub fn path_component(s: &str) -> Result<()> {
             && s != "."
             && s != ".."
             && !s.chars().any(|c| c < ' ' || "/\\:<>\"|?*".contains(c))
-            && !s.ends_with(['.', ' ']),
+            && !s.ends_with(['.', ' '])
+            && !(cfg!(windows) && windows_device(s)),
         "invalid filesystem component"
     );
     Ok(())
+}
+/// Windows maps these names (with any extension, any case) to devices, not files:
+/// `data/source/CON` would write to the console instead of a dataset directory.
+fn windows_device(s: &str) -> bool {
+    let stem = s
+        .split('.')
+        .next()
+        .unwrap_or(s)
+        .trim_end()
+        .to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || (stem.len() == 4
+        && (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.as_bytes()[3].is_ascii_digit()
+        && stem.as_bytes()[3] != b'0')
+}
+#[cfg(test)]
+mod path_tests {
+    #[test]
+    fn windows_device_names_are_recognised() {
+        for name in ["CON", "con", "Nul.txt", "COM1", "lpt9.parquet", "AUX "] {
+            assert!(super::windows_device(name), "{name}");
+        }
+        for name in ["console", "COM0", "COM10", "users", "nullable", "LPT"] {
+            assert!(!super::windows_device(name), "{name}");
+        }
+    }
 }

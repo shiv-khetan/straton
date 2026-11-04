@@ -173,6 +173,10 @@ async fn collection_and_system_success_shapes() {
         ),
         ("/v1/advisor", vec!["recommendations", "sources"]),
         ("/v1/audit/verify", vec!["ok"]),
+        (
+            "/v1/admin/auth-failures",
+            vec!["window_secs", "threshold", "addresses"],
+        ),
     ] {
         let (status, body) = request(&a, "GET", path, json!(null)).await;
         assert_eq!(status, StatusCode::OK, "{path}: {body}");
@@ -485,6 +489,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/v1/saved-queries/{id}"),
     ("GET", "/v1/admin/keys"),
     ("GET", "/v1/admin/settings"),
+    ("GET", "/v1/admin/auth-failures"),
     ("POST", "/v1/admin/keys/rotate-kek"),
     ("POST", "/v1/admin/keys/rotate/{target}"),
     ("GET", "/v1/audit/verify"),

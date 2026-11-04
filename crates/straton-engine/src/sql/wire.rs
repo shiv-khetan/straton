@@ -25,7 +25,15 @@ use pgwire::{
     },
 };
 use secrecy::{ExposeSecret, SecretString};
-use std::{collections::BTreeSet, fmt::Debug, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    fmt::Debug,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use tokio::{
     net::TcpListener,
@@ -35,6 +43,13 @@ use tokio::{
 
 /// Concurrent pgwire clients, authenticated or not; excess connections are closed.
 const MAX_CLIENTS: usize = 256;
+/// A client must finish TLS and password authentication within this time, so idle or
+/// slow unauthenticated sockets cannot hold connection slots.
+const STARTUP_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_secs(10)
+};
 pub struct Server {
     stop: watch::Sender<bool>,
     pub task: JoinHandle<anyhow::Result<()>>,
@@ -62,10 +77,7 @@ impl Server {
             }
             _ => None,
         };
-        let backend = Arc::new(Backend {
-            sql,
-            require_tls: !config.sql.bind.ip().is_loopback(),
-        });
+        let require_tls = !config.sql.bind.ip().is_loopback();
         let (stop, mut stopped) = watch::channel(false);
         let task = tokio::spawn(async move {
             let Some(listener) = listener else {
@@ -94,10 +106,25 @@ impl Server {
                             continue;
                         }
                         let tls = tls.clone();
-                        let backend = backend.clone();
+                        let authenticated = Arc::new(AtomicBool::new(false));
+                        let backend = Arc::new(Backend {
+                            sql: sql.clone(),
+                            require_tls,
+                            authenticated: authenticated.clone(),
+                        });
                         clients.spawn(async move {
                             // Authentication errors are sent to the client by pgwire; do not log SQL.
-                            let _ = pgwire::tokio::process_socket(socket, tls, backend).await;
+                            let connection = pgwire::tokio::process_socket(socket, tls, backend);
+                            tokio::pin!(connection);
+                            tokio::select! {
+                                _ = &mut connection => {}
+                                _ = tokio::time::sleep(STARTUP_TIMEOUT) => {
+                                    if authenticated.load(Ordering::Acquire) {
+                                        let _ = connection.await;
+                                    }
+                                    // Otherwise dropping the connection closes the socket.
+                                }
+                            }
                         });
                     },
                     _ = clients.join_next(), if !clients.is_empty() => {},
@@ -133,6 +160,8 @@ impl Server {
 struct Backend {
     sql: Sql,
     require_tls: bool,
+    /// Set once this connection has authenticated; one Backend per connection.
+    authenticated: Arc<AtomicBool>,
 }
 impl Backend {
     async fn session<C: ClientInfo>(&self, client: &C) -> PgWireResult<Sql> {
@@ -191,10 +220,16 @@ impl StartupHandler for Backend {
             }
             PgWireFrontendMessage::PasswordMessageFamily(pwd) => {
                 let pwd = pwd.into_password()?;
-                let p = crate::access::authenticate(&self.sql.pool, &pwd.password)
+                let valid = crate::access::authenticate(&self.sql.pool, &pwd.password)
                     .await
-                    .map_err(|_| pgerror("28P01", "Invalid credentials"))?;
-                if client.metadata().get("user") != Some(&p.user.name) {
+                    .is_ok_and(|p| client.metadata().get("user") == Some(&p.user.name));
+                if !valid {
+                    if !pwd.password.is_empty() {
+                        self.sql
+                            .auth_failures
+                            .record(&self.sql.pool, Some(client.socket_addr().ip()), "sql")
+                            .await;
+                    }
                     return Err(pgerror("28P01", "Invalid credentials"));
                 }
                 client.metadata_mut().insert(
@@ -206,6 +241,7 @@ impl StartupHandler for Backend {
                 parameters.is_superuser = false;
                 parameters.default_transaction_read_only = true;
                 auth::finish_authentication(client, &parameters).await?;
+                self.authenticated.store(true, Ordering::Release);
             }
             _ => {}
         }
@@ -378,10 +414,7 @@ impl ExtendedQueryHandler for Backend {
     type Statement = Prepared;
     type QueryParser = Backend;
     fn query_parser(&self) -> Arc<Self::QueryParser> {
-        Arc::new(Backend {
-            sql: self.sql.clone(),
-            require_tls: self.require_tls,
-        })
+        Arc::new(self.clone())
     }
     async fn do_query<C>(
         &self,

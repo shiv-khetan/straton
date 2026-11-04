@@ -7,6 +7,19 @@ pub(super) fn routes() -> Router<App> {
         .route("/v1/admin/keys/rotate/{target}", post(rotate_dataset))
         .route("/v1/audit/verify", get(verify))
         .route("/v1/admin/settings", get(settings))
+        .route("/v1/admin/auth-failures", get(auth_failures))
+}
+/// Addresses that presented rejected credentials in the last ten minutes. Admin only.
+async fn auth_failures(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+) -> ApiResult<Json<Value>> {
+    admin(&p)?;
+    Ok(Json(json!({
+        "window_secs": crate::auth_failures::WINDOW.as_secs(),
+        "threshold": crate::auth_failures::THRESHOLD,
+        "addresses": a.sql.auth_failures.snapshot(),
+    })))
 }
 /// Effective engine configuration for the Settings page. Admin only. Never includes secrets,
 /// the token file, or TLS certificate/key paths: only whether TLS is configured.

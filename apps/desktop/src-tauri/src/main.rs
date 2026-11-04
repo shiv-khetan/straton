@@ -17,7 +17,7 @@ fn entry() -> Result<Entry, String> {
 
 fn validate_connection(url: &str, token: &str) -> Result<(), String> {
     let parsed = tauri::Url::parse(url).map_err(|_| "Invalid engine URL")?;
-    let loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1"));
+    let loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
     if !(parsed.scheme() == "https" || (parsed.scheme() == "http" && loopback))
         || !parsed.username().is_empty()
         || parsed.password().is_some()
@@ -101,12 +101,14 @@ mod tests {
         for url in [
             "http://127.0.0.1:8787",
             "http://localhost:8787",
+            "http://[::1]:8787",
             "https://engine.example",
         ] {
             assert!(validate_connection(url, "token").is_ok());
         }
         for url in [
             "http://engine.example",
+            "http://[::2]:8787",
             "https://user:secret@engine.example",
             "https://engine.example/path",
             "https://engine.example/?token=secret",

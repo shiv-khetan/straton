@@ -1,5 +1,5 @@
 use crate::{
-    access::{Principal, Role, User},
+    access::Principal,
     models,
     notify::{self, Notice},
     runner::Events,
@@ -35,22 +35,6 @@ pub struct Input {
 }
 fn enabled() -> bool {
     true
-}
-pub fn system() -> Principal {
-    Principal {
-        user: User {
-            id: "system".into(),
-            name: "Engine".into(),
-            disabled: false,
-            created_at: 0,
-        },
-        roles: vec![Role {
-            id: "system".into(),
-            name: "Engine".into(),
-            is_admin: true,
-        }],
-        grants: vec![],
-    }
 }
 pub async fn dataset(
     pool: &SqlitePool,
@@ -111,7 +95,7 @@ pub fn typed(frame: &DataFrame, name: &str, value: &Value) -> Result<Expr> {
         ty,
     )?))
 }
-pub async fn validate(sql: &Sql, q: &Input) -> Result<()> {
+pub async fn validate(sql: &Sql, caller: &Principal, q: &Input) -> Result<()> {
     ensure!(
         !q.name.trim().is_empty() && q.name.len() <= 200,
         "name is required (up to 200 bytes)"
@@ -148,7 +132,7 @@ pub async fn validate(sql: &Sql, q: &Input) -> Result<()> {
         let text = q.config["sql"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("SQL is required"))?;
-        models::plan(&sql.for_principal(system()), text).await?;
+        models::plan(&sql.for_principal(caller.clone()), text).await?;
         return Ok(());
     }
     let id = id.ok_or_else(|| anyhow::anyhow!("dataset or model is required"))?;

@@ -123,6 +123,13 @@ async fn auth(State(app): State<App>, mut req: Request<axum::body::Body>, next: 
     let p = match crate::access::authenticate(&app.pool, supplied).await {
         Ok(p) => p,
         Err(_) => {
+            if !supplied.is_empty() {
+                let peer = req
+                    .extensions()
+                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                    .map(|c| c.0.ip());
+                app.sql.auth_failures.record(&app.pool, peer, "http").await;
+            }
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({"error":"invalid bearer token"})),

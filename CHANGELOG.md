@@ -18,6 +18,28 @@ All notable changes are recorded here. The format follows
 - Bulk job actions, schedule field with presets and live feedback, readable SQL errors.
 
 ### Security
+- Quality-check SQL is validated as the caller: planner errors could list the columns of
+  tables the caller cannot read.
+- Chart previews, chart data and drill-downs write the same `sql.query` audit row as the SQL
+  endpoint (`"via":"chart"`); they previously ran user SQL unaudited.
+- `hash` column masks use HMAC-SHA256 under an engine-held key instead of plain SHA-256, so
+  masked phone numbers or IDs cannot be reversed by hashing guesses. Masked values change
+  once; joins between masked columns still match. `last4` hides values of four characters
+  or fewer entirely.
+- The engine creates its files owner-only (umask 077) and warns when its data or backup
+  directory is readable by other users.
+- Failed sign-ins are counted per address: an `auth.failures` audit row and an admin
+  notification at 20 failures in ten minutes, and `GET /v1/admin/auth-failures`.
+- pgwire clients must authenticate within 10 seconds.
+- SaaS connectors never follow HTTP redirects, which bypassed the egress policy; the policy
+  also checks IPv4 addresses inside NAT64, 6to4 and IPv4-compatible IPv6 forms.
+- zstd 0.13.4 / zstd-safe 7.4.0 fix RUSTSEC-2026-0391, -0398 and -0403 (the advisory ignore
+  list is empty again); Windows-only NTLM keeps `rand 0.7` out of Linux and macOS builds.
+- GitHub Actions are pinned to commit SHAs, checkouts no longer persist the token, and
+  release tooling versions are pinned. The systemd unit gains a full sandbox (exposure 8.7
+  to 3.2 by `systemd-analyze security`).
+- The desktop app validates the shape of identity, status, SQL and Explorer responses, accepts
+  `http://[::1]` engines, and drops an unused npm dependency.
 - Scoped source administrators can no longer repoint a source's location or credentials.
 - Source paths inside the engine's data or backup directories are refused.
 - Security headers on every API response; pgwire connection cap; export row cap; hardened

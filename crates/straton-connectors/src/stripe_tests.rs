@@ -276,3 +276,38 @@ async fn stripe_events_emit_upserts_and_deletes() {
         .is_err()
     );
 }
+
+#[tokio::test]
+async fn http_never_follows_redirects_past_the_egress_check() {
+    // The egress policy vets the configured host; a 302 must not move the engine elsewhere.
+    let target_hits = Arc::new(AtomicUsize::new(0));
+    let hits = target_hits.clone();
+    let target = Router::new().route(
+        "/internal",
+        get(move || {
+            hits.fetch_add(1, Ordering::SeqCst);
+            async { Json(json!({"secret": true})) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let internal = format!("http://{}/internal", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, target).await.unwrap() });
+    let redirect = Router::new().route(
+        "/v1/customers",
+        get(move || {
+            let location = internal.clone();
+            async move { (StatusCode::FOUND, [("location", location)]).into_response() }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, redirect).await.unwrap() });
+    let h = http::Http::new(http::base_url(&base).unwrap(), "Bearer x".into(), 1000.0).unwrap();
+    let err = h.get("v1/customers", &[]).await.unwrap_err().to_string();
+    assert!(err.contains("302"), "{err}");
+    assert_eq!(
+        target_hits.load(Ordering::SeqCst),
+        0,
+        "redirect was followed"
+    );
+}

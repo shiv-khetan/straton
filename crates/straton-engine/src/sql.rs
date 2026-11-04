@@ -55,6 +55,8 @@ pub struct Sql {
     pub config: config::Sql,
     runtime: Arc<RuntimeEnv>,
     stats: crate::query_stats::Recorder,
+    /// Failed-credential counters shared by the HTTP API and pgwire.
+    pub(crate) auth_failures: Arc<crate::auth_failures::AuthFailures>,
 }
 #[derive(Debug)]
 pub struct Error {
@@ -264,6 +266,7 @@ impl Sql {
             data_dir: config.data_dir.clone(),
             config: config.sql.clone(),
             runtime,
+            auth_failures: Default::default(),
         })
     }
     pub(crate) async fn stream(
@@ -530,18 +533,7 @@ impl Sql {
         let _snapshot = SNAPSHOTS.read().await;
         let (ctx, _) = self.context().await?;
         let mut frame = self.plan(&ctx, query, types).await?;
-        frame.logical_plan().apply_with_subqueries(|p| {
-            match p {
-                LogicalPlan::SubqueryAlias(alias) => {
-                    touched.insert(alias.alias.to_string());
-                }
-                LogicalPlan::TableScan(scan) if scan.table_name.to_string() != "?table?" => {
-                    touched.insert(scan.table_name.to_string());
-                }
-                _ => {}
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
+        touched_tables(frame.logical_plan(), touched)?;
         if !params.is_empty() {
             frame = frame.with_param_values(params)?;
         }
@@ -638,8 +630,19 @@ impl Sql {
         touched: &BTreeSet<String>,
         result: std::result::Result<usize, &str>,
     ) -> std::result::Result<(), Error> {
+        self.audit_via("sql", query, touched, result).await
+    }
+    /// One `sql.query` (or `sql.rejected`) row per user-supplied query, whichever surface ran
+    /// it; `via` names that surface. Only a hash of the text is stored.
+    pub(crate) async fn audit_via(
+        &self,
+        via: &str,
+        query: &str,
+        touched: &BTreeSet<String>,
+        result: std::result::Result<usize, &str>,
+    ) -> std::result::Result<(), Error> {
         let hash = format!("{:x}", Sha256::digest(query.as_bytes()));
-        let detail = json!({"principal":self.principal.as_ref().map(|p| &p.user.id),"query_hash":hash,"datasets":touched,"row_count":result.as_ref().ok(),"error_class":result.err()});
+        let detail = json!({"principal":self.principal.as_ref().map(|p| &p.user.id),"query_hash":hash,"datasets":touched,"row_count":result.as_ref().ok(),"error_class":result.err(),"via":via});
         let action = if detail["error_class"] == "rejected" {
             "sql.rejected"
         } else {
@@ -663,6 +666,26 @@ impl Sql {
     pub async fn explain(&self, query: &str) -> std::result::Result<Output, Error> {
         self.audited(query, query, vec![], &[], Mode::Explain).await
     }
+}
+/// Tables and aliases a plan reads, for the `sql.query` audit row. Every surface that runs
+/// user SQL (SQL endpoint, pgwire, charts) records the same shape.
+pub(crate) fn touched_tables(
+    plan: &LogicalPlan,
+    touched: &mut BTreeSet<String>,
+) -> datafusion::common::Result<()> {
+    plan.apply_with_subqueries(|p| {
+        match p {
+            LogicalPlan::SubqueryAlias(alias) => {
+                touched.insert(alias.alias.to_string());
+            }
+            LogicalPlan::TableScan(scan) if scan.table_name.to_string() != "?table?" => {
+                touched.insert(scan.table_name.to_string());
+            }
+            _ => {}
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(())
 }
 pub fn preview(out: &Output, limit: usize) -> std::result::Result<Value, Error> {
     let mut rows = Vec::new();

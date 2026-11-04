@@ -27,10 +27,30 @@ pub fn set_allow_private(allow: bool) {
     ALLOW_PRIVATE.store(allow, Ordering::Relaxed);
 }
 
+/// The IPv4 address inside an IPv6 form that reaches it: IPv4-mapped (`::ffff:a.b.c.d`),
+/// IPv4-compatible (`::a.b.c.d`), NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`). Without
+/// this, `64:ff9b::a9fe:a9fe` would reach the metadata endpoint on a NAT64 network.
+fn embedded_v4(v6: Ipv6Addr) -> Option<Ipv4Addr> {
+    if let Some(v4) = v6.to_ipv4_mapped() {
+        return Some(v4);
+    }
+    let s = v6.segments();
+    let pair =
+        |hi: u16, lo: u16| Ipv4Addr::new((hi >> 8) as u8, hi as u8, (lo >> 8) as u8, lo as u8);
+    let compatible = s[..6] == [0; 6] && !(s[6] == 0 && s[7] <= 1);
+    let nat64 = s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0; 4];
+    if compatible || nat64 {
+        Some(pair(s[6], s[7]))
+    } else if s[0] == 0x2002 {
+        Some(pair(s[1], s[2]))
+    } else {
+        None
+    }
+}
 /// Why an address is refused, or `None` when it is allowed.
 pub fn refused(ip: IpAddr, allow_private: bool) -> Option<&'static str> {
     let ip = match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+        IpAddr::V6(v6) => embedded_v4(v6).map(IpAddr::V4).unwrap_or(ip),
         v4 => v4,
     };
     match ip {
@@ -148,6 +168,13 @@ mod tests {
             ("::1", false, true),
             ("fd12::1", false, true),
             ("::ffff:10.0.0.1", false, true),
+            // IPv4 inside IPv6: NAT64, IPv4-compatible and 6to4 forms of the same targets.
+            ("64:ff9b::a9fe:a9fe", true, true),
+            ("::169.254.169.254", true, true),
+            ("2002:a9fe:a9fe::1", true, true),
+            ("64:ff9b::a00:1", false, true),
+            ("2002:c0a8:101::1", false, true),
+            ("64:ff9b::808:808", false, false),
             ("8.8.8.8", false, false),
             ("2606:4700::1111", false, false),
         ] {

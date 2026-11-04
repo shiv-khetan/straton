@@ -49,6 +49,9 @@ impl Http {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .https_only(base.scheme() == "https")
+            // The egress policy vets the configured host only; a redirect could send the
+            // engine to any other address (an internal service, a metadata endpoint).
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| Error::Connector("HTTP client setup failed".into()))?;
         Ok(Self {

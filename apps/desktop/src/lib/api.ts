@@ -1,5 +1,15 @@
 import { fetch } from '@tauri-apps/plugin-http';
 import WebSocket from '@tauri-apps/plugin-websocket';
+import {
+  type Check,
+  explorerRowsShape,
+  meShape,
+  sqlResultShape,
+  sqlTablesShape,
+  statusShape,
+  tableProfileShape,
+  validated,
+} from './validate.ts';
 
 export interface SqlColumn {
   name: string;
@@ -203,7 +213,8 @@ export interface Grant {
   privilege: Privilege;
 }
 export interface Me {
-  user: User;
+  /** /v1/me describes the caller only; role membership is in `roles`. */
+  user: Omit<User, 'role_ids'>;
   roles: Role[];
   privileges: { admin: boolean; read: boolean; sync_admin: boolean; grants: Grant[] };
 }
@@ -575,7 +586,7 @@ export function normalizeUrl(value: string): string {
   if (
     !(
       url.protocol === 'https:' ||
-      (url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname))
+      (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
     ) ||
     url.username ||
     url.password ||
@@ -583,7 +594,7 @@ export function normalizeUrl(value: string): string {
     url.hash ||
     url.pathname !== '/'
   )
-    throw new Error('Use a root HTTPS URL, or HTTP on localhost / 127.0.0.1.');
+    throw new Error('Use a root HTTPS URL, or HTTP on localhost / 127.0.0.1 / [::1].');
   return url.origin;
 }
 const idPath = (id: string) => encodeURIComponent(id);
@@ -593,6 +604,7 @@ export function api(connection: Connection) {
     method = 'GET',
     body?: unknown,
     binary = false,
+    check?: Check<T>,
   ): Promise<T> {
     const response = await fetch(connection.url + path, {
       method,
@@ -618,7 +630,8 @@ export function api(connection: Connection) {
     if (response.status === 204 || (response.status === 202 && path.endsWith('/cancel')))
       return undefined as T;
     if (binary) return response.arrayBuffer() as Promise<T>;
-    return response.json() as Promise<T>;
+    const value: unknown = await response.json();
+    return check ? validated(path, check, value) : (value as T);
   }
   return {
     pipelines: () => request<Pipeline[]>('/v1/pipelines'),
@@ -702,7 +715,7 @@ export function api(connection: Connection) {
     runModel: (id: string) => request<{ id: string }>('/v1/models/' + idPath(id) + '/run', 'POST'),
     explainModel: (id: string) => request<ModelExplain>('/v1/models/' + idPath(id) + '/explain'),
     modelLineage: (id: string) => request<ModelLineage>('/v1/models/' + idPath(id) + '/lineage'),
-    me: () => request<Me>('/v1/me'),
+    me: () => request<Me>('/v1/me', 'GET', undefined, false, meShape),
     users: () => request<User[]>('/v1/users'),
     createUser: (name: string) => request<User>('/v1/users', 'POST', { name }),
     updateUser: (user: User, disabled: boolean) =>
@@ -744,9 +757,9 @@ export function api(connection: Connection) {
       }),
     explorerTree: () => request<ExplorerTree>('/v1/explorer/tree'),
     explorerRows: (body: ExplorerRequest) =>
-      request<ExplorerRows>('/v1/explorer/rows', 'POST', body),
+      request<ExplorerRows>('/v1/explorer/rows', 'POST', body, false, explorerRowsShape),
     explorerProfile: (body: ProfileRequest) =>
-      request<TableProfile>('/v1/explorer/profile', 'POST', body),
+      request<TableProfile>('/v1/explorer/profile', 'POST', body, false, tableProfileShape),
     explorerExport: (body: ExplorerRequest & { format: 'csv' | 'parquet'; max_rows?: number }) =>
       request<ArrayBuffer>('/v1/explorer/export', 'POST', body, true),
     storage: () => request<StorageUsage>('/v1/storage'),
@@ -758,15 +771,18 @@ export function api(connection: Connection) {
     deleteSavedQuery: (id: string) => request<void>('/v1/saved-queries/' + idPath(id), 'DELETE'),
     cancelSql: (id: string) => request<void>('/v1/sql/cancel/' + idPath(id), 'POST'),
     sqlQuery: (query: string, limit = 1000, query_id?: string) =>
-      request<SqlResult>('/v1/sql', 'POST', {
-        query,
-        limit,
-        ...(query_id ? { query_id } : {}),
-      }),
+      request<SqlResult>(
+        '/v1/sql',
+        'POST',
+        { query, limit, ...(query_id ? { query_id } : {}) },
+        false,
+        sqlResultShape,
+      ),
     sqlExplain: (query: string) => request<SqlExplain>('/v1/sql/explain', 'POST', { query }),
-    sqlTables: () => request<{ tables: SqlTable[] }>('/v1/sql/tables'),
+    sqlTables: () =>
+      request<{ tables: SqlTable[] }>('/v1/sql/tables', 'GET', undefined, false, sqlTablesShape),
     health: () => request<{ ok: boolean }>('/health'),
-    status: () => request<Status>('/v1/status'),
+    status: () => request<Status>('/v1/status', 'GET', undefined, false, statusShape),
     advisor: (source = '') =>
       request<{ recommendations: AdvisorRecommendation[]; sources: AdvisorSource[] }>(
         '/v1/advisor' + (source ? '?source=' + idPath(source) : ''),

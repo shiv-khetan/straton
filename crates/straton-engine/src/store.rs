@@ -23,7 +23,36 @@ pub async fn open(dir: &Path) -> Result<SqlitePool> {
         .await?;
     sqlx::migrate!().run(&pool).await?;
     backfill_audit(&pool).await?;
+    ensure_mask_key(&pool).await?;
     Ok(pool)
+}
+/// The `hash` mask key: 32 bytes from the OS-seeded CSPRNG, created once per state.db and
+/// kept with it (backups and restores keep masked values stable). Never returned by the API.
+async fn ensure_mask_key(pool: &SqlitePool) -> Result<()> {
+    use rand::RngCore;
+    let mut key = [0u8; 32];
+    rand::rng().fill_bytes(&mut key);
+    let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+    sqlx::query("INSERT OR IGNORE INTO engine_settings(key,value) VALUES('mask_hmac_key',?)")
+        .bind(hex)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+pub async fn mask_key(pool: &SqlitePool) -> Result<[u8; 32]> {
+    let hex: String =
+        sqlx::query_scalar("SELECT value FROM engine_settings WHERE key='mask_hmac_key'")
+            .fetch_one(pool)
+            .await?;
+    let mut key = [0u8; 32];
+    anyhow::ensure!(
+        hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+        "invalid mask key"
+    );
+    for (i, byte) in key.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)?;
+    }
+    Ok(key)
 }
 pub fn now() -> i64 {
     Utc::now().timestamp()

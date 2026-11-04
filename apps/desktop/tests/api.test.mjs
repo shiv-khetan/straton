@@ -3,12 +3,14 @@ import { normalizeUrl } from '../src/lib/api.ts';
 for (const value of [
   'http://127.0.0.1:8787/',
   'http://localhost:8787/',
+  'http://[::1]:8787/',
   'https://engine.example/',
 ]) {
   assert.equal(normalizeUrl('  ' + value + '  '), value.slice(0, -1));
 }
 for (const value of [
   'http://engine.example',
+  'http://[::2]:8787',
   'https://user:secret@engine.example',
   'https://engine.example/path',
   'https://engine.example/?token=secret',
@@ -18,4 +20,4 @@ for (const value of [
 ]) {
   assert.throws(() => normalizeUrl(value), undefined, value);
 }
-console.log('Connection URL boundary checks passed (10 cases).');
+console.log('Connection URL boundary checks passed (12 cases).');

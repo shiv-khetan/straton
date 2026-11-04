@@ -1667,6 +1667,16 @@ async fn access_grant(a: &axum::Router, role: &str, kind: &str, target: &str, pr
     .await;
     assert_eq!(s, StatusCode::CREATED, "{r}");
 }
+/// Expected `hash` mask output: HMAC-SHA256 under this state.db's mask key.
+async fn masked_hash(pool: &SqlitePool, value: &str) -> String {
+    let key = crate::store::mask_key(pool).await.unwrap();
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key);
+    ring::hmac::sign(&key, value.as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
 async fn dataset_id(f: &Fixture, name: &str) -> String {
     sqlx::query_scalar("SELECT id FROM datasets WHERE source_id='source' AND name=?")
         .bind(name)
@@ -1999,7 +2009,7 @@ async fn access_sql_filters_masks_and_fail_closed() {
     for (kind, expected) in [
         ("null", json!(null)),
         ("redact", json!("***")),
-        ("hash", json!(format!("{:x}", Sha256::digest("Alice")))),
+        ("hash", json!(masked_hash(&f.pool, "Alice").await)),
         ("last4", json!("****lice")),
     ] {
         let (s, e) = request(
@@ -2013,6 +2023,20 @@ async fn access_sql_filters_masks_and_fail_closed() {
         let (s, v) = request_as(&a, &token, "POST", "/v1/sql", query.clone()).await;
         assert_eq!(s, StatusCode::OK, "{v}");
         assert_eq!(v["rows"][0][1], expected, "{kind}");
+        if kind == "hash" {
+            // Keyed: a reader cannot reverse it by hashing guesses with plain SHA-256...
+            assert_ne!(expected, json!(format!("{:x}", Sha256::digest("Alice"))));
+            // ...nor by calling the mask function, which is never registered in a session.
+            let (s, e) = request_as(
+                &a,
+                &token,
+                "POST",
+                "/v1/sql",
+                json!({"query":"SELECT straton_mask_hash('Alice')"}),
+            )
+            .await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
+        }
     }
     request(
         &a,
@@ -2421,7 +2445,6 @@ async fn access_target_admin_and_policy_cascades() {
 
 #[tokio::test]
 async fn access_mask_type_changes_and_schema_drift_revalidation() {
-    use sha2::{Digest, Sha256};
     let f = sql_fixture().await;
     sql_sync(&f).await;
     let a = app(&f);
@@ -2435,7 +2458,7 @@ async fn access_mask_type_changes_and_schema_drift_revalidation() {
     for (first, second, expected) in [
         ("null", "redact", json!(null)),
         ("redact", "hash", json!("***")),
-        ("hash", "last4", json!(format!("{:x}", Sha256::digest("1")))),
+        ("hash", "last4", json!(masked_hash(&f.pool, "1").await)),
     ] {
         for (r, kind) in [(&r1, first), (&r2, second)] {
             request(
@@ -6522,5 +6545,225 @@ async fn startup_without_encryption_never_needs_the_keychain() {
     crate::credentials::delete(&kek).unwrap();
     crate::keys::startup(&f.pool, false).await.unwrap();
     assert!(crate::keys::startup(&f.pool, true).await.is_err());
+    f.close().await;
+}
+
+#[tokio::test]
+async fn review_custom_sql_validation_runs_as_caller_chart_sql_is_audited_and_last4_hides_short_values()
+ {
+    let f = sql_fixture().await;
+    sql_sync(&f).await;
+    let a = app(&f);
+    let did = dataset_id(&f, "users").await;
+
+    // A user without any grant probes an unreadable table through quality-check validation.
+    // Planning as an admin used to answer "No field named nope. Valid fields are ...".
+    let nobody = access_role(&a, "nobody").await;
+    let (_, nobody_token) = access_user(&a, "nobody", &[&nobody]).await;
+    let probe = |sql: &str| json!({"name":"Probe","kind":"custom_sql","config":{"sql":sql},"severity":"warn"});
+    let (s, v) = request_as(
+        &a,
+        &nobody_token,
+        "POST",
+        "/v1/quality/checks",
+        probe("SELECT nope FROM app_db.users"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let message = v["error"].as_str().unwrap();
+    assert!(!message.contains("Valid fields"), "{message}");
+    assert!(!message.contains("users.name"), "{message}");
+    let (_, missing) = request_as(
+        &a,
+        &nobody_token,
+        "POST",
+        "/v1/quality/checks",
+        probe("SELECT nope FROM app_db.no_such_table"),
+    )
+    .await;
+    // An unreadable table and a missing one are indistinguishable.
+    assert_eq!(
+        message.replace("users", "no_such_table"),
+        missing["error"].as_str().unwrap()
+    );
+
+    // Chart SQL is audited like the SQL endpoint: one row per query, hash only.
+    let reader = access_role(&a, "reader").await;
+    access_grant(&a, &reader, "dataset", &did, "read").await;
+    let (uid, token) = access_user(&a, "reader", &[&reader]).await;
+    let query = "SELECT id, name FROM app_db.users ORDER BY id";
+    let (s, v) = request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/charts/preview",
+        json!({"sql":query,"config":{"x":"id","y":["id"]}}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let detail: String = sqlx::query_scalar(
+        "SELECT detail FROM audit_log WHERE action='sql.query' AND principal_id=? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(&uid)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert!(!detail.contains("SELECT"), "{detail}");
+    let detail: serde_json::Value = serde_json::from_str(&detail).unwrap();
+    assert_eq!(detail["via"], "chart");
+    assert_eq!(detail["row_count"], 2);
+    assert!(
+        detail["datasets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d.as_str().unwrap().contains("users"))
+    );
+    let (s, _) = request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/charts/preview",
+        json!({"sql":"DELETE FROM app_db.users","config":{"x":"id","y":["id"]}}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let rejected: serde_json::Value = serde_json::from_str(
+        &sqlx::query_scalar::<_, String>(
+            "SELECT detail FROM audit_log WHERE action='sql.rejected' AND principal_id=? ORDER BY id DESC LIMIT 1",
+        )
+        .bind(&uid)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rejected["via"], "chart");
+
+    // last4 must not reveal a value of four characters or fewer in full.
+    let (s, e) = request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/masks/{reader}/name"),
+        json!({"kind":"last4"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{e}");
+    let (s, v) = request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/sql",
+        json!({"query":"SELECT name FROM app_db.users ORDER BY id"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], json!([["****lice"], ["****"]]));
+    f.close().await;
+}
+
+#[tokio::test]
+async fn review_pgwire_drops_clients_that_do_not_authenticate_in_time() {
+    use sqlx::{
+        Connection, Executor, PgConnection,
+        postgres::{PgConnectOptions, PgSslMode},
+    };
+    use tokio::io::AsyncReadExt;
+    let mut f = sql_fixture().await;
+    sql_sync(&f).await;
+    f.config.sql.bind = "127.0.0.1:0".parse().unwrap();
+    let service = crate::sql::Sql::new(f.pool.clone(), &f.config).unwrap();
+    let mut server = crate::sql::wire::Server::start(
+        service,
+        Arc::new("good-token".to_owned().into()),
+        &f.config,
+    )
+    .await
+    .unwrap();
+    let port = server.address.unwrap().port();
+    // An idle socket that never sends a startup message is closed after the deadline.
+    let mut idle = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let started = Instant::now();
+    let mut buf = [0u8; 16];
+    let read = tokio::time::timeout(Duration::from_secs(10), idle.read(&mut buf))
+        .await
+        .expect("idle client was not dropped");
+    assert!(matches!(read, Ok(0) | Err(_)), "{read:?}");
+    assert!(started.elapsed() >= Duration::from_millis(1500));
+    // An authenticated session outlives the deadline.
+    let options = PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(port)
+        .username("admin")
+        .database("straton")
+        .password("good-token")
+        .ssl_mode(PgSslMode::Disable);
+    let mut conn = PgConnection::connect_with(&options).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let rows = conn.fetch_all("SELECT id FROM app_db.users").await.unwrap();
+    assert_eq!(rows.len(), 2);
+    conn.close().await.unwrap();
+    server.shutdown().await;
+    f.close().await;
+}
+
+#[tokio::test]
+async fn review_repeated_failed_credentials_are_counted_audited_and_alerted_once() {
+    let f = Fixture::new().await;
+    let a = app(&f);
+    let peer: std::net::SocketAddr = "198.51.100.23:40000".parse().unwrap();
+    let attempt = |token: &str| {
+        let mut req = Request::builder()
+            .method("GET")
+            .uri("/v1/me")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(peer));
+        a.clone().oneshot(req)
+    };
+    for _ in 0..crate::auth_failures::THRESHOLD + 3 {
+        assert_eq!(
+            attempt("stn_not_a_token").await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    // Failures never lock the address out: a valid token from it still works.
+    assert_eq!(
+        attempt("good-token").await.unwrap().status(),
+        StatusCode::OK
+    );
+    let alerts: Vec<String> =
+        sqlx::query_scalar("SELECT detail FROM audit_log WHERE action='auth.failures'")
+            .fetch_all(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(alerts.len(), 1, "one alert per address per window");
+    let alert: serde_json::Value = serde_json::from_str(&alerts[0]).unwrap();
+    assert_eq!(alert["address"], "198.51.100.23");
+    assert_eq!(alert["surface"], "http");
+    assert!(!alerts[0].contains("stn_not_a_token"));
+    let notices: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM notifications WHERE kind='auth.failures' AND user_id IS NULL",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(notices, 1);
+    let (s, v) = request(&a, "GET", "/v1/admin/auth-failures", json!(null)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["addresses"][0]["address"], "198.51.100.23");
+    assert_eq!(
+        v["addresses"][0]["failures"],
+        crate::auth_failures::THRESHOLD + 3
+    );
+    // Non-admins cannot see who is failing to sign in.
+    let reader = access_role(&a, "reader").await;
+    let (_, token) = access_user(&a, "reader", &[&reader]).await;
+    let (s, _) = request_as(&a, &token, "GET", "/v1/admin/auth-failures", json!(null)).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
     f.close().await;
 }

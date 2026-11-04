@@ -57,7 +57,7 @@ export default function Connect({
           />
         </Field>
         <p className="hint">
-          Use HTTPS for remote engines. HTTP is allowed only on localhost or 127.0.0.1. The
+          Use HTTPS for remote engines. HTTP is allowed only on localhost, 127.0.0.1 or [::1]. The
           connection is stored in your OS keychain.
         </p>
         {error && <p role="alert">{error}</p>}

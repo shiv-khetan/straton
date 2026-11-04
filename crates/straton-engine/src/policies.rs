@@ -144,6 +144,8 @@ pub struct Policy {
     pub filter: Option<Expr>,
     pub masks: BTreeMap<String, String>,
     pub filtered: bool,
+    /// HMAC key for `hash` masks; loaded only when one applies.
+    pub mask_key: Option<[u8; 32]>,
 }
 fn strictness(s: &str) -> u8 {
     match s {
@@ -225,11 +227,48 @@ pub async fn effective(
             resolved.insert(f.name().clone(), kind);
         }
     }
+    let mask_key = if resolved.values().any(|k| k == "hash") {
+        Some(store::mask_key(pool).await?)
+    } else {
+        None
+    };
     Ok(Some(Policy {
         filter: if unrestricted { None } else { filter },
         masks: resolved,
         filtered: filtered && !unrestricted,
+        mask_key,
     }))
+}
+/// The `hash` mask: lowercase hex HMAC-SHA256 under the engine's mask key. The function is
+/// placed straight into the policy's plan and never registered in a session, so SQL users
+/// cannot call it to hash their own guesses and compare them with masked values.
+fn mask_hash(key: [u8; 32]) -> datafusion::logical_expr::ScalarUDF {
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key);
+    create_udf(
+        "straton_mask_hash",
+        vec![DataType::Utf8],
+        DataType::Utf8,
+        Volatility::Immutable,
+        Arc::new(move |args| {
+            let values = ColumnarValue::values_to_arrays(args)?;
+            let a = values[0]
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| {
+                    datafusion::error::DataFusionError::Execution("hash requires Utf8".into())
+                })?;
+            let out = StringArray::from_iter((0..a.len()).map(|i| {
+                (!a.is_null(i)).then(|| {
+                    ring::hmac::sign(&key, a.value(i).as_bytes())
+                        .as_ref()
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>()
+                })
+            }));
+            Ok(ColumnarValue::Array(Arc::new(out)))
+        }),
+    )
 }
 pub fn project(mut frame: DataFrame, policy: Policy) -> Result<DataFrame> {
     if let Some(expr) = policy.filter {
@@ -244,12 +283,20 @@ pub fn project(mut frame: DataFrame, policy: Policy) -> Result<DataFrame> {
                 None => Expr::Column(datafusion::common::Column::from_name(f.name())),
                 Some("null") => lit(ScalarValue::try_from(f.data_type())?),
                 Some("redact") => lit("***"),
-                Some("hash") => frame.parse_sql_expr(&format!(
-                    "straton_sha256(CAST({} AS VARCHAR))",
-                    quote(f.name())
-                ))?,
+                Some("hash") => {
+                    let key = policy
+                        .mask_key
+                        .ok_or_else(|| anyhow::anyhow!("mask key unavailable"))?;
+                    mask_hash(key).call(vec![Expr::Cast(datafusion::logical_expr::Cast::new(
+                        Box::new(Expr::Column(datafusion::common::Column::from_name(
+                            f.name(),
+                        ))),
+                        DataType::Utf8,
+                    ))])
+                }
+                // A value of four characters or fewer would be shown whole, so it is hidden.
                 Some("last4") => frame.parse_sql_expr(&format!(
-                    "'****' || right(CAST({} AS VARCHAR), 4)",
+                    "CASE WHEN character_length(CAST({0} AS VARCHAR)) > 4 THEN '****' || right(CAST({0} AS VARCHAR), 4) WHEN {0} IS NOT NULL THEN '****' END",
                     quote(f.name())
                 ))?,
                 _ => bail!("invalid mask"),

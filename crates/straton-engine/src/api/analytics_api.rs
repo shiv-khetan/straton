@@ -492,14 +492,25 @@ async fn query(
             "SQL endpoint is disabled".into(),
         ));
     }
-    tokio::time::timeout(
+    // Chart SQL is user SQL: it gets the same `sql.query` audit row as the SQL endpoint.
+    let sql = a.sql.for_principal(p.clone());
+    let mut touched = std::collections::BTreeSet::new();
+    let mut class: Option<&'static str> = None;
+    let result = tokio::time::timeout(
         Duration::from_secs_f64(a.sql.config.query_timeout_secs),
         async {
             let _snapshot = crate::sql::SNAPSHOTS.read().await;
-            models::select(text).map_err(|e| bad(&e.to_string()))?;
-            let sql = a.sql.for_principal(p.clone());
+            models::select(text).map_err(|e| {
+                class = Some("rejected");
+                bad(&e.to_string())
+            })?;
             let (ctx, _) = sql.context().await?;
-            let mut frame = sql.plan(&ctx, text, &[]).await?;
+            let mut frame = sql.plan(&ctx, text, &[]).await.map_err(|e| {
+                class = Some(e.class);
+                ApiError::from(e)
+            })?;
+            crate::sql::touched_tables(frame.logical_plan(), &mut touched)
+                .map_err(crate::sql::Error::from)?;
             config(&frame, c)?;
             let original = frame.clone();
             let mut drill_columns = vec![];
@@ -573,11 +584,27 @@ async fn query(
                     );
                 }
             }
-            Ok(Json(json!({"columns":columns,"rows":rows})))
+            let count = rows.len();
+            Ok::<_, ApiError>((Json(json!({"columns":columns,"rows":rows})), count))
         },
     )
     .await
-    .map_err(|_| ApiError(StatusCode::REQUEST_TIMEOUT, "chart query timed out".into()))?
+    .unwrap_or_else(|_| {
+        class = Some("timeout");
+        Err(ApiError(
+            StatusCode::REQUEST_TIMEOUT,
+            "chart query timed out".into(),
+        ))
+    });
+    let outcome = match &result {
+        Ok((_, count)) => Ok(*count),
+        Err(e) => Err(class.unwrap_or(match e.0 {
+            StatusCode::INTERNAL_SERVER_ERROR => "internal",
+            _ => "query",
+        })),
+    };
+    sql.audit_via("chart", text, &touched, outcome).await?;
+    result.map(|(json, _)| json)
 }
 async fn data(
     State(a): State<App>,

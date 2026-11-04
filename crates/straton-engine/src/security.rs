@@ -20,6 +20,21 @@ pub fn lock(dir: &Path) -> Result<File> {
     Ok(file)
 }
 
+/// Permission bits of `dir` when group or others can access it (Unix), else `None`.
+/// The engine creates its directories owner-only; this flags ones created another way.
+pub fn shared_mode(dir: &Path) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir).ok()?.permissions().mode() & 0o777;
+        (mode & 0o077 != 0).then_some(mode)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        None
+    }
+}
 pub fn token(dir: &Path) -> Result<SecretString> {
     let path = dir.join("token");
     match OpenOptions::new().write(true).create_new(true).open(&path) {

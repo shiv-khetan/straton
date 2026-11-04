@@ -44,6 +44,28 @@ With encryption disabled the engine never creates a KEK. If a KEK recorded earli
 
 To move an existing Linux engine to a secrets directory while the KEK is still in the kernel keyring (before rebooting), read each entry with `keyctl` and write it as `<hex(account)>.secret` (accounts: `kek`, `kek.pending` if present, and each source id); then set the directory and restart.
 
+## Local files and masking keys
+
+The engine sets its file-creation mask to owner-only (077) at startup, so `state.db` and its
+WAL, logs, snapshots, key sidecars and backups are readable only by the engine's account. It
+warns at startup when the data or backup directory itself is open to other users; fix that
+with `chmod 700`. The systemd unit in `deploy/` also sets `UMask=0077` and a sandbox.
+
+The `hash` column mask is HMAC-SHA256 under a 256-bit key generated once per `state.db`
+(table `engine_settings`). The key is never returned by the API, travels with database
+backups so masked values stay stable after a restore, and the mask function is never
+registered as a SQL function, so readers cannot hash their own guesses to reverse masked
+values. `last4` shows nothing for values of four characters or fewer.
+
+## Failed authentication
+
+The HTTP API and the SQL endpoint count presented-but-rejected credentials per source address
+over ten minutes. At 20 failures the engine writes one `auth.failures` audit row and notifies
+admins; `GET /v1/admin/auth-failures` lists current counts. Tokens are 256-bit random values,
+so this is detection, not brute-force protection, and it never locks an address out: behind a
+proxy or NAT every client shares one address. SQL clients must finish TLS and authentication
+within 10 seconds.
+
 ## Audit integrity
 
 Every audit row hashes its predecessor's 64-character lowercase hex hash followed by compact UTF-8 JSON with lexicographically sorted fields: action, at (Unix seconds), detail (a string), entity_id, id, principal_id (string or null). SHA-256 produces a lowercase hex hash; the genesis predecessor is 64 zero characters. SQLite serializes insertion and head lookup inside the caller's transaction. Existing rows are backfilled once, transactionally, without rewriting their contents. Subsequent startup does not repair a tampered chain.
@@ -52,4 +74,4 @@ Admins can GET /v1/audit/verify or run straton-engine verify-audit while the eng
 
 ## Supply chain checks
 
-CI runs Rust formatting, clippy, tests, cargo-deny advisories/licenses/sources/bans, npm audit at high severity, desktop formatting/build/tests, and signed release generation. deny.toml allows only crates.io sources and lists one scoped license exception (tiny-keccak 2.0.2, CC0-1.0). Vulnerability advisories have no ignored entries. Dependency tools need trusted registry/advisory access in CI; an offline build alone does not establish current advisory status.
+CI runs Rust formatting, clippy, tests, cargo-deny advisories/licenses/sources/bans, npm audit at high severity, desktop formatting/build/tests, and signed release generation. Every GitHub Action is pinned to a commit SHA (Dependabot updates the pins), checkouts do not persist the workflow token where build scripts could read it, and the release tools (cargo-auditable, cargo-cyclonedx, cargo-deny) are pinned to exact versions. deny.toml allows only crates.io sources and lists one scoped license exception (tiny-keccak 2.0.2, CC0-1.0). Vulnerability advisories have no ignored entries. Dependency tools need trusted registry/advisory access in CI; an offline build alone does not establish current advisory status.
