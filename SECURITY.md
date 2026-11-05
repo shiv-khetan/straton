@@ -60,8 +60,10 @@ values. `last4` shows nothing for values of four characters or fewer.
 ## Failed authentication
 
 The HTTP API and the SQL endpoint count presented-but-rejected credentials per source address
-over ten minutes. At 20 failures the engine writes one `auth.failures` audit row and notifies
-admins; `GET /v1/admin/auth-failures` lists current counts. Tokens are 256-bit random values,
+over ten minutes (IPv6 by /64). At 20 failures the engine writes one `auth.failures` audit row
+and notifies admins, at most ten times per window plus one "many addresses" summary, so
+rotating addresses cannot flood the audit log; `GET /v1/admin/auth-failures` lists current
+counts. Tokens are 256-bit random values,
 so this is detection, not brute-force protection, and it never locks an address out: behind a
 proxy or NAT every client shares one address. SQL clients must finish TLS and authentication
 within 10 seconds.

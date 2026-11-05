@@ -7082,6 +7082,25 @@ async fn model_expectations_warn_drop_and_fail_before_publication() {
     assert_eq!(results["skip_first"]["total_rows"], 2);
     assert_eq!(results["short_names"]["failed_rows"], 1);
     assert_eq!(results["short_names"]["passed"], false);
+    // A reader of the model sees pass/fail but not counts: dropped rows never reached them.
+    let model_dataset: String = sqlx::query_scalar(
+        "SELECT id FROM datasets WHERE source_id='straton-models' AND name='checked_users'",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    let reader = access_role(&a, "model reader").await;
+    access_grant(&a, &reader, "dataset", &model_dataset, "read").await;
+    let (_, token) = access_user(&a, "model reader", &[&reader]).await;
+    let (s, seen) = request_as(&a, &token, "GET", &format!("/v1/models/{id}"), json!(null)).await;
+    assert_eq!(s, StatusCode::OK, "{seen}");
+    for r in seen["expectation_results"].as_array().unwrap() {
+        assert!(
+            r["failed_rows"].is_null() && r["total_rows"].is_null(),
+            "{r}"
+        );
+        assert!(r["passed"].is_boolean());
+    }
 
     // A fail rule stops the run: nothing is published, the error names the rule.
     let (s, v) = request(

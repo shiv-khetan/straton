@@ -19,16 +19,19 @@ wire protocol, with users, roles, row filters and column masks enforced inside t
 
 - **Sync** from Postgres, MySQL, SQL Server, MongoDB, SQLite, CSV, Stripe and Salesforce:
   full or incremental (watermark + key merge), resumable from the last committed checkpoint.
-- **Transform** with SQL models (tables or views) on a schedule or when inputs change, with an
-  optimizer that removes provably redundant arithmetic.
+- **Transform** with SQL models (tables or views) on a schedule or when inputs change, with
+  expectations that warn, drop rows or fail a run before it publishes, and an optimizer that
+  removes provably redundant arithmetic.
 - **Query** through a read-only Postgres endpoint (psql, DBeaver, BI tools) or the REST API,
-  bounded by row, memory and time limits.
-- **Govern** with a default-deny API, per-source and per-dataset grants, row filters and column
-  masks applied inside the SQL engine, and a hash-chained audit log.
+  bounded by row, memory and time limits, including earlier snapshots
+  (`app_db."orders@2026-11-04T09:00:00Z"`).
+- **Govern** with a default-deny API, per-source and per-dataset grants, row filters, column and
+  tag-based masks applied inside the SQL engine, a hash-chained audit log, and OpenLineage
+  events for Marquez, DataHub or Unity Catalog.
 - **Protect** data with Parquet modular encryption (AES-GCM, per-dataset keys, KEK rotation),
   secrets in the OS keychain or a private file store, and signed releases with SBOMs.
 - **Understand** your data in the desktop app: column-level lineage, impact analysis, quality
-  checks, profiling, pipelines and run history.
+  and drift checks, profiling with histograms, pipelines and run history.
 
 ## Quick start
 

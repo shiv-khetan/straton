@@ -22,8 +22,10 @@ async fn protected_json(a: &App, p: &Principal, r: &sqlx::sqlite::SqliteRow) -> 
     if filtered {
         value["row_count"] = Value::Null;
     }
-    // Results of the latest run that checked expectations. Counts describe the owner's view
-    // of the output, so readers whose policy filters rows see pass/fail only.
+    // Results of the latest run that checked expectations. Counts describe the owner's input,
+    // including rows a drop rule removed before publishing, so only the owner and admins see
+    // them; other readers see pass/fail.
+    let counts = editable(p, r);
     let results = sqlx::query("SELECT run_id,name,action,failed_rows,total_rows FROM model_expectation_results WHERE run_id=(SELECT r.id FROM runs r JOIN jobs j ON j.id=r.job_id WHERE j.model_id=? AND EXISTS(SELECT 1 FROM model_expectation_results e WHERE e.run_id=r.id) ORDER BY r.created_at DESC,r.rowid DESC LIMIT 1) ORDER BY name")
         .bind(r.get::<&str, _>("id"))
         .fetch_all(&a.pool)
@@ -33,7 +35,7 @@ async fn protected_json(a: &App, p: &Principal, r: &sqlx::sqlite::SqliteRow) -> 
             .iter()
             .map(|e| {
                 let failed: i64 = e.get("failed_rows");
-                json!({"run_id":e.get::<String,_>("run_id"),"name":e.get::<String,_>("name"),"action":e.get::<String,_>("action"),"passed":failed == 0,"failed_rows":(!filtered).then_some(failed),"total_rows":(!filtered).then(|| e.get::<i64,_>("total_rows"))})
+                json!({"run_id":e.get::<String,_>("run_id"),"name":e.get::<String,_>("name"),"action":e.get::<String,_>("action"),"passed":failed == 0,"failed_rows":counts.then_some(failed),"total_rows":counts.then(|| e.get::<i64,_>("total_rows"))})
             })
             .collect::<Vec<_>>()
     );

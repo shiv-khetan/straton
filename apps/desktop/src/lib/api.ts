@@ -170,7 +170,7 @@ export interface ModelInput {
   optimize: boolean;
   expectations?: ModelExpectation[];
 }
-/** Counts are null when the reader's row filter hides part of the output. */
+/** Counts are shown to the model's owner and admins only; null for other readers. */
 export interface ExpectationResult {
   run_id: string;
   name: string;
