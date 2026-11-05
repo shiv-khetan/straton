@@ -46,6 +46,7 @@ async fn settings(
         },
         "encryption": {"enabled": c.encryption.enabled},
         "network": {"allow_private": c.network.allow_private},
+        "snapshots": {"keep": c.snapshots.keep},
         "secret_store": crate::credentials::store_kind(),
     })))
 }

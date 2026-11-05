@@ -17,6 +17,7 @@ pub struct Config {
     pub network: Network,
     pub secrets: Secrets,
     pub lineage: Lineage,
+    pub snapshots: Snapshots,
 }
 #[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -49,6 +50,7 @@ impl Default for Config {
             network: Network::default(),
             secrets: Secrets::default(),
             lineage: Lineage::default(),
+            snapshots: Snapshots::default(),
         }
     }
 }
@@ -82,6 +84,7 @@ impl Config {
                     c.lineage.openlineage_url = Some(value).filter(|v| !v.is_empty())
                 }
                 "STRATON_LINEAGE_NAMESPACE" => c.lineage.namespace = value,
+                "STRATON_SNAPSHOTS_KEEP" => c.snapshots.keep = value.parse()?,
                 // Read by openlineage.rs at startup; a secret never lives in Config.
                 "STRATON_OPENLINEAGE_API_KEY" => {}
                 _ => anyhow::bail!("unknown environment setting {key}"),
@@ -130,6 +133,10 @@ impl Config {
         ensure!(
             !self.lineage.namespace.trim().is_empty() && self.lineage.namespace.len() <= 200,
             "lineage.namespace must be 1 to 200 characters"
+        );
+        ensure!(
+            (1..=1000).contains(&self.snapshots.keep),
+            "snapshots.keep must be between 1 and 1000"
         );
         Ok(())
     }
@@ -208,5 +215,19 @@ impl Default for Lineage {
             openlineage_url: None,
             namespace: "straton".into(),
         }
+    }
+}
+
+/// Published snapshots kept per dataset; older ones stay readable for time travel
+/// (`schema."table@<time>"` in SQL, the snapshot picker in Explorer).
+#[derive(Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Snapshots {
+    /// 1 keeps only the current snapshot.
+    pub keep: usize,
+}
+impl Default for Snapshots {
+    fn default() -> Self {
+        Self { keep: 1 }
     }
 }

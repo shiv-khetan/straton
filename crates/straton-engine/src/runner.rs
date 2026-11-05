@@ -437,6 +437,19 @@ async fn publish_snapshot(
         sqlx::query_scalar("SELECT id FROM runs WHERE state IN ('queued','running')")
             .fetch_all(&mut *tx)
             .await?;
+    // Time travel: also keep this job's previous snapshots, up to [snapshots] keep in all.
+    let keep: i64 = sqlx::query_scalar(
+        "SELECT CAST(value AS INTEGER) FROM engine_settings WHERE key='snapshot_keep'",
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .unwrap_or(1)
+    .max(1);
+    let retained: Vec<String> = sqlx::query_scalar("SELECT r.id FROM runs r WHERE r.job_id=(SELECT job_id FROM runs WHERE id=?1) AND r.state='succeeded' AND r.id!=?1 ORDER BY r.updated_at DESC,r.rowid DESC LIMIT ?2")
+        .bind(id)
+        .bind(keep - 1)
+        .fetch_all(&mut *tx)
+        .await?;
     let snapshot = output.join(id);
     if !snapshot.is_dir() {
         std::fs::rename(output.join(format!(".staging-{id}")), &snapshot)?;
@@ -501,7 +514,7 @@ async fn publish_snapshot(
     tx.commit().await?;
     if durable {
         let cleanup = async {
-            clean_snapshots(output, id, &active)?;
+            clean_snapshots(output, id, &active, &retained)?;
             keys::cleanup(
                 pool,
                 output
@@ -523,7 +536,12 @@ async fn publish_snapshot(
     let _ = events.send(json!({"type":"catalog.changed"}));
     Ok(())
 }
-fn clean_snapshots(output: &Path, current: &str, active: &[String]) -> Result<()> {
+fn clean_snapshots(
+    output: &Path,
+    current: &str,
+    active: &[String],
+    retained: &[String],
+) -> Result<()> {
     let output = output.canonicalize()?;
     for entry in std::fs::read_dir(&output)? {
         let entry = entry?;
@@ -540,7 +558,10 @@ fn clean_snapshots(output: &Path, current: &str, active: &[String]) -> Result<()
             }
             &name
         };
-        if name == current || active.iter().any(|id| id == run) {
+        if name == current
+            || active.iter().any(|id| id == run)
+            || (!name.starts_with('.') && retained.iter().any(|id| id == run))
+        {
             continue;
         }
         let path = entry.path().canonicalize()?;

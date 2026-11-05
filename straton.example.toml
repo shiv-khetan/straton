@@ -42,3 +42,8 @@ allow_private = true
 # openlineage_url = "http://127.0.0.1:5000/api/v1/lineage"   # or STRATON_LINEAGE_OPENLINEAGE_URL
 namespace = "straton"                                        # or STRATON_LINEAGE_NAMESPACE
 # A bearer API key, if the collector needs one, comes only from STRATON_OPENLINEAGE_API_KEY.
+
+[snapshots]
+# Published snapshots kept per dataset (1 = only the current one). Older kept snapshots can be
+# read with time travel: app_db."orders@2026-11-04T09:00:00Z" or app_db."orders@<run id>".
+keep = 1                                                     # or STRATON_SNAPSHOTS_KEEP

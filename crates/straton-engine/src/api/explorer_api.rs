@@ -18,6 +18,7 @@ pub(super) fn routes() -> Router<App> {
         .route("/v1/explorer/rows", post(rows))
         .route("/v1/explorer/export", post(export))
         .route("/v1/explorer/profile", post(profile))
+        .route("/v1/explorer/snapshots", get(snapshots))
 }
 /// Hard ceiling for one export: the file is buffered in memory before it is sent.
 const MAX_EXPORT_ROWS: usize = 1_000_000;
@@ -51,6 +52,8 @@ struct Input {
     offset: usize,
     format: Option<String>,
     max_rows: Option<usize>,
+    /// Time travel: a kept snapshot id, or an RFC 3339 time (latest snapshot at or before it).
+    snapshot: Option<String>,
 }
 fn df(e: datafusion::error::DataFusionError) -> ApiError {
     crate::sql::Error::from(e).into()
@@ -112,8 +115,16 @@ async fn frame(a: &App, p: &Principal, q: &Input) -> ApiResult<DataFrame> {
     {
         return Err(bad("unknown or unreadable table; sync the dataset first"));
     }
+    let table = match &q.snapshot {
+        Some(spec) => {
+            let sql = a.sql.for_principal(p.clone());
+            sql.register_snapshot(&ctx, &q.schema, &q.table, spec)
+                .await?
+        }
+        None => q.table.clone(),
+    };
     let mut frame = ctx
-        .table(TableReference::partial(q.schema.clone(), q.table.clone()))
+        .table(TableReference::partial(q.schema.clone(), table))
         .await
         .map_err(df)?;
     for f in &q.filters {
@@ -205,7 +216,7 @@ fn project(mut frame: DataFrame, q: &Input, limit: usize) -> ApiResult<DataFrame
     Ok(frame)
 }
 async fn audit(a: &App, q: &Input, action: &str) -> ApiResult<()> {
-    let shape = json!({"schema":q.schema,"table":q.table,"columns":q.columns,"sort":q.sort,
+    let shape = json!({"schema":q.schema,"table":q.table,"snapshot":q.snapshot,"columns":q.columns,"sort":q.sort,
         "filters":q.filters.iter().map(|f|json!({"column":f.column,"op":f.op})).collect::<Vec<_>>(),
         "search":q.search.as_ref().is_some_and(|s|!s.is_empty()),"format":q.format});
     let hash = format!("{:x}", Sha256::digest(shape.to_string().as_bytes()));
@@ -244,7 +255,8 @@ async fn rows(
         let frame=frame(&a,&p,&q).await?;
         let map=filtered_map(&a.pool,&p,false).await?;
         let metadata=map["nodes"].as_array().unwrap().iter().find(|n| n["type"]=="dataset" && n["sql_schema"]==q.schema && n["sql_table"]==q.table);
-        let catalog_total=metadata.filter(|m|m["row_filtered"]!=true).and_then(|m|m["row_count"].as_u64());
+        // The catalog count describes the current snapshot only.
+        let catalog_total=metadata.filter(|m|m["row_filtered"]!=true && q.snapshot.is_none()).and_then(|m|m["row_count"].as_u64());
         let total=if q.filters.is_empty() && q.search.as_ref().is_none_or(|s|s.is_empty()) && catalog_total.is_some() {
             catalog_total
         } else {
@@ -401,4 +413,32 @@ async fn profile(
             "explorer profile timed out".into(),
         )
     })?
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TableQuery {
+    schema: String,
+    table: String,
+}
+/// Kept snapshots of one readable table, newest first, for Explorer's time travel.
+async fn snapshots(
+    State(a): State<App>,
+    Extension(p): Extension<Principal>,
+    Query(q): Query<TableQuery>,
+) -> ApiResult<Json<Value>> {
+    let sql = a.sql.for_principal(p.clone());
+    let (source, dataset, storage) = sql
+        .resolve_alias(&p, &q.schema, &q.table)
+        .await?
+        .ok_or_else(|| bad("unknown or unreadable table"))?;
+    let _pin = crate::sql::SNAPSHOTS.read().await;
+    let kept = sql.snapshots_of(&source, &dataset, &storage).await?;
+    Ok(Json(json!({
+        "snapshots": kept.iter().map(|s| json!({
+            "id": s.id,
+            "published_at": chrono::DateTime::from_timestamp(s.published_at, 0).map(|t| t.to_rfc3339()),
+            "current": s.current,
+        })).collect::<Vec<_>>(),
+    })))
 }

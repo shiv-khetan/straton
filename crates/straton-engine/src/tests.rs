@@ -7405,3 +7405,188 @@ async fn migration_allowing_drift_checks_keeps_existing_checks_runs_and_profiles
     pool.close().await;
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn time_travel_reads_kept_snapshots_with_current_policies_and_retention_prunes_old_ones() {
+    let f = sql_fixture().await;
+    store::set_setting(&f.pool, "snapshot_keep", "3")
+        .await
+        .unwrap();
+    let a = app(&f);
+    let input = || async {
+        sqlx::sqlite::SqlitePoolOptions::new()
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new().filename(f.dir.join("sql-input.db")),
+            )
+            .await
+            .unwrap()
+    };
+    // Four syncs, each adding one user. Publication times are pinned an hour apart.
+    let mut runs = vec![];
+    for (i, name) in ["", "Carol", "Dave", "Erin"].into_iter().enumerate() {
+        if !name.is_empty() {
+            let db = input().await;
+            sqlx::query("INSERT INTO users(name) VALUES(?)")
+                .bind(name)
+                .execute(&db)
+                .await
+                .unwrap();
+            db.close().await;
+        }
+        let run = sql_sync(&f).await;
+        sqlx::query("UPDATE runs SET updated_at=? WHERE id=?")
+            .bind(1_800_000_000_i64 + 3600 * i as i64)
+            .bind(&run)
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        runs.push(run);
+    }
+    let count = |sql: String| {
+        let a = a.clone();
+        async move {
+            let (s, v) = request(&a, "POST", "/v1/sql", json!({ "query": sql })).await;
+            (s, v)
+        }
+    };
+    let (s, v) = count("SELECT count(*) AS n FROM app_db.users".into()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], json!([[5]]));
+    // Retention keeps the current snapshot and the two before it; the first is gone.
+    let dir = f.dir.join("data").join("source").join("users");
+    assert!(!dir.join(&runs[0]).exists(), "oldest snapshot was pruned");
+    for run in &runs[1..] {
+        assert!(dir.join(run).is_dir(), "kept {run}");
+    }
+    // By snapshot id, and by time (latest snapshot published at or before it).
+    let (s, v) = count(format!("SELECT count(*) FROM app_db.\"users@{}\"", runs[1])).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], json!([[3]]));
+    let (s, v) =
+        count("SELECT count(*) FROM app_db.\"users@2027-01-15T10:30:00Z\" AS old".into()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    // Syncs were pinned at 08:00, 09:00, 10:00 and 11:00 UTC on 2027-01-15.
+    assert_eq!(v["rows"], json!([[4]]), "10:30 falls after the third sync");
+    // Old and current snapshots join in one query.
+    let (s, v) = count(format!(
+        "SELECT n.name FROM app_db.users n LEFT JOIN app_db.\"users@{}\" o ON o.id = n.id WHERE o.id IS NULL ORDER BY n.name",
+        runs[1]
+    ))
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], json!([["Dave"], ["Erin"]]));
+    for (query, expected) in [
+        (
+            format!("SELECT * FROM app_db.\"users@{}\"", runs[0]),
+            "no kept snapshot",
+        ),
+        (
+            "SELECT * FROM app_db.\"users@2020-01-01T00:00:00Z\"".into(),
+            "no kept snapshot",
+        ),
+        (
+            "SELECT * FROM app_db.\"users@yesterday\"".into(),
+            "RFC 3339",
+        ),
+        (
+            "SELECT * FROM \"users@2027-01-15T10:30:00Z\"".into(),
+            "schema-qualified",
+        ),
+    ] {
+        let (s, v) = count(query.clone()).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{query}: {v}");
+        assert!(
+            v["error"].as_str().unwrap().contains(expected),
+            "{query}: {v}"
+        );
+    }
+
+    // Current policies apply to old snapshots; unreadable tables look missing.
+    let did = dataset_id(&f, "users").await;
+    let reader = access_role(&a, "reader").await;
+    access_grant(&a, &reader, "dataset", &did, "read").await;
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/row-filters/{reader}"),
+        json!({"predicate":"id <= 2"}),
+    )
+    .await;
+    request(
+        &a,
+        "PUT",
+        &format!("/v1/datasets/{did}/masks/{reader}/name"),
+        json!({"kind":"redact"}),
+    )
+    .await;
+    let (_, token) = access_user(&a, "reader", &[&reader]).await;
+    let old = format!(
+        "SELECT id, name FROM app_db.\"users@{}\" ORDER BY id",
+        runs[2]
+    );
+    let (s, v) = request_as(&a, &token, "POST", "/v1/sql", json!({ "query": old })).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["rows"], json!([[1, "***"], [2, "***"]]));
+    // A reader of another dataset passes the route gate but cannot see users at any time.
+    let other = dataset_id(&f, "unpublished").await;
+    let nobody = access_role(&a, "nobody").await;
+    access_grant(&a, &nobody, "dataset", &other, "read").await;
+    let (_, nobody_token) = access_user(&a, "nobody", &[&nobody]).await;
+    let (s, v) = request_as(
+        &a,
+        &nobody_token,
+        "POST",
+        "/v1/sql",
+        json!({ "query": old }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("not found"), "{v}");
+    let (s, _) = request_as(
+        &a,
+        &nobody_token,
+        "GET",
+        "/v1/explorer/snapshots?schema=app_db&table=users",
+        json!(null),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // Explorer lists kept snapshots (newest first) and reads one with the same filters.
+    let (s, list) = request(
+        &a,
+        "GET",
+        "/v1/explorer/snapshots?schema=app_db&table=users",
+        json!(null),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{list}");
+    let ids: Vec<_> = list["snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(ids, [runs[3].clone(), runs[2].clone(), runs[1].clone()]);
+    assert_eq!(list["snapshots"][0]["current"], true);
+    assert_eq!(list["snapshots"][1]["current"], false);
+    assert_eq!(
+        list["snapshots"][2]["published_at"],
+        "2027-01-15T09:00:00+00:00"
+    );
+    let (s, rows) = request_as(
+        &a,
+        &token,
+        "POST",
+        "/v1/explorer/rows",
+        json!({"schema":"app_db","table":"users","snapshot":runs[1],"sort":[{"column":"id","dir":"asc"}]}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{rows}");
+    assert_eq!(rows["rows"], json!([[1, "***"], [2, "***"]]));
+    assert_eq!(
+        rows["total"], 2,
+        "counted on the old snapshot, not the catalog"
+    );
+    f.close().await;
+}

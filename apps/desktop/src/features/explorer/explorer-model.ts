@@ -55,6 +55,7 @@ export function explorerRequest(
     sorting: { id: string; desc: boolean }[];
     filters: ExplorerFilter[];
     search: string;
+    snapshot?: string | null;
   },
 ): ExplorerRequest {
   const limit = Math.min(500, Math.max(1, Math.trunc(state.pageSize)));
@@ -64,6 +65,7 @@ export function explorerRequest(
     sort: state.sorting.map((s) => ({ column: s.id, dir: s.desc ? 'desc' : 'asc' })),
     filters: state.filters,
     search: state.search || undefined,
+    ...(state.snapshot ? { snapshot: state.snapshot } : {}),
     limit,
     offset: Math.max(0, Math.trunc(state.pageIndex)) * limit,
   };
@@ -108,4 +110,10 @@ export function histogramSummary(column: string, bins: HistogramBin[]): string {
     Math.round((peak.count / total) * 100) +
     '%).'
   );
+}
+
+/** SQL for a table, at a kept snapshot when one is chosen (`schema."table@<id>"`). */
+export function snapshotReference(schema: string, table: string, snapshot?: string | null) {
+  const quote = (name: string) => '"' + name.replaceAll('"', '""') + '"';
+  return quote(schema) + '.' + quote(snapshot ? table + '@' + snapshot : table);
 }

@@ -25,6 +25,7 @@ stop startup, so typos never fall back silently.
 | `STRATON_NETWORK_ALLOW_PRIVATE` | `[network] allow_private` |
 | `STRATON_SECRETS_DIR` | `[secrets] dir` |
 | `STRATON_LINEAGE_OPENLINEAGE_URL`, `STRATON_LINEAGE_NAMESPACE` | `[lineage]` (see [OpenLineage](openlineage.md)) |
+| `STRATON_SNAPSHOTS_KEEP` | `[snapshots] keep` (snapshots kept per dataset for time travel) |
 | `STRATON_OPENLINEAGE_API_KEY` | Bearer key for the OpenLineage collector; environment only, never in the file |
 | `RUST_LOG` | Log filter (for example `info,straton_engine=debug`) |
 

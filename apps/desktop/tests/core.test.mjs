@@ -40,3 +40,12 @@ assert.equal(
 );
 assert.equal(histogramSummary('amount', []), 'No values to chart for amount.');
 console.log('Profile histograms: bin labels and summaries passed.');
+// Time travel: the request carries the snapshot, and Open in SQL names it.
+import { snapshotReference } from '../src/features/explorer/explorer-model.ts';
+const base = { pageIndex: 0, pageSize: 100, sorting: [], filters: [], search: '' };
+assert.equal('snapshot' in explorerRequest('s', 't', base), false);
+assert.equal(explorerRequest('s', 't', { ...base, snapshot: 'abc' }).snapshot, 'abc');
+assert.equal(snapshotReference('app_db', 'users'), '"app_db"."users"');
+assert.equal(snapshotReference('app_db', 'users', 'r1'), '"app_db"."users@r1"');
+assert.equal(snapshotReference('a"b', 'c', null), '"a""b"."c"');
+console.log('Time travel: snapshot requests and SQL references passed.');

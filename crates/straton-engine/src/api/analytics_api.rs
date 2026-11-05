@@ -505,6 +505,10 @@ async fn query(
                 bad(&e.to_string())
             })?;
             let (ctx, _) = sql.context().await?;
+            sql.register_history(&ctx, text).await.map_err(|e| {
+                class = Some(e.class);
+                ApiError::from(e)
+            })?;
             let mut frame = sql.plan(&ctx, text, &[]).await.map_err(|e| {
                 class = Some(e.class);
                 ApiError::from(e)

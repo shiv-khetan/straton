@@ -448,6 +448,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST", "/v1/explorer/rows"),
     ("POST", "/v1/explorer/export"),
     ("POST", "/v1/explorer/profile"),
+    ("GET", "/v1/explorer/snapshots"),
     ("GET", "/v1/lineage/impact"),
     ("GET", "/v1/lineage/columns"),
     ("GET", "/v1/models"),

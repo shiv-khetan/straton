@@ -39,6 +39,16 @@ async fn ensure_mask_key(pool: &SqlitePool) -> Result<()> {
         .await?;
     Ok(())
 }
+/// Engine settings that background work reads from the database rather than from config
+/// (each state.db has its own, which also keeps tests isolated).
+pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<()> {
+    sqlx::query("INSERT INTO engine_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .bind(key)
+        .bind(value)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
 pub async fn mask_key(pool: &SqlitePool) -> Result<[u8; 32]> {
     let hex: String =
         sqlx::query_scalar("SELECT value FROM engine_settings WHERE key='mask_hmac_key'")

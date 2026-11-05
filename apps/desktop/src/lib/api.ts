@@ -48,6 +48,8 @@ export interface ExplorerFilter {
 export interface ExplorerRequest {
   schema: string;
   table: string;
+  /** Time travel: a kept snapshot id; omitted for the current snapshot. */
+  snapshot?: string;
   columns?: string[];
   sort: { column: string; dir: 'asc' | 'desc' }[];
   filters: ExplorerFilter[];
@@ -116,8 +118,14 @@ export interface TableProfile {
 }
 export type ProfileRequest = Pick<
   ExplorerRequest,
-  'schema' | 'table' | 'columns' | 'filters' | 'search'
+  'schema' | 'table' | 'snapshot' | 'columns' | 'filters' | 'search'
 >;
+/** One kept snapshot of a table, newest first in GET /v1/explorer/snapshots. */
+export interface TableSnapshot {
+  id: string;
+  published_at: string | null;
+  current: boolean;
+}
 export interface SavedQuery {
   id: string;
   owner_id: string;
@@ -817,6 +825,8 @@ export function api(connection: Connection) {
       request<ExplorerRows>('/v1/explorer/rows', 'POST', body, false, explorerRowsShape),
     explorerProfile: (body: ProfileRequest) =>
       request<TableProfile>('/v1/explorer/profile', 'POST', body, false, tableProfileShape),
+    explorerSnapshots: (schema: string, table: string) =>
+      request<{ snapshots: TableSnapshot[] }>('/v1/explorer/snapshots' + params({ schema, table })),
     explorerExport: (body: ExplorerRequest & { format: 'csv' | 'parquet'; max_rows?: number }) =>
       request<ArrayBuffer>('/v1/explorer/export', 'POST', body, true),
     storage: () => request<StorageUsage>('/v1/storage'),

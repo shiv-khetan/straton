@@ -30,3 +30,26 @@ The desktop **SQL Workspace** supports Ctrl/Cmd+Enter, Run, Explain, table inser
 - `GET /v1/sql/tables` returns `{"tables":[{"schema":"app_database","name":"users","columns":[{"name":"id","type":"Int64"}]}]}`.
 
 Successful and failed queries append `sql.query` audit records; forbidden statements append `sql.rejected`. Details contain the real user ID as principal, the SHA-256 hex digest of the original SQL text, datasets scanned, and row count or error class. Raw SQL and bound parameter values are never stored in the audit log. Extended-protocol parse failures are audited; successful preparation is audited when executed. Authorization and policies are re-evaluated for every REST request and pgwire statement.
+
+## Time travel
+
+Set `[snapshots] keep` (default 1) to keep earlier published snapshots of every dataset, then
+read one by adding `@` and a time or a snapshot (run) id to the table name, in quotes:
+
+```sql
+-- The latest snapshot published at or before a moment (RFC 3339):
+SELECT count(*) FROM app_db."orders@2026-11-04T09:00:00Z";
+-- A specific snapshot, by the run that published it:
+SELECT * FROM app_db."orders@9dd291c0-54fa-43b7-96f4-a09aff50d924";
+-- Rows added since that snapshot:
+SELECT n.* FROM app_db.orders n
+LEFT JOIN app_db."orders@2026-11-04T09:00:00Z" o ON o.id = n.id
+WHERE o.id IS NULL;
+```
+
+Time travel works in the SQL endpoint, pgwire, charts and Explorer, where a **Snapshot** picker
+lists the kept snapshots and **Open in SQL** names the chosen one. `GET
+/v1/explorer/snapshots?schema=…&table=…` lists them, newest first. Every read applies the
+**current** grants, row filters and masks, so revoking access also covers history. Models and
+quality checks always read current data. When a sync publishes, only the newest `keep`
+snapshots of that dataset stay on disk; asking for an older one says how many are kept.

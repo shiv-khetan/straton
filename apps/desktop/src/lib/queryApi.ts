@@ -26,6 +26,7 @@ export const reads: Partial<Record<keyof Api, QueryKey>> = {
   notifications: queryKeys.notifications,
   notificationCount: queryKeys.notifications,
   explorerTree: ['engine', 'explorer', 'tree'],
+  explorerSnapshots: ['engine', 'explorer', 'snapshots'],
   storage: ['engine', 'storage'],
   savedQueries: ['engine', 'saved-queries'],
   me: queryKeys.me,

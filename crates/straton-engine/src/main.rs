@@ -118,6 +118,7 @@ async fn run(config: config::Config) -> Result<()> {
         }
     }
     let pool = store::open(&config.data_dir).await?;
+    store::set_setting(&pool, "snapshot_keep", &config.snapshots.keep.to_string()).await?;
     lake_layout::recover_all(&config.data_dir)?;
     if let Some(dir) = &config.secrets.dir {
         credentials::use_directory(dir)?;

@@ -7,6 +7,10 @@ All notable changes are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Time travel: `[snapshots] keep` keeps earlier snapshots per dataset; read them with
+  `schema."table@<time or run id>"` in SQL, pgwire and charts, or the Snapshot picker in
+  Explorer (`snapshot` in Explorer requests, `GET /v1/explorer/snapshots`). Current access
+  rules apply to history.
 - Profile histograms: Explorer's column profile draws a twelve-bin histogram for numeric
   columns (`histogram` in `POST /v1/explorer/profile`).
 - `drift` quality checks: profile a table on each run and fail when its row count, null

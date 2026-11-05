@@ -166,6 +166,13 @@
     margin: 0 0 20px;
     overflow-wrap: anywhere;
   }
+  /* Same inset as the search and filter rows below it. */
+  .explorer-snapshot {
+    @apply flex flex-wrap items-center gap-2 px-4 pt-3 text-caption text-ink-2;
+  }
+  .explorer-snapshot select {
+    @apply w-auto min-w-48;
+  }
   .table-profile {
     margin-bottom: 20px;
   }

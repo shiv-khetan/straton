@@ -100,6 +100,13 @@ impl From<anyhow::Error> for Error {
         Self::new("internal", message)
     }
 }
+/// One kept snapshot of a dataset.
+pub(crate) struct Snapshot {
+    pub id: String,
+    pub published_at: i64,
+    pub current: bool,
+    pub path: PathBuf,
+}
 #[derive(Serialize)]
 pub struct Column {
     name: String,
@@ -391,69 +398,14 @@ impl Sql {
             let Some(path) = &snapshots[&(s.to_owned(), t.to_owned())] else {
                 continue;
             };
-            let mut urls = Vec::new();
-            for file in std::fs::read_dir(path)? {
-                let file = file?;
-                if file.file_type()?.is_file()
-                    && file.path().extension().is_some_and(|e| e == "parquet")
-                {
-                    let file = file.path().canonicalize()?;
-                    ensure!(
-                        file.parent() == Some(path.as_path()),
-                        "Parquet file escapes snapshot"
-                    );
-                    urls.push(listing_url(&file)?);
-                }
-            }
-            let key = crate::keys::snapshot(&self.pool, path).await?;
-            let opts = ListingOptions::new(Arc::new(crate::keys::format(
-                &self.pool,
-                &ctx,
-                key.as_ref(),
-            )))
-            .with_file_extension(".parquet");
-            let cfg = if urls.is_empty() {
-                let rows = sqlx::query(
-                    "SELECT name,data_type,nullable FROM columns WHERE dataset_id=? ORDER BY rowid",
-                )
-                .bind(d.get::<&str, _>("id"))
-                .fetch_all(&self.pool)
-                .await?;
-                let fields: Result<Vec<_>> = rows
-                    .into_iter()
-                    .map(|r| {
-                        Ok(Field::new(
-                            r.get::<String, _>("name"),
-                            r.get::<&str, _>("data_type").parse::<DataType>()?,
-                            r.get::<bool, _>("nullable"),
-                        ))
-                    })
-                    .collect();
-                // An empty snapshot has no file URLs, so nested files cannot be scanned.
-                let mut cfg = ListingTableConfig::new_with_multi_paths(vec![]);
-                cfg.options = Some(opts);
-                cfg.with_schema(Arc::new(Schema::new(fields?)))
-            } else {
-                ListingTableConfig::new_with_multi_paths(urls)
-                    .with_listing_options(opts)
-                    .infer_schema(&ctx.state())
-                    .await?
-            };
-            let table = ListingTable::try_new(cfg)?;
-            let (schema, provider) = &schemas[source];
-            let alias = &table_names[d.get::<&str, _>("id")];
-            let frame = ctx.read_table(Arc::new(crate::hash_lookup::LookupTable::new(
-                table,
-                path.clone(),
-                self.pool.clone(),
-            )))?;
-            let Some(policy) =
-                crate::policies::effective(&self.pool, principal, source, d.get("id"), &frame)
-                    .await?
+            let Some(view) = self
+                .snapshot_view(&ctx, principal, source, d.get("id"), path)
+                .await?
             else {
                 continue;
             };
-            let view = crate::policies::project(frame, policy)?.into_view();
+            let (schema, provider) = &schemas[source];
+            let alias = &table_names[d.get::<&str, _>("id")];
             tables.push(Table {
                 schema: schema.clone(),
                 name: alias.clone(),
@@ -470,6 +422,280 @@ impl Sql {
         }
         crate::models::register(&self.pool, principal, &ctx, &mut tables, validation).await?;
         Ok((ctx, tables))
+    }
+    /// The policy-applied view of one dataset read from one snapshot directory: the same
+    /// Parquet listing, key, hash index and row filter / mask projection for the current
+    /// snapshot and for time travel. `None` when the principal may not read the dataset.
+    async fn snapshot_view(
+        &self,
+        ctx: &SessionContext,
+        principal: &crate::access::Principal,
+        source: &str,
+        dataset: &str,
+        path: &std::path::Path,
+    ) -> Result<Option<Arc<dyn datafusion::catalog::TableProvider>>> {
+        let mut urls = Vec::new();
+        for file in std::fs::read_dir(path)? {
+            let file = file?;
+            if file.file_type()?.is_file()
+                && file.path().extension().is_some_and(|e| e == "parquet")
+            {
+                let file = file.path().canonicalize()?;
+                ensure!(file.parent() == Some(path), "Parquet file escapes snapshot");
+                urls.push(listing_url(&file)?);
+            }
+        }
+        let key = crate::keys::snapshot(&self.pool, path).await?;
+        let opts =
+            ListingOptions::new(Arc::new(crate::keys::format(&self.pool, ctx, key.as_ref())))
+                .with_file_extension(".parquet");
+        let cfg = if urls.is_empty() {
+            let rows = sqlx::query(
+                "SELECT name,data_type,nullable FROM columns WHERE dataset_id=? ORDER BY rowid",
+            )
+            .bind(dataset)
+            .fetch_all(&self.pool)
+            .await?;
+            let fields: Result<Vec<_>> = rows
+                .into_iter()
+                .map(|r| {
+                    Ok(Field::new(
+                        r.get::<String, _>("name"),
+                        r.get::<&str, _>("data_type").parse::<DataType>()?,
+                        r.get::<bool, _>("nullable"),
+                    ))
+                })
+                .collect();
+            // An empty snapshot has no file URLs, so nested files cannot be scanned.
+            let mut cfg = ListingTableConfig::new_with_multi_paths(vec![]);
+            cfg.options = Some(opts);
+            cfg.with_schema(Arc::new(Schema::new(fields?)))
+        } else {
+            ListingTableConfig::new_with_multi_paths(urls)
+                .with_listing_options(opts)
+                .infer_schema(&ctx.state())
+                .await?
+        };
+        let table = ListingTable::try_new(cfg)?;
+        let frame = ctx.read_table(Arc::new(crate::hash_lookup::LookupTable::new(
+            table,
+            path.to_path_buf(),
+            self.pool.clone(),
+        )))?;
+        let Some(policy) =
+            crate::policies::effective(&self.pool, principal, source, dataset, &frame).await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(crate::policies::project(frame, policy)?.into_view()))
+    }
+    /// Time travel: register every `schema."table@<snapshot>"` the query names. The spec is
+    /// a snapshot (run) id or an RFC 3339 time, meaning the latest snapshot published at or
+    /// before it. Only snapshots kept by `[snapshots] keep` exist; current policies apply.
+    pub(crate) async fn register_history(
+        &self,
+        ctx: &SessionContext,
+        query: &str,
+    ) -> std::result::Result<(), Error> {
+        let Ok(statement) = statement(query) else {
+            return Ok(());
+        };
+        let references = ctx.state().resolve_table_references(&statement)?;
+        for reference in references {
+            let Some((table, spec)) = reference.table().split_once('@') else {
+                continue;
+            };
+            let Some(schema) = reference.schema() else {
+                return Err(Error::new(
+                    "query",
+                    "time travel needs a schema-qualified table, e.g. app_db.\"users@2026-11-04T10:00:00Z\"",
+                ));
+            };
+            self.register_snapshot(ctx, schema, table, spec).await?;
+        }
+        Ok(())
+    }
+    /// Register `schema."table@spec"` (see [`Self::register_history`]); returns its name.
+    pub(crate) async fn register_snapshot(
+        &self,
+        ctx: &SessionContext,
+        schema: &str,
+        table: &str,
+        spec: &str,
+    ) -> std::result::Result<String, Error> {
+        let name = format!("{table}@{spec}");
+        let provider = ctx
+            .catalog("datafusion")
+            .and_then(|c| c.schema(schema))
+            .ok_or_else(|| Error::new("query", format!("schema {schema} not found")))?;
+        if !provider.table_exist(&name) {
+            let view = self.history_view(ctx, schema, table, spec).await?;
+            provider
+                .register_table(name.clone(), view)
+                .map_err(|e| Error::new("query", e.to_string()))?;
+        }
+        Ok(name)
+    }
+    async fn history_view(
+        &self,
+        ctx: &SessionContext,
+        schema: &str,
+        table: &str,
+        spec: &str,
+    ) -> std::result::Result<Arc<dyn datafusion::catalog::TableProvider>, Error> {
+        let principal = self
+            .principal
+            .as_ref()
+            .ok_or_else(|| Error::new("internal", "SQL principal required"))?;
+        let missing = || Error::new("query", format!("table {schema}.{table} not found"));
+        let (source, dataset, storage) = self
+            .resolve_alias(principal, schema, table)
+            .await?
+            .ok_or_else(missing)?;
+        let snapshots = self.snapshots_of(&source, &dataset, &storage).await?;
+        let chosen = if let Ok(run) = uuid::Uuid::try_parse(spec) {
+            snapshots.iter().find(|s| s.id == run.to_string())
+        } else {
+            let at = chrono::DateTime::parse_from_rfc3339(spec)
+                .map_err(|_| {
+                    Error::new(
+                        "query",
+                        "time travel takes a snapshot id or an RFC 3339 time, e.g. users@2026-11-04T10:00:00Z",
+                    )
+                })?
+                .timestamp();
+            snapshots
+                .iter()
+                .filter(|s| s.published_at <= at)
+                .max_by_key(|s| s.published_at)
+        }
+        .ok_or_else(|| {
+            Error::new(
+                "query",
+                format!(
+                    "no kept snapshot of {schema}.{table} matches {spec}; {} snapshot(s) are kept",
+                    snapshots.len()
+                ),
+            )
+        })?;
+        let view = self
+            .snapshot_view(ctx, principal, &source, &dataset, &chosen.path)
+            .await?
+            .ok_or_else(missing)?;
+        Ok(view)
+    }
+    /// The (source id, dataset id, storage dir) behind a readable SQL alias.
+    pub(crate) async fn resolve_alias(
+        &self,
+        principal: &crate::access::Principal,
+        schema: &str,
+        table: &str,
+    ) -> Result<Option<(String, String, PathBuf)>> {
+        let sources = sqlx::query("SELECT id,name FROM sources ORDER BY id")
+            .fetch_all(&self.pool)
+            .await?;
+        let datasets =
+            sqlx::query("SELECT id,source_id,name FROM datasets ORDER BY source_id,name")
+                .fetch_all(&self.pool)
+                .await?;
+        let (schemas, tables) = catalog_names(&sources, &datasets);
+        for d in &datasets {
+            let (source, id, name): (&str, &str, &str) =
+                (d.get("source_id"), d.get("id"), d.get("name"));
+            if schemas.get(source).map(String::as_str) != Some(schema)
+                || tables.get(id).map(String::as_str) != Some(table)
+            {
+                continue;
+            }
+            if !principal.admin() && principal.read_roles(source, id).is_empty() {
+                return Ok(None);
+            }
+            let (storage_source, storage_dataset) = if source == "straton-local-lake" {
+                name.split_once('/')
+                    .ok_or_else(|| anyhow::anyhow!("invalid lake dataset"))?
+            } else {
+                (source, name)
+            };
+            catalog::path_component(storage_source)?;
+            catalog::path_component(storage_dataset)?;
+            return Ok(Some((
+                source.to_owned(),
+                id.to_owned(),
+                self.data_dir
+                    .join("data")
+                    .join(storage_source)
+                    .join(storage_dataset),
+            )));
+        }
+        Ok(None)
+    }
+    /// Published snapshots kept for a dataset, newest first, with publication times.
+    pub(crate) async fn snapshots_of(
+        &self,
+        source: &str,
+        dataset: &str,
+        storage: &std::path::Path,
+    ) -> Result<Vec<Snapshot>> {
+        let current = std::fs::read_to_string(storage.join("_current")).ok();
+        // The physical dataset: a lake alias reads the snapshots of its source dataset.
+        let (job_source, job_dataset) = if source == "straton-local-lake" {
+            let name: String = sqlx::query_scalar("SELECT name FROM datasets WHERE id=?")
+                .bind(dataset)
+                .fetch_one(&self.pool)
+                .await?;
+            let (s, d) = name
+                .split_once('/')
+                .ok_or_else(|| anyhow::anyhow!("invalid lake dataset"))?;
+            (s.to_owned(), d.to_owned())
+        } else {
+            let name: String = sqlx::query_scalar("SELECT name FROM datasets WHERE id=?")
+                .bind(dataset)
+                .fetch_one(&self.pool)
+                .await?;
+            (source.to_owned(), name)
+        };
+        let mut out = vec![];
+        let Ok(entries) = std::fs::read_dir(storage) else {
+            return Ok(out);
+        };
+        let root = storage.canonicalize()?;
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !entry.file_type()?.is_dir() || uuid::Uuid::try_parse(&name).is_err() {
+                continue;
+            }
+            // Only snapshots this dataset's own successful runs published (a model's output
+            // must come from the current model of that name).
+            let published: Option<i64> = if job_source == crate::models::SOURCE {
+                sqlx::query_scalar("SELECT r.updated_at FROM runs r JOIN jobs j ON j.id=r.job_id JOIN models m ON m.id=j.model_id WHERE r.id=? AND r.state='succeeded' AND m.name=? AND m.materialization='table'")
+                    .bind(&name).bind(&job_dataset).fetch_optional(&self.pool).await?
+            } else {
+                sqlx::query_scalar("SELECT r.updated_at FROM runs r JOIN jobs j ON j.id=r.job_id WHERE r.id=? AND r.state='succeeded' AND j.source_id=? AND j.dataset=?")
+                    .bind(&name).bind(&job_source).bind(&job_dataset).fetch_optional(&self.pool).await?
+            };
+            let Some(published_at) = published else {
+                continue;
+            };
+            let path = entry.path().canonicalize()?;
+            ensure!(
+                path.parent() == Some(root.as_path()),
+                "snapshot escapes dataset"
+            );
+            crate::lake_layout::recover(&path)?;
+            out.push(Snapshot {
+                current: current.as_deref() == Some(name.as_str()),
+                id: name,
+                published_at,
+                path,
+            });
+        }
+        out.sort_by(|a, b| {
+            b.published_at
+                .cmp(&a.published_at)
+                .then(b.current.cmp(&a.current))
+        });
+        Ok(out)
     }
     pub async fn tables(&self) -> std::result::Result<Vec<Table>, Error> {
         if !self.config.enabled {
@@ -532,6 +758,7 @@ impl Sql {
         }
         let _snapshot = SNAPSHOTS.read().await;
         let (ctx, _) = self.context().await?;
+        self.register_history(&ctx, query).await?;
         let mut frame = self.plan(&ctx, query, types).await?;
         touched_tables(frame.logical_plan(), touched)?;
         if !params.is_empty() {

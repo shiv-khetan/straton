@@ -40,6 +40,7 @@ import {
   filterOps,
   histogramSummary,
   parseFilter,
+  snapshotReference,
 } from './explorer-model';
 import { tableReference } from '@/features/sql/sql-model';
 import { relativeTime } from '@/lib/view-model';
@@ -128,6 +129,9 @@ function FilterBar({
     </div>
   );
 }
+/** "4 Nov 2026, 10:00" in the viewer's locale and time zone. */
+const formatSnapshotTime = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 const formatCell = (value: SqlCell) =>
   value === null ? '—' : typeof value === 'number' ? value.toLocaleString() : String(value);
 /** Inline distribution of one numeric column: one bar per bin, hover shows its range. */
@@ -234,6 +238,14 @@ function TableView({
   const [pageSize, setPageSize] = useState(100);
   const [meta, setMeta] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [snapshot, setSnapshot] = useState<string | null>(null);
+  const snapshots = useQuery({
+    queryKey: ['engine', 'explorer', 'snapshots', scope, table.sql_schema, table.sql_table],
+    queryFn: () => client.explorerSnapshots(table.sql_schema, table.sql_table),
+    enabled: !readOnly,
+    staleTime: 30_000,
+  });
+  const older = (snapshots.data?.snapshots ?? []).filter((s) => !s.current);
   useEffect(() => {
     const t = setTimeout(() => {
       setDebounced(search);
@@ -247,6 +259,7 @@ function TableView({
     search: debounced,
     pageIndex,
     pageSize,
+    snapshot,
   });
   const result = useQuery({
     queryKey: ['engine', 'explorer', 'rows', scope, request],
@@ -256,7 +269,11 @@ function TableView({
   });
   const data = result.data;
   const query = () =>
-    onQuery('SELECT * FROM ' + tableReference(table.sql_schema, table.sql_table) + ' LIMIT 100;');
+    onQuery(
+      'SELECT * FROM ' +
+        snapshotReference(table.sql_schema, table.sql_table, snapshot) +
+        ' LIMIT 100;',
+    );
   async function exportFile(format: 'csv' | 'parquet') {
     setExporting(true);
     try {
@@ -288,7 +305,9 @@ function TableView({
             {table.display_name ?? table.name}{' '}
             {table.dataset_type === 'view' && <span className="policy-badge">View</span>}
           </h2>
-          <code className="hint">{tableReference(table.sql_schema, table.sql_table)}</code>
+          <code className="hint">
+            {snapshotReference(table.sql_schema, table.sql_table, snapshot)}
+          </code>
         </div>
         <PageActions>
           <Button variant="outline" onClick={query}>
@@ -319,6 +338,30 @@ function TableView({
           </Button>
         </PageActions>
       </div>
+      {older.length > 0 && (
+        <label className="explorer-snapshot">
+          Snapshot
+          <select
+            value={snapshot ?? ''}
+            onChange={(e) => {
+              setSnapshot(e.target.value || null);
+              setPage(0);
+            }}
+          >
+            <option value="">Current</option>
+            {older.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.published_at ? formatSnapshotTime(s.published_at) : s.id}
+              </option>
+            ))}
+          </select>
+          {snapshot && (
+            <span className="hint" role="status">
+              Viewing an earlier snapshot. Current access rules still apply.
+            </span>
+          )}
+        </label>
+      )}
       <label className="record-search">
         Search records
         <Input
@@ -474,6 +517,7 @@ function TableView({
                 request={{
                   schema: request.schema,
                   table: request.table,
+                  ...(request.snapshot ? { snapshot: request.snapshot } : {}),
                   filters: request.filters,
                   search: request.search,
                 }}
