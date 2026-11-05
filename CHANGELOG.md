@@ -7,6 +7,9 @@ All notable changes are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Desktop: a Failed sign-ins tray under Security & Backups; a Steps list (run order, with
+  dependencies), fit-to-selection and an overview map for larger graphs in the pipeline
+  editor; Copy details on SQL errors.
 - Time travel: `[snapshots] keep` keeps earlier snapshots per dataset; read them with
   `schema."table@<time or run id>"` in SQL, pgwire and charts, or the Snapshot picker in
   Explorer (`snapshot` in Explorer requests, `GET /v1/explorer/snapshots`). Current access

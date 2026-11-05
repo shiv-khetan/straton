@@ -86,3 +86,28 @@ assert.ok(cycleDisplay.nodes.c.length);
     if (flowState(from, to) !== want) throw new Error(`flowState(${from}, ${to}) should be ${want}`);
   console.log('Pipelines: edge flow states follow node states.');
 }
+// Steps list: run order with dependencies first, editor order for ties, cycles last.
+import { stepOrder } from '../src/features/pipelines/pipeline-model.ts';
+const stepsGraph = {
+  nodes: [
+    { node_id: 'c', kind: 'validate', label: 'Check', ref_id: 'q', x: 0, y: 0 },
+    { node_id: 'a', kind: 'sync', label: 'Sync', ref_id: 'j', x: 0, y: 0 },
+    { node_id: 'b', kind: 'transform', label: 'Build', ref_id: 'm', x: 0, y: 0 },
+    { node_id: 'x', kind: 'sync', label: 'Loop A', ref_id: 'j2', x: 0, y: 0 },
+    { node_id: 'y', kind: 'sync', label: 'Loop B', ref_id: 'j3', x: 0, y: 0 },
+  ],
+  edges: [
+    { from_node: 'a', to_node: 'b' },
+    { from_node: 'b', to_node: 'c' },
+    { from_node: 'a', to_node: 'c' },
+    { from_node: 'x', to_node: 'y' },
+    { from_node: 'y', to_node: 'x' },
+  ],
+};
+const steps = stepOrder(stepsGraph);
+assert.deepEqual(steps.map((s) => s.node_id), ['a', 'b', 'c', 'x', 'y']);
+assert.deepEqual(steps[2].after, ['Build', 'Sync']);
+assert.deepEqual(steps[0].after, []);
+assert.deepEqual(steps.slice(3).map((s) => s.cyclic), [true, true]);
+assert.deepEqual(stepOrder({ nodes: [], edges: [] }), []);
+console.log('Pipeline steps: run order, dependencies and cycles passed.');

@@ -1,7 +1,19 @@
 import { CronField } from '@/features/schedules/CronField';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ReactFlow, Background, Controls, Handle, MarkerType, Position } from '@xyflow/react';
+import {
+  ReactFlow,
+  ReactFlowProvider,
+  Background,
+  ControlButton,
+  Controls,
+  Handle,
+  MarkerType,
+  MiniMap,
+  Position,
+  useReactFlow,
+} from '@xyflow/react';
+import { Focus } from 'lucide-react';
 import type { Node, NodeProps } from '@xyflow/react';
 import type {
   Api,
@@ -24,6 +36,7 @@ import {
   dependencyError,
   selectionChange,
   graphValidation,
+  stepOrder,
   validationDisplay,
 } from './pipeline-model';
 import { edgeTypes } from './FlowEdge';
@@ -51,6 +64,69 @@ function Task({ data }: NodeProps<TaskNode>) {
   );
 }
 const nodeTypes = { task: Task };
+/** Larger graphs get an overview map. */
+const MINIMAP_NODES = 7;
+// Instant, not animated: these views are moved from the keyboard and the Steps list.
+const focusOptions = (id: string) => ({ nodes: [{ id }], padding: 0.6, maxZoom: 1, duration: 0 });
+/** Canvas control: zoom to the selected step (it needs the canvas's own React Flow store). */
+function FitSelection({ selected }: { selected: string }) {
+  const { fitView } = useReactFlow();
+  return (
+    <ControlButton
+      title="Fit selected step"
+      aria-label="Fit selected step"
+      disabled={!selected}
+      onClick={() => void fitView(focusOptions(selected))}
+    >
+      <Focus aria-hidden="true" />
+    </ControlButton>
+  );
+}
+/** The graph as a list in run order: a keyboard and screen-reader alternative to the canvas. */
+function StepsList({
+  draft,
+  selected,
+  onSelect,
+}: {
+  draft: PipelineInput;
+  selected: string;
+  onSelect: (id: string) => void;
+}) {
+  const { fitView } = useReactFlow();
+  const steps = stepOrder(draft);
+  if (!steps.length) return null;
+  return (
+    <section aria-labelledby="pipeline-steps-title" className="pipeline-steps">
+      <h3 id="pipeline-steps-title" className="font-medium">
+        Steps in run order
+      </h3>
+      <ol>
+        {steps.map((s) => (
+          <li key={s.node_id}>
+            <button
+              type="button"
+              aria-current={selected === s.node_id ? 'true' : undefined}
+              onClick={() => {
+                onSelect(s.node_id);
+                void fitView(focusOptions(s.node_id));
+              }}
+            >
+              <strong>{s.label}</strong>
+              <span className="text-ink-2"> · {s.kind}</span>
+            </button>
+            <span className="text-caption text-ink-2">
+              {s.cyclic
+                ? 'Blocked by a cycle'
+                : s.after.length
+                  ? 'After ' + s.after.join(', ')
+                  : 'Starts first'}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
 
 // Local graph checks run on every edit; reference checks go to the engine, debounced.
 function usePipelineValidation(draft: PipelineInput, client: Api) {
@@ -185,75 +261,97 @@ export function Editor({
         Choose From and To nodes, then Add dependency, or connect the canvas handles. Use Tab and
         Enter to select a node or dependency; Delete removes the selection.
       </p>
-      <div className="pipeline-canvas">
-        <ReactFlow<TaskNode>
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          nodesDraggable={!readOnly}
-          nodesConnectable={!readOnly}
-          elementsSelectable
-          multiSelectionKeyCode={null}
-          selectionKeyCode={null}
-          onNodeClick={(_, n) => {
-            setSelected(n.id);
-            setSelectedEdge('');
-          }}
-          onEdgeClick={(_, e) => {
-            setSelectedEdge(e.id);
-            setSelected('');
-          }}
-          onPaneClick={() => {
-            setSelected('');
-            setSelectedEdge('');
-          }}
-          onNodesChange={(changes) => {
-            setSelected((current) => selectionChange(current, changes));
-            if (changes.some((change) => change.type === 'select' && change.selected))
+      <ReactFlowProvider>
+        <div className="pipeline-canvas">
+          <ReactFlow<TaskNode>
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            nodesDraggable={!readOnly}
+            nodesConnectable={!readOnly}
+            elementsSelectable
+            multiSelectionKeyCode={null}
+            selectionKeyCode={null}
+            onNodeClick={(_, n) => {
+              setSelected(n.id);
               setSelectedEdge('');
-            if (readOnly) return;
-            const moved = changes.filter((c) => c.type === 'position' && c.position !== undefined);
-            if (!moved.length) return;
-            patch({
-              nodes: draft.nodes.map((n) => {
-                const change = moved.find((c) => c.type === 'position' && c.id === n.node_id);
-                return change?.type === 'position' && change.position
-                  ? { ...n, x: change.position.x, y: change.position.y }
-                  : n;
-              }),
-            });
-          }}
-          onEdgesChange={(changes) => {
-            setSelectedEdge((current) => selectionChange(current, changes));
-            if (changes.some((change) => change.type === 'select' && change.selected))
+            }}
+            onEdgeClick={(_, e) => {
+              setSelectedEdge(e.id);
               setSelected('');
-          }}
-          onConnect={(connection) => addDependency(connection.source, connection.target)}
-          onEdgesDelete={(removed) => {
-            if (!readOnly)
+            }}
+            onPaneClick={() => {
+              setSelected('');
+              setSelectedEdge('');
+            }}
+            onNodesChange={(changes) => {
+              setSelected((current) => selectionChange(current, changes));
+              if (changes.some((change) => change.type === 'select' && change.selected))
+                setSelectedEdge('');
+              if (readOnly) return;
+              const moved = changes.filter(
+                (c) => c.type === 'position' && c.position !== undefined,
+              );
+              if (!moved.length) return;
               patch({
-                edges: draft.edges.filter((_, i) => !removed.some((e) => e.id === String(i))),
+                nodes: draft.nodes.map((n) => {
+                  const change = moved.find((c) => c.type === 'position' && c.id === n.node_id);
+                  return change?.type === 'position' && change.position
+                    ? { ...n, x: change.position.x, y: change.position.y }
+                    : n;
+                }),
               });
+            }}
+            onEdgesChange={(changes) => {
+              setSelectedEdge((current) => selectionChange(current, changes));
+              if (changes.some((change) => change.type === 'select' && change.selected))
+                setSelected('');
+            }}
+            onConnect={(connection) => addDependency(connection.source, connection.target)}
+            onEdgesDelete={(removed) => {
+              if (!readOnly)
+                patch({
+                  edges: draft.edges.filter((_, i) => !removed.some((e) => e.id === String(i))),
+                });
+            }}
+            onNodesDelete={(removed) => {
+              if (!readOnly) {
+                const ids = new Set(removed.map((n) => n.id));
+                patch({
+                  nodes: draft.nodes.filter((n) => !ids.has(n.node_id)),
+                  edges: draft.edges.filter((e) => !ids.has(e.from_node) && !ids.has(e.to_node)),
+                });
+              }
+            }}
+            deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
+            fitView
+            fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
+            minZoom={0.1}
+          >
+            <Background color="var(--line)" />
+            <Controls showInteractive={false}>
+              <FitSelection selected={selected} />
+            </Controls>
+            {nodes.length >= MINIMAP_NODES && (
+              <MiniMap
+                pannable
+                zoomable
+                nodeColor="var(--surface-3)"
+                ariaLabel="Pipeline overview"
+              />
+            )}
+          </ReactFlow>
+        </div>
+        <StepsList
+          draft={draft}
+          selected={selected}
+          onSelect={(id) => {
+            setSelected(id);
+            setSelectedEdge('');
           }}
-          onNodesDelete={(removed) => {
-            if (!readOnly) {
-              const ids = new Set(removed.map((n) => n.id));
-              patch({
-                nodes: draft.nodes.filter((n) => !ids.has(n.node_id)),
-                edges: draft.edges.filter((e) => !ids.has(e.from_node) && !ids.has(e.to_node)),
-              });
-            }
-          }}
-          deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
-          fitView
-          fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
-          minZoom={0.1}
-        >
-          <Background color="var(--line)" />
-          <Controls showInteractive={false} />
-        </ReactFlow>
-      </div>
+        />
+      </ReactFlowProvider>
       <section aria-label="Pipeline validation" className="rounded-card border border-line p-4">
         <h3 className="font-medium">Validation</h3>
         {check.validating ? (

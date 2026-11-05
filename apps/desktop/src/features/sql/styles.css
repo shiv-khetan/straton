@@ -175,6 +175,7 @@
   .sql-error pre {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+    margin-bottom: 8px;
   }
   .shortcut-hint {
     flex-shrink: 0;

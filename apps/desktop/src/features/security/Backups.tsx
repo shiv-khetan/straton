@@ -13,6 +13,7 @@ import type { Api, Dataset, Me, Status } from '@/lib/api';
 import { Tray } from '@/components/workbench/primitives';
 import { backupTime, relativeTime } from '@/lib/view-model';
 import Security from './Security';
+import { AuthFailures } from './AuthFailures';
 export default function Backups({
   client,
   backups: _backups,
@@ -84,6 +85,7 @@ export default function Backups({
           onChanged={onChanged}
         />
       )}
+      {me?.privileges.admin && !readOnly && <AuthFailures client={client} revision={revision} />}
     </>
   );
 }

@@ -81,3 +81,43 @@
     display: none;
   }
 }
+/* Plain CSS: this file is imported by Pipelines.tsx, outside Tailwind's @apply context. */
+.pipeline-steps ol {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+  counter-reset: step;
+}
+.pipeline-steps li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  counter-increment: step;
+}
+.pipeline-steps li::before {
+  content: counter(step);
+  width: 20px;
+  font-size: var(--body-sm);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.pipeline-steps button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font-size: var(--body-md);
+  color: var(--ink);
+  cursor: pointer;
+}
+.pipeline-steps button:hover,
+.pipeline-steps button:focus-visible {
+  text-decoration: underline;
+}
+.pipeline-steps button[aria-current] strong {
+  color: var(--primary);
+}

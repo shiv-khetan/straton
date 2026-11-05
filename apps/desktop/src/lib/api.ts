@@ -382,6 +382,19 @@ export interface Status {
   encryption_enabled: boolean;
   audit_head: string;
 }
+/** GET /v1/admin/auth-failures: addresses that presented rejected credentials. */
+export interface AuthFailures {
+  window_secs: number;
+  threshold: number;
+  addresses: {
+    address: string;
+    failures: number;
+    first_at: number;
+    last_at: number;
+    surface: 'http' | 'sql';
+    alerted: boolean;
+  }[];
+}
 export interface EngineEvent {
   /** Local receipt time; the engine event payload has no timestamp. */
   received_at?: number;
@@ -907,6 +920,7 @@ export function api(connection: Connection) {
     cancelRun: (id: string) => request<void>('/v1/runs/' + idPath(id) + '/cancel', 'POST'),
     backups: () => request<string[]>('/v1/backups'),
     engineSettings: () => request<EngineSettings>('/v1/admin/settings'),
+    authFailures: () => request<AuthFailures>('/v1/admin/auth-failures'),
     backup: () => request<{ file: string }>('/v1/backups', 'POST'),
   };
 }

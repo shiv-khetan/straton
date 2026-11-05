@@ -4,6 +4,8 @@ import type { SqlExplain, SqlResult } from '@/lib/api';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ResultGrid } from '@/components/workbench/ResultGrid';
 import { Skeleton } from '@/features/console/ConsoleDrawer';
+import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 
 export interface Execution {
   result?: SqlResult;
@@ -65,6 +67,18 @@ export function SqlOutput({
                 <details>
                   <summary>Engine message</summary>
                   <pre>{view.detail}</pre>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      void navigator.clipboard.writeText(view.detail).then(
+                        () => toast.success('Error details copied'),
+                        () => toast.error('Could not copy; select the message instead.'),
+                      )
+                    }
+                  >
+                    Copy details
+                  </Button>
                 </details>
               </>
             );

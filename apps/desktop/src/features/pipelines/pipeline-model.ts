@@ -120,3 +120,39 @@ export function flowState(from?: string, to?: string): FlowState {
     return 'flowing';
   return 'idle';
 }
+/** Steps in run order (dependencies first; ties keep editor order), each with the labels of
+ *  the steps it waits for. Steps caught in a cycle come last, flagged. */
+export function stepOrder(graph: Pick<PipelineInput, 'nodes' | 'edges'>): {
+  node_id: string;
+  label: string;
+  kind: string;
+  after: string[];
+  cyclic: boolean;
+}[] {
+  const ids = graph.nodes.map((n) => n.node_id);
+  const label = (id: string) => graph.nodes.find((n) => n.node_id === id)?.label || id;
+  const parents = new Map(ids.map((id) => [id, [] as string[]]));
+  for (const e of graph.edges)
+    if (parents.has(e.to_node) && parents.has(e.from_node) && e.from_node !== e.to_node)
+      parents.get(e.to_node)!.push(e.from_node);
+  const done = new Set<string>();
+  const order: string[] = [];
+  let progress = true;
+  while (progress) {
+    progress = false;
+    for (const id of ids)
+      if (!done.has(id) && parents.get(id)!.every((p) => done.has(p))) {
+        done.add(id);
+        order.push(id);
+        progress = true;
+      }
+  }
+  const cyclic = ids.filter((id) => !done.has(id));
+  return [...order, ...cyclic].map((id) => ({
+    node_id: id,
+    label: label(id),
+    kind: graph.nodes.find((n) => n.node_id === id)?.kind ?? '',
+    after: [...new Set(parents.get(id)!)].map(label),
+    cyclic: !done.has(id),
+  }));
+}

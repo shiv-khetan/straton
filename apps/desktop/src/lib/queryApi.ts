@@ -45,6 +45,7 @@ export const reads: Partial<Record<keyof Api, QueryKey>> = {
   modelLineage: queryKeys.models,
   backups: queryKeys.backups,
   engineSettings: queryKeys.settings,
+  authFailures: queryKeys.keys,
   keys: queryKeys.keys,
   roles: queryKeys.roles,
   users: queryKeys.access,
