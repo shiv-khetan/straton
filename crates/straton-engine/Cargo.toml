@@ -12,33 +12,33 @@ straton-connectors = { path = "../straton-connectors" }
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
-cron = "0.15"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+cron = "0.17"
 clap = { version = "4", features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 futures.workspace = true
-toml = "0.9"
+toml = "1.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 anyhow = "1"
 secrecy = "0.10"
 uuid = { version = "1", features = ["v4"] }
-rand = "0.9"
+rand = "0.10"
 subtle = "2"
 fs2 = "0.4"
 keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
 datafusion = { version = "55", default-features = false, features = ["sql", "parquet", "nested_expressions", "datetime_expressions", "string_expressions", "unicode_expressions", "regex_expressions", "parquet_encryption"] }
-pgwire = "0.41"
-sha2 = "0.10.9"
+pgwire = "0.42"
+sha2 = "0.11.1"
 async-trait = "0.1.92"
 ring = "0.17.14"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 [dev-dependencies]
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "chrono"] }
 tower = { version = "0.5", features = ["util"] }
 
 [target.'cfg(unix)'.dependencies]
