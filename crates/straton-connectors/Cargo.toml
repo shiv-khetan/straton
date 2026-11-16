@@ -8,16 +8,16 @@ homepage.workspace = true
 
 [dependencies]
 straton-core = { path = "../straton-core" }
-arrow = { version = "59", default-features = false, features = ["csv"] }
+arrow = { version = "60", default-features = false, features = ["csv"] }
 futures.workspace = true
 serde_json.workspace = true
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "sqlite", "chrono", "json", "macros", "tls-rustls-ring-webpki"] }
-parquet = { version = "59", default-features = false, features = ["arrow", "snap", "encryption"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "sqlite", "chrono", "json", "macros", "tls-rustls-ring-webpki"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "snap", "encryption"] }
 tokio = { version = "1", features = ["fs", "rt", "time", "sync", "net"] }
 async-trait = "0.1.92"
 chrono.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
-rand = "0.9"
+rand = "0.10"
 serde.workspace = true
 tiberius = { version = "0.13.0", default-features = false, features = ["tds73", "rustls", "chrono", "rust_decimal"] }
 tokio-util = { version = "0.7.20", features = ["compat"] }
